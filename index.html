@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Remix Web-SLG</title>
+  <meta name="description" content="세로형 8x14 그리드 타일맵, 이동력(AP) 및 Civ4 확률 전투 엔진 턴제 전략 게임" />
+  <meta property="og:title" content="Remix Web-SLG" />
+  <meta property="og:description" content="세로형 8x14 그리드 타일맵, 이동력(AP) 및 Civ4 확률 전투 엔진 턴제 전략 게임" />
+  <!-- 1. External Stylesheet -->
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="civ4-editor.css" />
+</head>
+<body>
+
+  <!-- Mobile Screen Frame (480px) -->
+  <main id="mobile-app">
+
+    <!-- ======================================================================
+         [ 1단계: 월드맵 / 전략 메인 화면 (Strategy Main View) ]
+         서브컬처 육성/경주 시뮬레이션 (우마무스메풍) 라이트 블루 & 화이트 글래스모피즘
+         ====================================================================== -->
+    <div id="view-strategy-main" class="game-view-layer active">
+
+      <!-- 1. Header Zone: 지휘관 프로필 및 자원 헤더 -->
+      <header class="strat-header-zone">
+        <div class="strat-top-strip">
+          <div class="strat-mode-pill">
+            <span class="strat-mode-dot"></span>
+            <span>STRATEGY COMMAND CENTER</span>
+          </div>
+          <div class="guest-info-badge" onclick="openDebugModal('images')" role="button" tabindex="0" title="관리자 DEV 및 게스트 설정">
+            <span class="guest-status-dot"></span>
+            <span class="guest-label">GUEST</span>
+            <span class="guest-id" id="strat-guest-id">Guest_----</span>
+            <span class="guest-save-pill">💾 CLOUD</span>
+          </div>
+        </div>
+
+        <div class="strat-profile-card">
+          <!-- Commander Box -->
+          <div class="strat-commander-box">
+            <div class="strat-commander-avatar" id="strat-cmd-avatar">👑</div>
+            <div class="strat-commander-meta">
+              <div class="strat-commander-name">
+                <span id="strat-cmd-name">레오나르도</span>
+                <span class="strat-lvl-tag" id="strat-cmd-level">Lv.1</span>
+              </div>
+              <div class="strat-exp-track" title="지휘관 경험치">
+                <div class="strat-exp-fill" id="strat-cmd-exp-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Resources Pillars -->
+          <div class="strat-resources-grid">
+            <div class="strat-res-chip ap" title="통솔력 (AP) - 출격 시 5 소모">
+              <span class="strat-res-lbl">⚡ 통솔력</span>
+              <span class="strat-res-val" id="strat-cmd-ap">24/24</span>
+            </div>
+            <div class="strat-res-chip gold" title="보유 골드">
+              <span class="strat-res-lbl">🪙 골드</span>
+              <span class="strat-res-val" id="strat-gold">450G</span>
+            </div>
+            <div class="strat-res-chip rewind" title="리와인더 (턴 되돌리기 횟수)">
+              <span class="strat-res-lbl">⏳ 리와인더</span>
+              <span class="strat-res-val" id="strat-rewinder">3/3</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <!-- 2. 중앙 상단: 섹터 탐색 & 월드맵 선택 영역 (World/Sector Selector) -->
+      <section class="strat-section-card">
+        <div class="strat-section-header">
+          <h2 id="sector-nodes-title" class="strat-section-title" style="user-select: none; cursor: pointer; margin: 0; font-size: inherit; font-weight: inherit;">
+            🗺️ 월드 섹터 탐색 (Sector Nodes)
+          </h2>
+        </div>
+
+        <!-- Stylized Tactical Node Map Canvas/Container -->
+        <div class="strat-map-canvas-container" id="strat-world-map-canvas">
+          <div class="strat-map-grid-bg"></div>
+
+          <!-- SVG Route Connection Lines -->
+          <svg class="strat-map-svg-lines" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <!-- Tactical Route A1 -> A2 -->
+            <line x1="22" y1="35" x2="55" y2="25" stroke="#0284c7" stroke-width="1.8" stroke-dasharray="3,3" opacity="0.75" />
+            <!-- Tactical Route A1 -> B1 -->
+            <line x1="22" y1="35" x2="50" y2="68" stroke="#0284c7" stroke-width="1.8" stroke-dasharray="3,3" opacity="0.75" />
+            <!-- Tactical Route A2 -> B1 -->
+            <line x1="55" y1="25" x2="50" y2="68" stroke="#0284c7" stroke-width="1.8" stroke-dasharray="3,3" opacity="0.75" />
+            <!-- Tactical Route B1 -> B2 -->
+            <line x1="50" y1="68" x2="80" y2="78" stroke="#94a3b8" stroke-width="1.8" stroke-dasharray="2,2" opacity="0.5" />
+          </svg>
+
+          <!-- Node A-1 -->
+          <div class="strat-node-pin active" style="left: 22%; top: 35%;" onclick="selectWorldSector('A-1')" id="node-pin-A-1">
+            <div class="strat-node-circle">
+              <div class="strat-node-pulse"></div>
+              <span>🌾</span>
+            </div>
+            <span class="strat-node-tag">A-1 벨른</span>
+          </div>
+
+          <!-- Node A-2 -->
+          <div class="strat-node-pin" style="left: 55%; top: 25%;" onclick="selectWorldSector('A-2')" id="node-pin-A-2">
+            <div class="strat-node-circle">
+              <div class="strat-node-pulse"></div>
+              <span>🏰</span>
+            </div>
+            <span class="strat-node-tag">A-2 아이젠</span>
+          </div>
+
+          <!-- Node B-1 -->
+          <div class="strat-node-pin" style="left: 50%; top: 68%;" onclick="selectWorldSector('B-1')" id="node-pin-B-1">
+            <div class="strat-node-circle">
+              <div class="strat-node-pulse"></div>
+              <span>👑</span>
+            </div>
+            <span class="strat-node-tag">B-1 왕도</span>
+          </div>
+
+          <!-- Node B-2 (Locked) -->
+          <div class="strat-node-pin" style="left: 80%; top: 78%; opacity: 0.75;" onclick="selectWorldSector('B-2')" id="node-pin-B-2">
+            <div class="strat-node-circle" style="border-color: #94a3b8;">
+              <span>🔒</span>
+            </div>
+            <span class="strat-node-tag">B-2 흑염</span>
+          </div>
+        </div>
+
+        <!-- Selected Sector Detailed Info Card -->
+        <div class="strat-sector-detail-box" id="strat-sector-detail-box">
+          <div class="strat-sector-title-row">
+            <div class="strat-sector-name">
+              <span id="strat-sector-icon">🌾</span>
+              <span id="strat-sector-name-text">[A-1] 벨른 평원</span>
+            </div>
+            <span class="strat-diff-badge easy" id="strat-sector-diff-badge">EASY ★☆☆☆☆</span>
+          </div>
+
+          <div class="strat-terrain-progress-wrap">
+            <div class="strat-terrain-desc" id="strat-sector-terrain-desc">
+              탁 트인 평야 지대로 기동력이 우수하며 ZOC 전선 형성이 빠름
+            </div>
+            <!-- Stacked Terrain Percentage Bar -->
+            <div class="strat-terrain-bar">
+              <div class="strat-terrain-seg plain" id="strat-bar-plain" style="width: 65%;" title="평지 65%"></div>
+              <div class="strat-terrain-seg forest" id="strat-bar-forest" style="width: 25%;" title="숲 25%"></div>
+              <div class="strat-terrain-seg hill" id="strat-bar-hill" style="width: 10%;" title="산악 10%"></div>
+            </div>
+          </div>
+
+          <div class="strat-intel-grid">
+            <div class="strat-intel-cell">
+              <span class="strat-intel-lbl">👾 출현 적 세력 / 지휘관</span>
+              <span class="strat-intel-val" id="strat-sector-enemy">👺 고블린 유격대 (두목 그룩)</span>
+            </div>
+            <div class="strat-intel-cell">
+              <span class="strat-intel-lbl">⚔️ 권장 전투력</span>
+              <span class="strat-intel-val" id="strat-sector-power" style="color: #0284c7;">320 PWR</span>
+            </div>
+            <div class="strat-intel-cell">
+              <span class="strat-intel-lbl">🪙 예상 턴당 유지비</span>
+              <span class="strat-intel-val" id="strat-sector-upkeep">15G / 턴</span>
+            </div>
+            <div class="strat-intel-cell">
+              <span class="strat-intel-lbl">🎁 승리 클리어 보상</span>
+              <span class="strat-intel-val" id="strat-sector-reward" style="color: #b45309;">250G + 장비</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. 중앙 하단: 지휘관 스킬 & 출전 부대/스택 편성 패널 (Commander & Deck Setup) -->
+      <section class="strat-section-card">
+        <div class="strat-section-header">
+          <div class="strat-section-title">
+            <span>🎖️</span>
+            <span>지휘관 패시브 스킬 점검</span>
+          </div>
+          <span class="strat-section-sub">선택 활성화</span>
+        </div>
+
+        <!-- Passive Skill Chips Panel -->
+        <div class="strat-skills-chips-wrap" id="strat-skills-chips-wrap">
+          <!-- Skill 1 -->
+          <div class="strat-skill-chip active" id="skill-chip-RapidAdvance" onclick="toggleCommanderSkill('RapidAdvance')">
+            <div class="strat-skill-icon">⚡</div>
+            <div class="strat-skill-info">
+              <div class="strat-skill-name">신속한 진격</div>
+              <div class="strat-skill-desc">이동 AP 50% 할인 (1 AP 2칸)</div>
+            </div>
+            <span class="strat-skill-toggle-pill">ON</span>
+          </div>
+
+          <!-- Skill 2 -->
+          <div class="strat-skill-chip active" id="skill-chip-BearDown" onclick="toggleCommanderSkill('BearDown')">
+            <div class="strat-skill-icon">🐻</div>
+            <div class="strat-skill-info">
+              <div class="strat-skill-name">베어 다운</div>
+              <div class="strat-skill-desc">1번 유닛 공격력 +20%</div>
+            </div>
+            <span class="strat-skill-toggle-pill">ON</span>
+          </div>
+
+          <!-- Skill 3 -->
+          <div class="strat-skill-chip active" id="skill-chip-ShieldWall" onclick="toggleCommanderSkill('ShieldWall')">
+            <div class="strat-skill-icon">🛡️</div>
+            <div class="strat-skill-info">
+              <div class="strat-skill-name">방패 장벽</div>
+              <div class="strat-skill-desc">아군 전체 방어력 +15%</div>
+            </div>
+            <span class="strat-skill-toggle-pill">ON</span>
+          </div>
+
+          <!-- Skill 4 -->
+          <div class="strat-skill-chip" id="skill-chip-StrategicDominance" onclick="toggleCommanderSkill('StrategicDominance')">
+            <div class="strat-skill-icon">👑</div>
+            <div class="strat-skill-info">
+              <div class="strat-skill-name">전략적 지배</div>
+              <div class="strat-skill-desc">포섭 호감도 +25 보정</div>
+            </div>
+            <span class="strat-skill-toggle-pill">OFF</span>
+          </div>
+
+          <!-- Skill 5 -->
+          <div class="strat-skill-chip" id="skill-chip-Precision" onclick="toggleCommanderSkill('Precision')">
+            <div class="strat-skill-icon">🎯</div>
+            <div class="strat-skill-info">
+              <div class="strat-skill-name">세밀한 타격</div>
+              <div class="strat-skill-desc">적 타일 방어 1개 무시</div>
+            </div>
+            <span class="strat-skill-toggle-pill">OFF</span>
+          </div>
+        </div>
+
+        <!-- 출전 부대 편성 (1편성부대 = 1캐릭터, 통솔력 제한) -->
+        <div class="strat-section-header" style="margin-top: 10px; margin-bottom: 6px;">
+          <div class="strat-section-title">
+            <span>🛡️</span>
+            <span>출전 부대 편성</span>
+          </div>
+          <span class="strat-section-sub" id="strat-leadership-limit-sub">통솔력 한도: 최대 24부대</span>
+        </div>
+
+        <!-- Deck Stat Gauge -->
+        <div class="strat-deck-summary-bar">
+          <div class="strat-deck-stat">
+            <span class="strat-deck-stat-lbl">총 편성 부대</span>
+            <span class="strat-deck-stat-val" id="strat-total-units">5 / 24</span>
+          </div>
+          <div class="strat-deck-stat">
+            <span class="strat-deck-stat-lbl">편성 총 전투력</span>
+            <span class="strat-deck-stat-val" id="strat-army-power" style="color: #0284c7;">480 PWR</span>
+          </div>
+          <div class="strat-deck-stat">
+            <span class="strat-deck-stat-lbl">예상 총 유지비</span>
+            <span class="strat-deck-stat-val" id="strat-army-upkeep">45G / 턴</span>
+          </div>
+        </div>
+
+        <!-- 출전 영웅(캐릭터) 명단 (직종별 임의 선택 대신 실제 출전 영웅 카드 표시) -->
+        <div class="strat-characters-roster-wrap" id="strat-characters-roster-wrap">
+          <!-- Dynamically populated by renderStrategyView -->
+        </div>
+      </section>
+
+      <!-- 4. 하단 메인 액션 버튼 (Main Action Zone) -->
+      <footer class="strat-bottom-action-bar">
+        <div class="strat-action-summary">
+          <span class="strat-action-dest" id="strat-action-summary-dest">[A-1 벨른 평원] 작전 준비</span>
+          <span class="strat-action-cost" id="strat-action-summary-cost">⚡ 통솔력 -5 AP 소모 | 5 영웅 부대 출동</span>
+        </div>
+        <button class="strat-btn-launch-main" id="btn-open-deploy-modal" onclick="openSectorDeployModal()">
+          <span>⚔️</span>
+          <span>작전 개시 (출격)</span>
+        </button>
+      </footer>
+
+    </div> <!-- /#view-strategy-main -->
+
+    <!-- ======================================================================
+         [ 2단계: 지역 필드 (Sector Map Layer) ]
+         기존 8x14(8x10) 타일맵, ZOC 전선, 부대 중첩, 전투 및 회유 팝업
+         ====================================================================== -->
+    <div id="view-sector-field" class="game-view-layer">
+
+      <!-- 1. Top Header (Pastel Sky Gradient Panel) -->
+      <header>
+        <!-- Guest Bar: Guest Info & LocalStorage Auto-Save Status & Reset -->
+        <div class="header-guest-bar">
+          <div class="guest-info-badge" id="btn-guest-profile" role="button" tabindex="0" title="게스트 프로필 및 저장 상태 보기 (클릭 시 상세 모달)">
+            <span class="guest-status-dot"></span>
+            <span class="guest-label">GUEST</span>
+            <span class="guest-id" id="ui-guest-id">Guest_----</span>
+            <span class="guest-save-pill" id="ui-guest-save-status">💾 자동저장 ON</span>
+          </div>
+          <div class="guest-actions">
+            <button class="btn-guest-reset" id="btn-guest-reset" title="게스트 데이터 초기화 및 새 게임 시작">
+              🔄 새로 시작
+            </button>
+          </div>
+        </div>
+
+        <div class="header-row-1">
+          <div class="commander-badge">
+            <div class="commander-avatar">👑</div>
+            <div class="commander-meta">
+              <div class="commander-name" id="ui-cmd-name">
+                <span>레오나르도</span>
+                <span class="commander-level-tag" id="ui-cmd-level">Lv.1</span>
+              </div>
+              <div class="commander-exp-bar-wrap" title="지휘관 경험치">
+                <div class="commander-exp-bar" id="ui-cmd-exp-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="header-resources">
+            <div class="res-pill gold" title="소지금 (Gold)">
+              <span>🪙</span>
+              <span id="ui-gold">450G</span>
+            </div>
+            <div class="turn-badge" id="ui-turn" role="button" tabindex="0" title="Turn 턴 번호 (3초 이상 길게 누르면 관리자 DEV 패널 진입)">Turn 1</div>
+            <div class="res-pill rewinder" id="btn-rewind" title="리와인더 (이전 턴 되돌리기)">
+              <span>⏳</span>
+              <span id="ui-rewinder">3/3</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="header-row-2">
+          <div class="header-sub-tag" id="ui-sector-sub-tag">SECTOR A-1: VELNE</div>
+
+          <div class="header-actions">
+            <button class="btn-header" id="btn-return-to-strategy" onclick="switchGameView('STRATEGY')" style="background: linear-gradient(135deg, #0284c7, #0369a1); color: #ffffff; border: 1.5px solid #38bdf8; font-weight: 900;" title="월드맵 / 전략 메인 화면으로 복귀">🗺️ 전략 월드맵</button>
+            <button class="btn-header highlight" id="btn-open-skills">⭐ 스킬 (<span id="ui-sp-count">2 SP</span>)</button>
+            <button class="btn-header" id="btn-open-defense-modal">🛡️ 오프라인 수비</button>
+            <button class="btn-header" id="btn-header-dev" onclick="openDebugModal('images')" style="background: linear-gradient(135deg, #334155, #1e293b); color: #f8fafc; border: 1.5px solid #64748b; font-weight: 900; border-radius: 8px;" title="관리자 DEV / 캐릭터 풀샷 이미지 관리">⚙️ DEV</button>
+            <button class="btn-end-turn" id="btn-end-turn" title="턴 종료 (길게 3초 누르면 관리자 DEV 진입 가능)">턴 종료 ⚔️</button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Floating Developer / Debug Trigger Button (Hidden - replaced by Turn button 3s long press) -->
+      <button class="fab-debug-trigger" id="fab-debug" title="개발자 설정 / 디버그 패널" style="display: none;">
+        ⚙️ DEV
+      </button>
+
+      <!-- Floating Battle Banner -->
+      <div id="floating-banner">
+        <div id="floating-banner-text" style="font-size: 11px; font-weight: 700;">전투 준비 완료</div>
+        <button class="btn-header" id="btn-close-banner">확인</button>
+      </div>
+
+      <!-- 2. Central Game Viewport (8x10 Grid Map) -->
+      <section id="viewport">
+        <div id="ai-turn-banner" class="ai-turn-banner" style="display: none;">👾 적 AI 군단 작전 수행 중...</div>
+        <div class="grid-container" id="grid-map">
+          <!-- 80 Tiles (8x10) will be rendered dynamically by JavaScript -->
+        </div>
+      </section>
+
+      <!-- 3. Bottom Control & Info Panel (Glassmorphism & High-Info Density) -->
+      <section id="bottom-panel">
+
+        <!-- Selected Unit Card -->
+        <div class="unit-card" id="selected-unit-card">
+          <!-- 1. Normal Mode View (기본 유닛 정보 및 스탯) -->
+          <div class="unit-card-normal" id="unit-card-normal-view">
+            <div class="unit-card-left">
+              <div class="card-avatar-wrap" id="card-avatar-wrap" title="클릭하여 병과특기 메뉴 열기" style="cursor: pointer;">
+                <div class="card-avatar char-main-portrait" id="card-avatar">🐴</div>
+              </div>
+              <div class="card-info">
+                <div class="card-title">
+                  <span id="card-name-wrap" class="card-name-interactive" title="플레이어 네임 클릭: 병과특기(특수스킬) 메뉴 열기">
+                    <span id="card-name">성기사 롤랑</span>
+                    <span class="card-skill-tag" id="card-skill-tag">✨ 특기</span>
+                  </span>
+                  <span class="card-level-badge" id="card-level">Lv.2</span>
+                  <button class="btn-card-odds-badge" id="btn-show-promo-menu" style="background: linear-gradient(135deg, #d97706, #b45309); color: #fff; border-color: #f59e0b;" title="부대 승급 훈련 메뉴 열기">
+                    ⭐ 승급
+                  </button>
+                  <button class="btn-card-odds-badge" id="btn-show-odds-badge" style="display: none;" title="전투 승률 창으로 전환">
+                    ⚔️ 승률예측
+                  </button>
+                </div>
+                <div class="card-stats" id="card-stats">
+                  <span>⚔️ ATK 48</span>
+                  <span>🛡️ DEF 38</span>
+                  <span>⚡ AP <b id="card-ap">3/3</b></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card-bars">
+              <div class="stat-bar-group">
+                <div class="stat-bar-header">
+                  <span class="bar-label">HP</span>
+                </div>
+                <div class="bar-outer">
+                  <div class="bar-fill-hp" id="card-hp-fill" style="width: 100%;"></div>
+                  <div class="bar-overlay-text" id="card-hp-text">100/100</div>
+                </div>
+              </div>
+
+              <div class="stat-bar-group">
+                <div class="stat-bar-header">
+                  <span class="bar-label">💖 호감도</span>
+                </div>
+                <div class="bar-outer">
+                  <div class="bar-fill-aff" id="card-aff-fill" style="width: 85%;"></div>
+                  <div class="bar-overlay-text" id="card-aff-text">85/100</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Battle Victory Odds View (이동/사거리 내 적 유닛 존재 시 자동 변환) -->
+          <div class="unit-card-odds" id="unit-card-odds-view" style="display: none;">
+            <div class="odds-header-row">
+              <div class="odds-live-tag">
+                <span class="odds-live-pulse"></span>
+                <span>전투 승리 확률</span>
+              </div>
+              <div class="odds-target-chips" id="odds-target-chips"></div>
+              <button class="btn-odds-view-toggle" id="btn-toggle-card-view" title="기본 유닛 정보 보기">
+                📋 정보
+              </button>
+            </div>
+
+            <div class="odds-matchup-row">
+              <!-- Left: Attacker (Player) -->
+              <div class="odds-combatant-box player">
+                <div class="odds-combatant-avatar" id="odds-atk-avatar">🐴</div>
+                <div class="odds-combatant-info">
+                  <div class="odds-combatant-name" id="odds-atk-name">성기사 롤랑</div>
+                  <div class="odds-combatant-stat">⚔️ 공 <b id="odds-atk-power">48.0</b></div>
+                </div>
+              </div>
+
+              <!-- Center: Win Rate & Attack Button -->
+              <div class="odds-center-evaluation">
+                <div class="odds-rate-badge">
+                  <span class="odds-rate-percent" id="odds-win-rate">85.2%</span>
+                  <span class="odds-rate-status" id="odds-status-tag">유리</span>
+                </div>
+                <div class="odds-meter-outer">
+                  <div class="odds-meter-fill" id="odds-meter-fill" style="width: 85.2%; background: #10b981;"></div>
+                </div>
+                <button class="btn-odds-attack" id="btn-odds-fast-attack" title="선택된 적 유닛과 즉시 교전 개시 (AP 1 소모)">
+                  ⚔️ 교전 개시
+                </button>
+              </div>
+
+              <!-- Right: Defender (Enemy) -->
+              <div class="odds-combatant-box enemy">
+                <div class="odds-combatant-info">
+                  <div class="odds-combatant-name" id="odds-def-name">오크 전사</div>
+                  <div class="odds-combatant-stat">🛡️ 방 <b id="odds-def-power">24.0</b></div>
+                </div>
+                <div class="odds-combatant-avatar enemy" id="odds-def-avatar">👾</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Stack Switcher Bar (Appears when units are stacked on the same tile) -->
+        <div class="stack-switcher-bar" id="stack-switcher-bar" style="display: none;"></div>
+
+        <!-- 4. Combat Console Log Window -->
+        <div id="console-wrap">
+          <div class="log-line log-system">🎮 [시스템] 세로형 모바일 SLG 전투 엔진이 초기화되었습니다.</div>
+          <div class="log-line log-system">💡 플레이어 네임을 터치하면 고유 병과특기(특수기)를 확인하고 발동할 수 있습니다.</div>
+        </div>
+
+      </section>
+
+    </div> <!-- /#view-sector-field -->
+
+    <!-- ========================================================================
+         Sector Entry Simulation Modal (섹터 진입 시뮬레이션 팝업)
+         ======================================================================== -->
+    <div class="modal-backdrop" id="modal-sector-deploy" style="display: none;">
+      <div class="modal-card" style="max-width: 420px;">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span>🚀</span>
+            <span id="deploy-modal-title">섹터 출격 작전 브리핑</span>
+          </div>
+          <button class="btn-modal-close" onclick="closeSectorDeployModal()">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="deploy-sim-card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 13px; font-weight: 900; color: #0f172a;" id="deploy-sim-sector-name">[A-1] 벨른 평원 강습 작전</span>
+              <span class="strat-diff-badge easy" id="deploy-sim-diff">EASY ★☆☆☆☆</span>
+            </div>
+            <div style="font-size: 10px; color: #475569; margin-top: 4px; line-height: 1.4;" id="deploy-sim-desc">
+              아군 선봉 제1전술대대가 8x14 전술 필드로 워프 전개합니다. ZOC 전선을 확립하고 적 주력을 격파하십시오.
+            </div>
+
+            <!-- Power Matchup Comparison Box -->
+            <div class="deploy-power-compare-box">
+              <div class="deploy-power-side">
+                <span class="title">아군 편성 전투력</span>
+                <span class="val" id="deploy-sim-my-power">480 PWR</span>
+                <span style="font-size: 8px; color: #0284c7; font-weight: 800;" id="deploy-sim-units-count">100개 유닛 편성</span>
+              </div>
+              <div class="deploy-vs-pill">VS</div>
+              <div class="deploy-power-side enemy">
+                <span class="title">적군 권장 전투력</span>
+                <span class="val" id="deploy-sim-enemy-power">320 PWR</span>
+                <span style="font-size: 8px; color: #e11d48; font-weight: 800;" id="deploy-sim-enemy-name">고블린 유격대</span>
+              </div>
+            </div>
+
+            <!-- Odds and Resource Cost -->
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; font-weight: 800;">
+              <span style="color: #10b981;">🏆 예상 승률: <b>88.5% (압도적 우세)</b></span>
+              <span style="color: #0284c7;">⚡ 소모 AP: <b>5 AP</b></span>
+            </div>
+
+            <div class="deploy-launch-countdown-bar">
+              <div class="deploy-launch-countdown-fill" id="deploy-countdown-fill"></div>
+            </div>
+          </div>
+
+          <!-- Launch Actions -->
+          <div style="display: flex; gap: 8px; margin-top: 6px;">
+            <button class="btn-cheat" style="flex: 1; padding: 11px;" onclick="closeSectorDeployModal()">
+              취소
+            </button>
+            <button class="strat-btn-launch-main" style="flex: 2; height: 42px;" onclick="launchSectorOperation()">
+              <span>🚀</span>
+              <span>작전 지역 강습 진입</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========================================================================
+         Bottom Slide Full-Shot Character Showcase Overlay (우마무스메 스타일 전신 풀샷)
+         ======================================================================== -->
+    <div class="unit-fullshot-overlay" id="unit-fullshot-overlay">
+      <!-- Drag & Close Top Handle -->
+      <div class="fullshot-top-handle">
+        <div class="fullshot-drag-pill" onclick="closeFullShotOverlay()"></div>
+        <button class="fullshot-btn-close" onclick="closeFullShotOverlay()" title="풀샷 연출창 닫기">✕</button>
+      </div>
+
+      <!-- Main Body: Left Full-shot Illustration + Right Stats/Capsules -->
+      <div class="fullshot-main-body">
+        <!-- Left: Full-shot Character Stage (object-fit: contain) -->
+        <div class="fullshot-left-col">
+          <div class="fullshot-character-stage" id="fullshot-character-stage">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+
+        <!-- Right: Stats, Info & Pastels Grid -->
+        <div class="fullshot-right-col">
+          <!-- Unit Header -->
+          <div class="fullshot-unit-title-row">
+            <div class="fullshot-name-wrap">
+              <span class="fullshot-name-text" id="fullshot-name-text">성기사 롤랑</span>
+              <span class="fullshot-tag-class" id="fullshot-tag-class">🐴 기사</span>
+            </div>
+            <div class="fullshot-badge-lv" id="fullshot-badge-lv">Lv.2</div>
+          </div>
+
+          <!-- Thick Capsule Bars: HP / Affection with numeric overlay -->
+          <div class="fullshot-capsules-group">
+            <!-- HP Capsule -->
+            <div class="fullshot-capsule-item">
+              <div class="fullshot-capsule-header">
+                <span>❤️ 체력 (HP)</span>
+                <span id="fullshot-hp-val-text" style="font-weight: 800; color: #ef4444;">100 / 100</span>
+              </div>
+              <div class="fullshot-capsule-tube hp-tube">
+                <div class="fullshot-capsule-gauge hp-gauge" id="fullshot-hp-gauge" style="width: 100%;"></div>
+                <div class="fullshot-capsule-overlay-text" id="fullshot-hp-overlay-text">HP 100 / 100</div>
+              </div>
+            </div>
+
+            <!-- Affection Capsule -->
+            <div class="fullshot-capsule-item" id="fullshot-aff-container">
+              <div class="fullshot-capsule-header">
+                <span>💖 호감도 (Bond)</span>
+                <span id="fullshot-aff-val-text" style="font-weight: 800; color: #ec4899;">85 / 100</span>
+              </div>
+              <div class="fullshot-capsule-tube aff-tube">
+                <div class="fullshot-capsule-gauge aff-gauge" id="fullshot-aff-gauge" style="width: 85%;"></div>
+                <div class="fullshot-capsule-overlay-text" id="fullshot-aff-overlay-text">호감도 85 / 100</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Pastel Stats Grid (공격력, 방어력, AP, 좌표/지형) -->
+          <div class="fullshot-pastel-grid">
+            <div class="fullshot-pastel-card red">
+              <div class="pastel-label">⚔️ 공격력</div>
+              <div class="pastel-val" id="fullshot-stat-atk">48</div>
+            </div>
+            <div class="fullshot-pastel-card blue">
+              <div class="pastel-label">🛡️ 방어력</div>
+              <div class="pastel-val" id="fullshot-stat-def">38</div>
+            </div>
+            <div class="fullshot-pastel-card green">
+              <div class="pastel-label">⚡ 잔여 AP</div>
+              <div class="pastel-val" id="fullshot-stat-ap">3/3</div>
+            </div>
+            <div class="fullshot-pastel-card purple">
+              <div class="pastel-label">📍 전장 좌표</div>
+              <div class="pastel-val" id="fullshot-stat-coord">X:3 Y:4</div>
+            </div>
+          </div>
+
+          <!-- Visual Custom Skill Card (캐릭터 고유 스킬 카드 연출 및 발동) -->
+          <div class="fullshot-skill-card-container" id="fullshot-skill-card-container">
+            <!-- Dynamically populated by updateFullShotOverlay() -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Bottom Action Row: [스킬트리] -->
+      <div class="fullshot-action-row">
+        <button class="fullshot-btn-action skill" onclick="onFullshotSkillClicked()" title="유닛 승급 훈련 및 스킬트리 열람">
+          <span class="action-btn-ico">🌳</span> 스킬트리
+        </button>
+      </div>
+    </div>
+
+    <!-- Modal: Unit Class Special Skill (병과특기) -->
+    <div class="modal-backdrop" id="modal-class-skill">
+      <div class="modal-window" style="max-height: 85vh;">
+        <div class="modal-header">
+          <div class="modal-title" id="class-skill-modal-title">✨ 병과 고유 특기</div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div id="class-skill-modal-body" style="display: flex; flex-direction: column; gap: 12px; overflow-y: auto; padding: 2px;">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Commander Skill Tree -->
+    <div class="modal-backdrop" id="modal-skills">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title">⭐ 지휘관 패시브 스킬 트리 (보유: <span id="modal-sp-display">2</span> SP)</div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div class="skill-grid" id="modal-skill-grid">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Village Store (1x1) -->
+    <div class="modal-backdrop" id="modal-village">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title">🏡 참나무 마을 보급소 (유지비 0 zone)</div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div class="shop-items-list">
+          <div class="shop-item-card">
+            <div>
+              <div style="font-weight: 800; font-size: 13px;">🍎 영양 과일 바구니</div>
+              <div style="font-size: 10px; color: #9ca3af;">선택 유닛 호감도 +15 즉시 상승</div>
+            </div>
+            <button class="btn-buy" onclick="buyVillageItem('FRUIT', 25, 15)">25G 구입</button>
+          </div>
+          <div class="shop-item-card">
+            <div>
+              <div style="font-weight: 800; font-size: 13px;">🍖 특제 만찬 세트</div>
+              <div style="font-size: 10px; color: #9ca3af;">선택 유닛 호감도 +35 대폭 상승</div>
+            </div>
+            <button class="btn-buy" onclick="buyVillageItem('FEAST', 60, 35)">60G 구입</button>
+          </div>
+          <div class="shop-item-card">
+            <div>
+              <div style="font-weight: 800; font-size: 13px;">⏳ 시공간 리와인더 충전권</div>
+              <div style="font-size: 10px; color: #9ca3af;">리와인더 잔여 횟수 +1 충전</div>
+            </div>
+            <button class="btn-buy" onclick="buyVillageItem('REWIND', 120, 0)">120G 충전</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: City Hall (2x2) -->
+    <div class="modal-backdrop" id="modal-city">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title">🏰 왕도 에테르니아 (2x2 대도시 / 유지비 0)</div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div class="shop-items-list">
+          <div class="shop-item-card">
+            <div>
+              <div style="font-weight: 800; font-size: 13px;" id="city-sell-title">💰 선택 유닛 명예 퇴역 (매각)</div>
+              <div style="font-size: 10px; color: #9ca3af;" id="city-sell-desc">기본금 + 레벨/호감도/승급 비례 골드 영구 환급</div>
+            </div>
+            <button class="btn-buy" id="btn-city-confirm-sell" onclick="executeCitySell()">매각 실행</button>
+          </div>
+          <div class="shop-item-card">
+            <div>
+              <div style="font-weight: 800; font-size: 13px;">⚔️ 왕실 아카데미 진급 훈련</div>
+              <div style="font-size: 10px; color: #9ca3af;">선택 유닛 레벨 +1 및 승급 스킬 강화 (80G)</div>
+            </div>
+            <button class="btn-buy" onclick="executeCityUpgrade(80)">80G 훈련</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Offline Defense Raid Simulation -->
+    <div class="modal-backdrop" id="modal-defense">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title">🛡️ 비동기 오프라인 로그아웃 수비 시뮬레이션</div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div style="font-size: 11px; color: #cbd5e1; line-height: 1.4;">
+          <p>• <b>마을/도시 주둔 유닛</b>: 완벽 면책 (공격받지 않음)</p>
+          <p>• <b>필드 배치 유닛</b>: 강제 방어 모드 (+20% 방어력 가산)</p>
+          <p>• <b>패배 시 완충 시스템</b>: 전멸하지 않고 <b>가장 약한 유닛 1기만 사망/탈취</b>되며, 1시간(1턴) 동안 추가 침공 방어막이 부여됩니다.</p>
+        </div>
+        <button class="btn-buy" style="margin-top: 6px; padding: 10px;" onclick="runOfflineDefenseSimulation()">
+          가상 침공 시뮬레이션 시작 ⚔️
+        </button>
+      </div>
+    </div>
+
+    <!-- Modal: Stack Move Warning (부대 함께 이동 AP 부족 안내 팝업) -->
+    <div class="modal-backdrop" id="modal-stack-alert">
+      <div class="modal-window" style="border-top-color: #f59e0b; max-width: 420px; margin: 0 auto;">
+        <div class="modal-header" style="border-bottom-color: #fef3c7;">
+          <div class="modal-title" style="color: #b45309; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">⚠️</span>
+            <span id="stack-alert-title">부대 함께 이동 불가 안내</span>
+          </div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div id="stack-alert-body" style="padding: 6px 2px; display: flex; flex-direction: column; gap: 12px;">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Guest Profile & Save Info (게스트 프로필 및 로컬 저장소 현황) -->
+    <div class="modal-backdrop" id="modal-guest-profile">
+      <div class="modal-window" style="border-top: 3.5px solid #0284c7; max-width: 360px; margin: 0 auto;">
+        <div class="modal-header" style="border-bottom-color: #e2e8f0;">
+          <div class="modal-title" style="color: #0369a1; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">👤</span>
+            <span>게스트 계정 및 저장소 정보</span>
+          </div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div style="padding: 10px 4px 6px 4px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 11.5px;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">접속 모드</span>
+              <span style="font-weight: 800; color: #0284c7; background: #e0f2fe; padding: 2px 7px; border-radius: 6px;">🎮 게스트 (Guest) 즉시 접속</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">게스트 ID</span>
+              <span style="font-weight: 900; color: #0f172a;" id="modal-guest-id-val">Guest_----</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">현재 턴 / 골드</span>
+              <span style="font-weight: 800; color: #b45309;" id="modal-guest-progress-val">Turn 1 / 450G</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">최초 접속 일시</span>
+              <span style="font-weight: 600; color: #334155; font-size: 10.5px;" id="modal-guest-created-val">-</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">최근 자동 저장</span>
+              <span style="font-weight: 700; color: #059669; font-size: 10.5px;" id="modal-guest-saved-val">방금 전</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="color: #64748b; font-weight: 600;">클라우드 저장소</span>
+              <code style="font-size: 10px; background: #f1f5f9; padding: 2px 5px; border-radius: 4px; color: #0369a1; font-weight: 700;">Firestore ['gameState']</code>
+            </div>
+          </div>
+
+          <div style="font-size: 11px; color: #475569; line-height: 1.5; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 9px;">
+            💡 <b>클라우드 자동 동기화:</b> 로컬 스토리지를 일체 사용하지 않으며, 턴 종료·전투·영웅 생성·스킬 트리 등 모든 데이터는 Firebase Firestore 및 Storage에 실시간 영구 동기화됩니다.
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <button class="btn-buy" style="flex: 1; padding: 8px; background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%); color: white; font-size: 11px; font-weight: 800;" onclick="saveGameState(); updateGuestModalInfo(); addLog('💾 [수동 저장 완료] 현재 상태가 안전하게 저장되었습니다.', 'success');">
+              💾 수동 즉시 저장
+            </button>
+            <button class="btn-buy" style="flex: 1; padding: 8px; background: #94a3b8; color: white; font-size: 11px;" onclick="closeAllModals()">
+              닫기
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Guest Reset Confirmation (데이터 초기화 및 새로 시작 확인 팝업) -->
+    <div class="modal-backdrop" id="modal-guest-reset-confirm">
+      <div class="modal-window" style="border-top: 3.5px solid #ef4444; max-width: 350px; margin: 0 auto;">
+        <div class="modal-header" style="border-bottom-color: #fee2e2;">
+          <div class="modal-title" style="color: #b91c1c; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">⚠️</span>
+            <span>데이터 초기화 / 새로 시작</span>
+          </div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+        <div style="padding: 10px 4px 6px 4px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="font-size: 12px; color: #334155; line-height: 1.55; background: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px; padding: 10px;">
+            현재 기기에 저장된 <b>게스트 데이터(진행 턴, 골드, 보유 부대 스탯)</b>가 모두 영구 삭제되며, <b>새로운 게스트 ID</b>로 1턴부터 다시 시작합니다.<br/><br/>
+            정말로 새로 시작하시겠습니까?
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <button class="btn-buy" style="flex: 1; padding: 8px; background: #94a3b8; color: white; font-size: 11.5px; font-weight: 700;" onclick="closeAllModals()">
+              취소
+            </button>
+            <button id="btn-confirm-guest-reset" class="btn-buy" style="flex: 1.2; padding: 8px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; font-size: 11.5px; font-weight: 900;" onclick="resetGuestData()">
+              🔥 초기화 및 시작
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Admin Authentication (관리자 전용 인증 패널) -->
+    <div class="modal-backdrop" id="modal-admin-auth">
+      <div class="modal-window" style="border-top: 3.5px solid #0284c7; max-width: 360px; margin: 0 auto;">
+        <div class="modal-header" style="border-bottom-color: #e2e8f0;">
+          <div class="modal-title" style="color: #0369a1; display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 20px;">🛡️</span>
+            <span>관리자 DEV 패널 인증</span>
+          </div>
+          <button class="btn-close" onclick="closeAdminAuthModal()">✕</button>
+        </div>
+        <div style="padding: 10px 4px 6px 4px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="font-size: 11.5px; color: #475569; line-height: 1.5;">
+            개발자 및 관리자 전용 디버그 패널입니다.<br/>
+            접근을 위해 관리자 보안 비밀번호를 입력해주세요.
+          </div>
+          
+          <div style="display: flex; flex-direction: column; gap: 6px;">
+            <div style="position: relative; display: flex; align-items: center;">
+              <input type="password" id="input-admin-pwd" placeholder="관리자 비밀번호 입력" autocomplete="off"
+                style="width: 100%; padding: 8px 36px 8px 10px; border-radius: 10px; border: 1.5px solid #cbd5e1; font-size: 13px; outline: none; background: #ffffff; color: #0f172a; transition: all 0.15s ease;" />
+              <button type="button" id="btn-toggle-admin-pwd" title="비밀번호 보기/숨기기"
+                style="position: absolute; right: 8px; background: none; border: none; font-size: 14px; cursor: pointer; padding: 4px; color: #64748b;">
+                👁️
+              </button>
+            </div>
+            <div id="admin-pwd-error" style="display: none; color: #ef4444; font-size: 11px; font-weight: 700; align-items: center; gap: 4px;">
+              ⚠️ 비밀번호가 일치하지 않습니다.
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 8px; margin-top: 4px;">
+            <button class="btn-buy" style="flex: 1; padding: 8px; background: #94a3b8; color: white; font-size: 11px;" onclick="closeAdminAuthModal()">
+              취소
+            </button>
+            <button id="btn-submit-admin-pwd" class="btn-buy" style="flex: 1.4; padding: 8px; background: linear-gradient(135deg, #0284c7 0%, #38bdf8 100%); color: white; font-size: 11px; font-weight: 900;" onclick="submitAdminAuth()">
+              인증 및 진입 🔑
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Real-time Debug & Developer Inspector Panel -->
+    <div class="modal-backdrop" id="modal-debug">
+      <div class="modal-window">
+        <!-- Modal Top Bar -->
+        <div class="modal-header">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <div class="modal-title" style="color: #c4b5fd;">⚙️ 실시간 디버그 패널</div>
+            <span class="debug-header-badge">
+              <span class="debug-live-indicator"></span> LIVE
+            </span>
+          </div>
+          <button class="btn-close" onclick="closeAllModals()">✕</button>
+        </div>
+
+        <!-- 2. Debug Sub Tabs -->
+        <div class="debug-tabs-bar">
+          <button class="debug-tab-btn active" id="tab-btn-dbg-create-char" onclick="switchDebugTab('create-char')">✨ 캐릭터·스킬 생성</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-images" onclick="switchDebugTab('images')">🖼️ 캐릭터 이미지</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-units" onclick="switchDebugTab('units')">⚔️ 유닛 스탯</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-balance" onclick="switchDebugTab('balance')">⚖️ 밸런스·공식</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-econ" onclick="switchDebugTab('econ')">💰 재화·수량</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-cheats" onclick="switchDebugTab('cheats')">⚡ 치트 버튼</button>
+        </div>
+
+        <!-- 3. Tab Contents -->
+
+        <!-- Tab 0: New Character & Custom Skill Creation Studio (캐릭터·스킬 커스텀 생성소) -->
+        <div id="tab-content-dbg-create-char" class="debug-tab-page">
+          <div class="dbg-create-container">
+            <div class="dbg-img-info-banner" style="background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border-color: #c4b5fd;">
+              <strong>✨ 신규 캐릭터 & 고유 스킬(Active/Passive) 생성 시스템</strong><br/>
+              나만의 영웅 이름, 5대 병과, 커스텀 스탯 및 전용 일러스트와 고유 스킬(단일/광역/버프/자신)을 직접 생성하여 전장에 즉시 배치합니다.
+            </div>
+
+            <!-- Section 1: Character Profile & Stats -->
+            <div class="dbg-card-section">
+              <div class="dbg-card-section-title">
+                <span>👤 1. 캐릭터 기본 정보 및 능력치 (Character Info & Stats)</span>
+              </div>
+              <div class="dbg-form-grid-2" style="margin-bottom: 8px;">
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-char-name">캐릭터 이름</label>
+                  <input type="text" id="create-char-name" class="dbg-form-control" value="발키리 브륀힐드" placeholder="캐릭터명 입력" />
+                </div>
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-char-class">병과 선택 (Unit Class)</label>
+                  <select id="create-char-class" class="dbg-form-control" onchange="onCustomClassSelectChanged(this.value)">
+                    <option value="KNIGHT">🐴 기사 (Knight) - 고방어·돌파</option>
+                    <option value="MAGE">🔮 마법사 (Mage) - 원거리 광역 마법</option>
+                    <option value="ARCHER">🏹 궁수 (Archer) - 2칸 사거리 저격</option>
+                    <option value="MELEE">⚔️ 근접 (Melee) - 백병전 강습</option>
+                    <option value="FIREARM">💥 화기 (Firearm) - 중포·폭발 포격</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="dbg-form-group" style="margin-bottom: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                  <label class="dbg-form-label" for="create-char-favorability">초기 호감도 (Favorability 0~100)</label>
+                  <span id="create-char-fav-display" style="font-size: 11px; font-weight: 900; color: #ec4899;">85 / 100</span>
+                </div>
+                <input type="range" id="create-char-favorability" min="0" max="100" value="85" style="accent-color: #ec4899;" oninput="document.getElementById('create-char-fav-display').textContent = this.value + ' / 100'" />
+              </div>
+
+              <div class="dbg-stats-quad-grid">
+                <div class="dbg-stat-quad-item">
+                  <span class="lbl">❤️ 생명력 (HP/MaxHP)</span>
+                  <input type="number" id="create-char-hp" value="120" min="10" max="999" />
+                </div>
+                <div class="dbg-stat-quad-item">
+                  <span class="lbl">⚔️ 공격력 (ATK)</span>
+                  <input type="number" id="create-char-atk" value="52" min="1" max="999" />
+                </div>
+                <div class="dbg-stat-quad-item">
+                  <span class="lbl">🛡️ 방어력 (DEF)</span>
+                  <input type="number" id="create-char-def" value="44" min="1" max="999" />
+                </div>
+                <div class="dbg-stat-quad-item">
+                  <span class="lbl">👟 이동력 (Mobility / Base AP)</span>
+                  <input type="number" id="create-char-mobility" value="3" min="1" max="6" />
+                </div>
+              </div>
+            </div>
+
+            <!-- Section 2: Character Illustration Image -->
+            <div class="dbg-card-section">
+              <div class="dbg-card-section-title">
+                <span>🎨 2. 전신 일러스트 이미지 (Full-shot Visual)</span>
+              </div>
+              <div id="create-char-dropzone" class="dbg-img-dropzone" onclick="document.getElementById('create-char-file-input').click()">
+                <input type="file" id="create-char-file-input" accept="image/*" style="display: none;" onchange="onCustomCharFileSelected(this)" />
+                <div class="dbg-img-dropzone-preview" id="create-char-preview-box">
+                  <img id="create-char-preview-img" src="" alt="미리보기" style="display: none;" />
+                  <span id="create-char-preview-placeholder" style="font-size: 26px;">🐴</span>
+                </div>
+                <div style="flex: 1; min-width: 0;">
+                  <div style="font-size: 11px; font-weight: 800; color: #1e293b;">🖼️ 클릭하여 이미지 파일 선택 또는 드래그&드롭</div>
+                  <div style="font-size: 9.5px; color: #64748b; margin-top: 2px;">PNG, JPG, WebP 지원 (Base64로 변환되어 LocalStorage 영구 보관)</div>
+                  <div style="margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap;">
+                    <button type="button" class="btn-cheat purple" style="font-size: 9px; padding: 2px 6px;" onclick="event.stopPropagation(); applyPresetImageToNewChar();">✨ 추천 일러스트 로드</button>
+                    <button type="button" class="btn-cheat" style="font-size: 9px; padding: 2px 6px; background: #64748b;" onclick="event.stopPropagation(); clearCustomCharImage();">🗑️ 지우기</button>
+                  </div>
+                </div>
+              </div>
+              <div class="dbg-form-group" style="margin-top: 6px;">
+                <label class="dbg-form-label" for="create-char-img-url">웹 이미지 URL 직접 입력 (선택사항)</label>
+                <input type="text" id="create-char-img-url" class="dbg-form-control" placeholder="https://example.com/character.png" oninput="onCustomCharUrlChanged(this.value)" />
+              </div>
+            </div>
+
+            <!-- Section 3: Custom Skill Creation (고유 스킬 커스텀 생성) -->
+            <div class="dbg-card-section" style="border-color: #ddd6fe; background: linear-gradient(180deg, #ffffff 0%, #faf5ff 100%);">
+              <div class="dbg-card-section-title" style="color: #6b21a8; border-bottom-color: #ede9fe;">
+                <span>⚡ 3. 캐릭터 고유 스킬 정의 (Custom Skill: Active / Passive)</span>
+              </div>
+              <div class="dbg-form-grid-2" style="margin-bottom: 8px;">
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-name">스킬 이름 (Skill Name)</label>
+                  <input type="text" id="create-skill-name" class="dbg-form-control" value="빛의 수호 성벽" placeholder="스킬명 입력" />
+                </div>
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-type">스킬 유형 (Skill Type)</label>
+                  <select id="create-skill-type" class="dbg-form-control" onchange="onCustomSkillTypeChanged(this.value)">
+                    <option value="ACTIVE">⚡ 액티브 스킬 (ACTIVE - 수동 발동)</option>
+                    <option value="PASSIVE">🛡️ 패시브 스킬 (PASSIVE - 상시 스탯 강화)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="dbg-form-grid-2" style="margin-bottom: 8px;">
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-target">대상 유형 (Target Type)</label>
+                  <select id="create-skill-target" class="dbg-form-control">
+                    <option value="BUFF">💖 아군 회복 및 공방 버프 (BUFF)</option>
+                    <option value="SINGLE_TARGET">🎯 단일 적군 집중 타격 (SINGLE_TARGET)</option>
+                    <option value="AOE">💥 사거리 내 광역 폭격 (AOE)</option>
+                    <option value="SELF">🌟 자신 행동력 완전 회복 (SELF)</option>
+                  </select>
+                </div>
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-effect">효과 수치 (Effect Value)</label>
+                  <input type="number" id="create-skill-effect" class="dbg-form-control" value="35" min="1" max="999" placeholder="피해량, 힐량, 버프%" />
+                </div>
+              </div>
+
+              <div class="dbg-form-grid-2" style="margin-bottom: 8px;" id="create-skill-active-row">
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-ap">소모 행동력 (Cost AP)</label>
+                  <input type="number" id="create-skill-ap" class="dbg-form-control" value="1" min="1" max="4" />
+                </div>
+                <div class="dbg-form-group">
+                  <label class="dbg-form-label" for="create-skill-cd">쿨다운 턴수 (Cooldown Turns)</label>
+                  <input type="number" id="create-skill-cd" class="dbg-form-control" value="2" min="0" max="10" />
+                </div>
+              </div>
+
+              <div class="dbg-form-group">
+                <label class="dbg-form-label" for="create-skill-desc">스킬 상세 설명 (Description)</label>
+                <textarea id="create-skill-desc" class="dbg-form-control" rows="2" style="resize: vertical;" placeholder="스킬의 효과와 배경 설정을 작성하세요.">성스러운 기도의 방벽을 전개하여 자신과 인접 아군의 체력을 35 회복하고 이번 턴 공/방을 25% 증폭합니다.</textarea>
+              </div>
+            </div>
+
+            <!-- Submit Button: Create & Deploy -->
+            <button type="button" class="dbg-btn-primary-create" onclick="createAndDeployCharacter()">
+              ✨ 캐릭터 & 고유 스킬 생성하여 전장에 배치하기
+            </button>
+
+            <!-- Section 4: Saved Custom Characters Management -->
+            <div class="dbg-card-section" style="margin-top: 4px;">
+              <div class="dbg-card-section-title">
+                <span>📚 생성된 커스텀 캐릭터 보관함 (<span id="dbg-custom-char-count">0</span>명)</span>
+              </div>
+              <div id="dbg-custom-char-list" style="display: flex; flex-direction: column; gap: 6px;">
+                <div style="font-size: 11px; color: #94a3b8; text-align: center; padding: 12px 0;">
+                  아직 생성된 커스텀 캐릭터가 없습니다. 위 입력폼에서 첫 영웅을 생성해보세요!
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 1: Character Image Management (내 컴퓨터 이미지 업로드 & URL 커스텀) -->
+        <div id="tab-content-dbg-images" class="debug-tab-page" style="display: none;">
+          <div class="dbg-img-manager-container">
+            <div class="dbg-img-info-banner">
+              <strong>🎨 캐릭터 전신 일러스트 & 풀샷 커스텀 관리</strong><br/>
+              내 컴퓨터의 이미지 파일(PNG/JPG)을 업로드하거나 웹 URL을 등록하면 게임 내 전신 풀샷 연출창 및 타일에 즉시 반영됩니다. (브라우저 LocalStorage에 자동 영구 저장)
+              <div class="dbg-img-quick-bar">
+                <button class="btn-cheat purple" onclick="applySamplePresetImages()" style="font-size: 10px; padding: 4px 8px;" title="우마무스메풍 판타지 샘플 일러스트 5종을 즉시 로드합니다">✨ 추천 판타지 샘플 풀샷 로드</button>
+                <button class="btn-cheat" onclick="resetAllClassImages()" style="font-size: 10px; padding: 4px 8px; background: #64748b;" title="모든 커스텀 이미지를 초기화하고 기본 실루엣으로 복원합니다">🔄 전체 초기화</button>
+              </div>
+            </div>
+
+            <!-- Dynamic class cards container populated by JS -->
+            <div id="dbg-class-images-list" style="display: flex; flex-direction: column; gap: 8px;">
+              <!-- Populated by renderDebugImageManager() -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 1: Unit Stats -->
+        <div id="tab-content-dbg-units" class="debug-tab-page" style="display: none;">
+          <div class="debug-control-group">
+            <div class="debug-control-group-title">
+              <span>병과 선택 (Class Selection)</span>
+              <span style="font-size: 10px; color: #94a3b8;">선택 병과 전체 일괄 반영</span>
+            </div>
+            <div style="display: flex; gap: 4px; overflow-x: auto; margin-bottom: 10px;">
+              <button class="debug-tab-btn active" id="class-btn-KNIGHT" onclick="selectDebugClass('KNIGHT')">🐴 기사</button>
+              <button class="debug-tab-btn" id="class-btn-MAGE" onclick="selectDebugClass('MAGE')">🔮 마법사</button>
+              <button class="debug-tab-btn" id="class-btn-ARCHER" onclick="selectDebugClass('ARCHER')">🏹 궁수</button>
+              <button class="debug-tab-btn" id="class-btn-MELEE" onclick="selectDebugClass('MELEE')">⚔️ 근접</button>
+              <button class="debug-tab-btn" id="class-btn-FIREARM" onclick="selectDebugClass('FIREARM')">💥 화기</button>
+            </div>
+
+            <!-- ATK Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>공격력 (ATK)</span>
+                <span id="lbl-dbg-atk">48</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-atk" min="1" max="150" value="48" oninput="onDebugStatChange('atk', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-atk" min="1" max="150" value="48" oninput="onDebugStatChange('atk', this.value)">
+              </div>
+            </div>
+
+            <!-- AP / Mobility Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>이동력 (AP / 이동반경)</span>
+                <span id="lbl-dbg-ap">3</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-ap" min="1" max="8" value="3" oninput="onDebugStatChange('baseAP', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-ap" min="1" max="8" value="3" oninput="onDebugStatChange('baseAP', this.value)">
+              </div>
+            </div>
+
+            <!-- Base Affection Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>기본 호감도 (Affection)</span>
+                <span id="lbl-dbg-aff">85</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-aff" min="0" max="100" value="85" oninput="onDebugStatChange('affection', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-aff" min="0" max="100" value="85" oninput="onDebugStatChange('affection', this.value)">
+              </div>
+            </div>
+
+            <!-- DEF Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>방어력 (DEF)</span>
+                <span id="lbl-dbg-def">38</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-def" min="1" max="150" value="38" oninput="onDebugStatChange('def', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-def" min="1" max="150" value="38" oninput="onDebugStatChange('def', this.value)">
+              </div>
+            </div>
+
+            <!-- Max HP Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>최대 체력 (Max HP)</span>
+                <span id="lbl-dbg-hp">100</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-hp" min="10" max="300" value="100" oninput="onDebugStatChange('hp', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-hp" min="10" max="300" value="100" oninput="onDebugStatChange('hp', this.value)">
+              </div>
+            </div>
+
+            <div style="font-size: 10px; color: #10b981; margin-top: 6px;">
+              💡 슬라이더를 변경하면 현재 필드 위 해당 병과의 모든 유닛 스탯이 즉각 갱신됩니다.
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Balance & Combat Formulas -->
+        <div id="tab-content-dbg-balance" class="debug-tab-page" style="display: none;">
+          <div class="debug-control-group">
+            <div class="debug-control-group-title">
+              <span>전투 & 지형 파라미터 (Balance Tuning)</span>
+            </div>
+
+            <!-- Tile Def Bonus Multiplier -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>타일 방어 보너스 배율 (%)</span>
+                <span id="lbl-dbg-tiledef">100% (기본)</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-tiledef" min="0" max="300" step="5" value="100" oninput="onDebugBalanceChange('tileDefBonusMultiplier', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-tiledef" min="0" max="300" step="5" value="100" oninput="onDebugBalanceChange('tileDefBonusMultiplier', this.value)">
+              </div>
+            </div>
+
+            <!-- Collateral Damage Ratio -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>2차 피해(스플래시) 비율 (%)</span>
+                <span id="lbl-dbg-splash">30%</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-splash" min="0" max="100" step="5" value="30" oninput="onDebugBalanceChange('collateralDamageMultiplier', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-splash" min="0" max="100" step="5" value="30" oninput="onDebugBalanceChange('collateralDamageMultiplier', this.value)">
+              </div>
+            </div>
+
+            <!-- Formula Attacker Weight -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>승리 확률 공식: 공격력 가중치 (W_atk)</span>
+                <span id="lbl-dbg-watk">1.0x</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-watk" min="0.2" max="3.0" step="0.1" value="1.0" oninput="onDebugBalanceChange('winChanceAttackerWeight', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-watk" min="0.2" max="3.0" step="0.1" value="1.0" oninput="onDebugBalanceChange('winChanceAttackerWeight', this.value)">
+              </div>
+            </div>
+
+            <!-- Formula Defender Weight -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>승리 확률 공식: 방어력 가중치 (W_def)</span>
+                <span id="lbl-dbg-wdef">1.0x</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-wdef" min="0.2" max="3.0" step="0.1" value="1.0" oninput="onDebugBalanceChange('winChanceDefenderWeight', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-wdef" min="0.2" max="3.0" step="0.1" value="1.0" oninput="onDebugBalanceChange('winChanceDefenderWeight', this.value)">
+              </div>
+            </div>
+
+            <!-- Battle Force Win/Lose Radio -->
+            <div style="margin-top: 10px;">
+              <div style="font-size: 11px; font-weight: 700; color: #cbd5e1; margin-bottom: 4px;">전투 결과 강제 치트 모드</div>
+              <div style="display: flex; gap: 4px;">
+                <button class="debug-tab-btn active" id="btn-force-NONE" onclick="setForcedBattleResult('NONE')">🎲 일반 주사위</button>
+                <button class="debug-tab-btn" id="btn-force-WIN" onclick="setForcedBattleResult('FORCE_WIN')">🏆 무조건 승리</button>
+                <button class="debug-tab-btn" id="btn-force-LOSE" onclick="setForcedBattleResult('FORCE_LOSE')">💥 무조건 패배</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Economy & Commander Quantities -->
+        <div id="tab-content-dbg-econ" class="debug-tab-page" style="display: none;">
+          <div class="debug-control-group">
+            <div class="debug-control-group-title">
+              <span>재화 및 수량 조절 (Currencies & Resources)</span>
+            </div>
+
+            <!-- Gold Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>소지금 (Gold)</span>
+                <span id="lbl-dbg-gold">450G</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-gold" min="0" max="10000" step="50" value="450" oninput="onDebugResourceChange('gold', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-gold" min="0" max="50000" step="50" value="450" oninput="onDebugResourceChange('gold', this.value)">
+              </div>
+            </div>
+
+            <!-- Rewinder Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>리와인더 보유 수량 (Rewinders)</span>
+                <span id="lbl-dbg-rewind">3개</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-rewind" min="0" max="10" step="1" value="3" oninput="onDebugResourceChange('rewinders', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-rewind" min="0" max="10" step="1" value="3" oninput="onDebugResourceChange('rewinders', this.value)">
+              </div>
+            </div>
+
+            <!-- Commander SP Slider -->
+            <div class="debug-slider-row">
+              <div class="debug-slider-label-val">
+                <span>지휘관 스킬 포인트 (SP)</span>
+                <span id="lbl-dbg-sp">2 SP</span>
+              </div>
+              <div class="debug-slider-input-wrap">
+                <input type="range" class="debug-range" id="slider-dbg-sp" min="0" max="20" step="1" value="2" oninput="onDebugResourceChange('sp', this.value)">
+                <input type="number" class="debug-num-input" id="num-dbg-sp" min="0" max="20" step="1" value="2" oninput="onDebugResourceChange('sp', this.value)">
+              </div>
+            </div>
+
+            <!-- Quick Action Buttons for Econ -->
+            <div class="cheat-btn-grid" style="margin-top: 10px;">
+              <button class="btn-cheat gold" onclick="cheatAddGold(1000)">🪙 골드 +1000G</button>
+              <button class="btn-cheat purple" onclick="cheatAddRewinder(1)">⏳ 리와인더 +1 충전</button>
+              <button class="btn-cheat success" onclick="cheatUnlockAllSkills()">⭐ 전 스킬 올마스터</button>
+              <button class="btn-cheat" onclick="cheatLevelUpCommander()">👑 지휘관 레벨 +1</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 4: Cheats & Quick Spawn Actions -->
+        <div id="tab-content-dbg-cheats" class="debug-tab-page" style="display: none;">
+          <!-- Unit Spawn on Selected Tile -->
+          <div class="debug-control-group">
+            <div class="debug-control-group-title">
+              <span>📍 선택 타일에 유닛 즉시 생성 (Spawn Unit)</span>
+              <span id="lbl-spawn-target-coord" style="color: #38bdf8; font-family: monospace;">타일 (X:2, Y:2)</span>
+            </div>
+            <div style="display: flex; gap: 6px; margin-bottom: 6px;">
+              <select id="sel-spawn-team" style="flex: 1; background: #0f172a; border: 1px solid #475569; color: #fff; padding: 5px; border-radius: 4px; font-size: 11px;">
+                <option value="PLAYER">아군 유닛 (Player)</option>
+                <option value="ENEMY">적군 유닛 (Enemy)</option>
+              </select>
+              <select id="sel-spawn-class" style="flex: 1; background: #0f172a; border: 1px solid #475569; color: #fff; padding: 5px; border-radius: 4px; font-size: 11px;">
+                <option value="KNIGHT">🐴 기사 (KNIGHT)</option>
+                <option value="MAGE">🔮 마법사 (MAGE)</option>
+                <option value="ARCHER">🏹 궁수 (ARCHER)</option>
+                <option value="MELEE">⚔️ 근접보병 (MELEE)</option>
+                <option value="FIREARM">💥 화기총병 (FIREARM)</option>
+              </select>
+            </div>
+            <div style="display: flex; gap: 6px; align-items: center; margin-bottom: 8px;">
+              <span style="font-size: 11px; color: #94a3b8;">소환 좌표:</span>
+              <label style="font-size: 11px;">X: <input type="number" id="num-spawn-x" min="0" max="7" value="2" style="width: 44px; background: #0f172a; border: 1px solid #475569; color: #fff; border-radius: 4px; padding: 2px 4px; text-align: center;"></label>
+              <label style="font-size: 11px;">Y: <input type="number" id="num-spawn-y" min="0" max="9" value="2" style="width: 44px; background: #0f172a; border: 1px solid #475569; color: #fff; border-radius: 4px; padding: 2px 4px; text-align: center;"></label>
+              <button class="btn-cheat purple" style="flex: 1; padding: 6px 10px;" onclick="cheatSpawnUnit()">➕ 즉시 소환</button>
+            </div>
+            <div style="font-size: 10px; color: #94a3b8;">
+              💡 팁: 맵에서 임의의 타일을 클릭하면 소환 좌표가 해당 타일로 자동 세팅됩니다.
+            </div>
+          </div>
+
+          <!-- Unit State Cheats -->
+          <div class="debug-control-group">
+            <div class="debug-control-group-title">
+              <span>선택 유닛 & 전장 조작 치트</span>
+            </div>
+            <div class="cheat-btn-grid">
+              <button class="btn-cheat success" onclick="cheatSetAffection(100)">💖 선택 유닛 호감도 100</button>
+              <button class="btn-cheat danger" onclick="cheatSetAffection(10)">💔 선택 유닛 호감도 10 (거부)</button>
+              <button class="btn-cheat success" onclick="cheatSetAllAffection(100)">🌟 모든 아군 호감도 100</button>
+              <button class="btn-cheat danger" onclick="cheatDeleteSelectedUnit()">💀 선택 유닛 영구 삭제</button>
+              <button class="btn-cheat gold" onclick="cheatAddGold(1000)">💰 골드 +1000</button>
+              <button class="btn-cheat purple" onclick="cheatRecoverAllAP()">⚡ 전 유닛 AP 완충</button>
+              <button class="btn-cheat success" onclick="cheatHealAllUnits()">🩸 전 아군 체력 풀회복</button>
+              <button class="btn-cheat danger" onclick="if(window.UI && window.UI.showDefeatModal) window.UI.showDefeatModal(); else if(window.showDefeatModal) window.showDefeatModal();">💀 아군 전멸 모달 테스트</button>
+              <button class="btn-cheat" style="background:#0284c7; color:#fff;" onclick="if(window.UI && window.UI.renderTownUnitShop) window.UI.renderTownUnitShop(); else if(window.renderTownUnitShop) window.renderTownUnitShop();">🏰 마을 용병 상점 열기</button>
+              <button class="btn-cheat" style="background:#8b5cf6; color:#fff;" onclick="if(window.UI && window.UI.renderWildRecruitMenu) window.UI.renderWildRecruitMenu(); else if(window.renderWildRecruitMenu) window.renderWildRecruitMenu();">🤝 야생 유닛 설득창 열기</button>
+              <button class="btn-cheat" onclick="cheatResetAllDefaults()">🔄 전체 파라미터 초기화</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+
+  <!-- 2. Firebase Modular Bridge -->
+  <script type="module" src="firebase-bridge.js"></script>
+
+  <!-- 3. Modular Game Scripts in Strict Dependency Order -->
+  <script src="config.js"></script>
+  <script src="ui.js"></script>
+  <script src="dbManager.js"></script>
+  <script src="game.js"></script>
+  <script src="civ4-editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,339 @@
+/* ==========================================================================
+   civ4-editor.css - Civilization IV Style 8x14 Tactical Scenario Map Editor
+   ========================================================================== */
+
+#modal-civ4-editor {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.92);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+}
+
+.civ4-editor-window {
+  width: 100%;
+  max-width: 480px;
+  max-height: 96vh;
+  background: #0f172a;
+  border: 1.5px solid #0284c7;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.8);
+}
+
+.civ4-editor-header {
+  background: #1e293b;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #334155;
+}
+
+.civ4-editor-header h3 {
+  font-size: 13.5px;
+  color: #38bdf8;
+  font-weight: 900;
+  margin: 0;
+}
+
+.civ4-editor-header .btn-close {
+  background: #334155;
+  color: #94a3b8;
+  border: none;
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+}
+
+.civ4-sector-bar {
+  background: #1e293b;
+  padding: 6px 12px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  border-bottom: 1px solid #334155;
+  font-size: 11px;
+}
+
+.civ4-sector-bar select {
+  background: #0f172a;
+  color: #fff;
+  border: 1px solid #475569;
+  border-radius: 6px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+.civ4-btn-primary {
+  background: #0284c7;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.civ4-grid-viewport {
+  flex: 1;
+  overflow: auto;
+  padding: 8px;
+  display: flex;
+  justify-content: center;
+  background: #0b1120;
+}
+
+.civ4-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 36px);
+  grid-template-rows: repeat(14, 36px);
+  gap: 2px;
+  background: #1e293b;
+  padding: 3px;
+  border: 1.5px solid #475569;
+  border-radius: 8px;
+}
+
+.civ4-tile {
+  width: 36px;
+  height: 36px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+}
+
+.civ4-tile:hover {
+  outline: 2px solid #38bdf8;
+  z-index: 10;
+}
+
+.civ4-tile.terrain-plain { background: #dcfce7; }
+.civ4-tile.terrain-forest { background: #86efac; }
+.civ4-tile.terrain-hill { background: #cbd5e1; }
+.civ4-tile.terrain-mountain { background: #64748b; }
+.civ4-tile.terrain-river { background: #7dd3fc; }
+.civ4-tile.terrain-sea { background: #2563eb; }
+
+/* 타일 도로 오버레이 */
+.civ4-tile.has-road::after {
+  content: '═';
+  position: absolute;
+  font-size: 15px;
+  font-weight: 900;
+  color: #78350f;
+  bottom: -2px;
+  left: 2px;
+  text-shadow: 0 0 2px #fde047;
+  z-index: 3;
+}
+
+/* 유닛 스택 배지 (최대 100개 중첩) */
+.civ4-unit-stack-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  font-size: 8px;
+  font-weight: 900;
+  padding: 1px 3px;
+  border-radius: 4px;
+  color: #fff;
+  z-index: 4;
+}
+.civ4-unit-stack-badge.ally { background: #0284c7; }
+.civ4-unit-stack-badge.enemy { background: #dc2626; }
+
+/* 툴바 탭 & 버튼 */
+.civ4-palette-toolbar {
+  background: #1e293b;
+  border-top: 1px solid #334155;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.civ4-palette-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #334155;
+  padding-bottom: 4px;
+}
+
+.civ4-tab-btn {
+  background: transparent;
+  color: #94a3b8;
+  border: none;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.civ4-tab-btn.active {
+  background: #0284c7;
+  color: #fff;
+}
+
+.civ4-palette-items {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+
+.civ4-palette-btn {
+  background: #0f172a;
+  border: 1px solid #475569;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.civ4-palette-btn.active {
+  border-color: #38bdf8;
+  background: #0369a1;
+}
+
+.civ4-action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 2px;
+}
+
+/* 롱프레스 터치 시각 피드백 (3초 게이지 애니메이션) */
+.holding-editor-target {
+  position: relative !important;
+  overflow: hidden !important;
+  filter: brightness(1.2) contrast(1.15) !important;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.7) !important;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.holding-editor-target::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 4px;
+  width: 100%;
+  background: linear-gradient(90deg, #38bdf8 0%, #f43f5e 100%);
+  animation: civ4-hold-gauge 3s linear forwards;
+  z-index: 99;
+}
+
+@keyframes civ4-hold-gauge {
+  0% { transform: scaleX(0); transform-origin: left; }
+  100% { transform: scaleX(1); transform-origin: left; }
+}
+
+/* 비밀번호 인증 모달 */
+.civ4-auth-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 10000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.civ4-auth-box {
+  width: 100%;
+  max-width: 340px;
+  background: #1e293b;
+  border: 1.5px solid #38bdf8;
+  border-radius: 14px;
+  padding: 18px;
+  box-shadow: 0 20px 30px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  color: #f1f5f9;
+}
+
+.civ4-auth-title {
+  font-size: 15px;
+  font-weight: 900;
+  color: #38bdf8;
+}
+
+.civ4-auth-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.civ4-auth-input {
+  background: #0f172a;
+  border: 1px solid #475569;
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: #ffffff;
+  font-size: 13px;
+  outline: none;
+}
+
+.civ4-auth-input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.4);
+}
+
+.civ4-auth-error {
+  color: #ef4444;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.civ4-auth-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.civ4-auth-btn {
+  flex: 1;
+  padding: 9px;
+  font-size: 12px;
+  font-weight: 800;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+}
+
+.civ4-auth-btn.cancel { background: #334155; color: #94a3b8; }
+.civ4-auth-btn.confirm { background: #0284c7; color: #ffffff; }
+
+.shake {
+  animation: civ4-shake 0.35s ease-in-out;
+}
+@keyframes civ4-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-6px); }
+  40%, 80% { transform: translateX(6px); }
+}

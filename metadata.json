@@ -1,0 +1,8 @@
+{
+  "name": "Remix Web-SLG",
+  "description": "세로형 8x14 그리드 타일맵, 이동력(AP) 및 신속한 진격, ZOC(포위망/전선) 차단, 마을/도시 안전지대 및 Civ4 확률 전투 엔진을 탑재한 모바일 턴제 전략 게임",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
