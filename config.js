@@ -1099,8 +1099,24 @@
   if (global.playerState.currentView === undefined) {
     global.playerState.currentView = GAME_VIEWS.WORLD_STRATEGY;
   }
-  if (global.playerState.isCombatActive === undefined) {
-    global.playerState.isCombatActive = false;
+  // Single source of truth for isCombatActive: state.isCombatActive
+  if (!('isCombatActive' in global.playerState) || Object.getOwnPropertyDescriptor(global.playerState, 'isCombatActive')?.configurable) {
+    Object.defineProperty(global.playerState, 'isCombatActive', {
+      get() {
+        return (typeof state !== 'undefined' && state)
+          ? !!state.isCombatActive
+          : (this._isCombatActive !== undefined ? !!this._isCombatActive : false);
+      },
+      set(val) {
+        if (typeof state !== 'undefined' && state) {
+          state.isCombatActive = !!val;
+        } else {
+          this._isCombatActive = !!val;
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
   }
   if (global.playerState.isCombatPaused === undefined) {
     global.playerState.isCombatPaused = false;
@@ -1157,8 +1173,23 @@
   if (global.gameState.currentView === undefined) {
     global.gameState.currentView = GAME_VIEWS.WORLD_STRATEGY;
   }
-  if (global.gameState.isCombatActive === undefined) {
-    global.gameState.isCombatActive = false;
+  if (!('isCombatActive' in global.gameState) || Object.getOwnPropertyDescriptor(global.gameState, 'isCombatActive')?.configurable) {
+    Object.defineProperty(global.gameState, 'isCombatActive', {
+      get() {
+        return (typeof state !== 'undefined' && state)
+          ? !!state.isCombatActive
+          : (this._isCombatActive !== undefined ? !!this._isCombatActive : false);
+      },
+      set(val) {
+        if (typeof state !== 'undefined' && state) {
+          state.isCombatActive = !!val;
+        } else {
+          this._isCombatActive = !!val;
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
   }
   if (global.gameState.isCombatPaused === undefined) {
     global.gameState.isCombatPaused = false;
@@ -1168,6 +1199,44 @@
   }
   if (global.gameState.clearedSectors === undefined) {
     global.gameState.clearedSectors = [];
+  }
+
+  // 3) Global getters for isCombatActive and battleActive on window/global
+  if (!('isCombatActive' in global) || Object.getOwnPropertyDescriptor(global, 'isCombatActive')?.configurable) {
+    Object.defineProperty(global, 'isCombatActive', {
+      get() {
+        return (typeof state !== 'undefined' && state)
+          ? !!state.isCombatActive
+          : (global.playerState && global.playerState.isCombatActive !== undefined ? !!global.playerState.isCombatActive : false);
+      },
+      set(val) {
+        if (typeof state !== 'undefined' && state) {
+          state.isCombatActive = !!val;
+        } else if (global.playerState) {
+          global.playerState.isCombatActive = !!val;
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
+  }
+  if (!('battleActive' in global) || Object.getOwnPropertyDescriptor(global, 'battleActive')?.configurable) {
+    Object.defineProperty(global, 'battleActive', {
+      get() {
+        return (typeof state !== 'undefined' && state)
+          ? !!state.isCombatActive
+          : (global.playerState && global.playerState.isCombatActive !== undefined ? !!global.playerState.isCombatActive : false);
+      },
+      set(val) {
+        if (typeof state !== 'undefined' && state) {
+          state.isCombatActive = !!val;
+        } else if (global.playerState) {
+          global.playerState.isCombatActive = !!val;
+        }
+      },
+      configurable: true,
+      enumerable: true
+    });
   }
 
   // ============================================================================

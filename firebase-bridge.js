@@ -82,7 +82,7 @@ function handleFirestoreError(error, operationType, path) {
     path
   };
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  return errInfo;
 }
 
 // Global Firebase Bridge Object

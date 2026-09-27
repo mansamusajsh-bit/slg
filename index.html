@@ -10,6 +10,20 @@
   <!-- 1. External Stylesheet -->
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="civ4-editor.css" />
+  <script>
+    // Global error listener to prevent silent iframe "Script error." and log diagnostics safely
+    window.addEventListener('error', function(event) {
+      if (event && (event.message === 'Script error.' || !event.message)) {
+        console.warn('[Applet Diagnostic] Cross-origin or sandboxed script error caught safely.');
+        if (event.preventDefault) event.preventDefault();
+        return true;
+      }
+    });
+    window.addEventListener('unhandledrejection', function(event) {
+      console.warn('[Applet Diagnostic] Unhandled Promise rejection caught safely:', event.reason);
+      if (event.preventDefault) event.preventDefault();
+    });
+  </script>
 </head>
 <body>
 
@@ -1338,7 +1352,7 @@
 
 
   <!-- 2. Firebase Modular Bridge -->
-  <script type="module" src="firebase-bridge.js"></script>
+  <script type="module" crossorigin="anonymous" src="firebase-bridge.js"></script>
 
   <!-- 3. Modular Game Scripts in Strict Dependency Order -->
   <script src="config.js"></script>

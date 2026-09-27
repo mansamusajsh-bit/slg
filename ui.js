@@ -1027,22 +1027,27 @@
         modal.classList.remove('active');
 
         // 안전 거점 타일 찾기
-        const tiles = global.state?.tiles || [];
-        const safeTile = tiles.find(t => t.isSafe || t.isCity) || { x: 1, y: 1, name: '평화로운 마을' };
+        const tiles = global.state?.tiles
+          || (typeof global.getTiles === 'function' ? global.getTiles() : [])
+          || global.tiles
+          || [];
+        const safeTile = tiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village'))
+          || { x: 1, y: 1, name: '평화로운 마을' };
+        const safeTownName = safeTile.name || '평화로운 마을';
 
         // 최소 체력으로 지휘관 부대 응급 회복 후 거점에 배치
         if (global.state && Array.isArray(global.state.playerUnits) && global.state.playerUnits.length > 0) {
           const leader = global.state.playerUnits[0];
           leader.isDead = false;
           leader.hp = Math.round((leader.maxHp || 100) * 0.35);
-          leader.x = safeTile.x;
-          leader.y = safeTile.y;
+          leader.x = typeof safeTile.x === 'number' ? safeTile.x : 1;
+          leader.y = typeof safeTile.y === 'number' ? safeTile.y : 1;
           leader.isInactivated = false;
           leader.inactivatedUntil = null;
           global.state.isWipedOut = false;
           global.state.inactivated = false;
           if (typeof global.addLog === 'function') {
-            global.addLog(`🏥 [응급 후송] ${safeTile.name} 안전지대로 긴급 후송되었습니다.`, 'gold');
+            global.addLog(`🏥 [응급 후송] ${safeTownName} 안전지대로 긴급 후송되었습니다.`, 'gold');
           }
           if (typeof global.saveGameState === 'function') global.saveGameState();
           if (typeof global.renderAll === 'function') global.renderAll();
@@ -1310,14 +1315,25 @@
     const state = global.state || {};
     const catalog = global.TOWN_UNIT_SHOP_CATALOG || global.unitShopSystem?.TOWN_UNIT_SHOP_CATALOG || [];
 
-    // 안전 거점 정보 계산
-    const safeTile = (typeof global.unitShopSystem?.isPlayerAtSafeZone === 'function')
+    // 안전 거점 정보 계산 (safeZoneTile이 null일 경우에도 안전하게 마을 거점 정보로 폴백)
+    const safeZoneTile = (typeof global.unitShopSystem?.isPlayerAtSafeZone === 'function')
       ? global.unitShopSystem.isPlayerAtSafeZone()
-      : (state.tiles || []).find(t => t.isSafe || t.isCity) || { name: '평화로운 마을 거점', isCity: false, x: 1, y: 1 };
+      : null;
+
+    const allTiles = state.tiles
+      || (typeof global.getTiles === 'function' ? global.getTiles() : [])
+      || global.tiles
+      || [];
+
+    const fallbackTile = allTiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village'))
+      || { name: '평화로운 마을 거점', isCity: false, x: 1, y: 1 };
+
+    const safeTile = safeZoneTile || fallbackTile || { name: '평화로운 마을 거점', isCity: false, x: 1, y: 1 };
+    const safeTileName = safeTile.name || '평화로운 마을 거점';
 
     const townLevel = (typeof global.unitShopSystem?.getTownLevel === 'function')
       ? global.unitShopSystem.getTownLevel(safeTile)
-      : (safeTile.name?.includes('에테르니아') ? 3 : (safeTile.isCity ? 2 : 1));
+      : (safeTileName.includes('에테르니아') ? 3 : (safeTile.isCity ? 2 : 1));
 
     const livingUnits = (state.playerUnits || []).filter(u => !u.isDead);
     const maxLeadership = state.strategy?.commanderAP || 24;
@@ -1338,7 +1354,7 @@
           <div style="display: flex; align-items: center; gap: 10px;">
             <span style="font-size: 26px;">🏰</span>
             <div>
-              <div style="font-size: 16px; font-weight: 900; letter-spacing: -0.3px;">${safeTile.name} 용병 고용소</div>
+              <div style="font-size: 16px; font-weight: 900; letter-spacing: -0.3px;">${safeTileName} 용병 고용소</div>
               <div style="font-size: 11px; color: #bae6fd; font-weight: 600;">거점 등급: Lv.${townLevel} (${townLevel >= 3 ? '왕도 수도' : (townLevel === 2 ? '성채 도시' : '자유 마을')})</div>
             </div>
           </div>
@@ -1626,10 +1642,53 @@
     }
   }
 
+  // Floating Toast Notification System (Zero window.alert)
+  function showToast(message, type = 'info') {
+    try {
+      let toastContainer = document.getElementById('app-toast-container');
+      if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'app-toast-container';
+        toastContainer.style.cssText = 'position:fixed; top:20px; left:50%; transform:translateX(-50%); z-index:999999; display:flex; flex-direction:column; gap:8px; pointer-events:none; width:90%; max-width:420px;';
+        document.body.appendChild(toastContainer);
+      }
+
+      const toast = document.createElement('div');
+      const bgColors = {
+        success: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+        error: 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)',
+        danger: 'linear-gradient(135deg, #dc2626 0%, #ef4444 100%)',
+        warning: 'linear-gradient(135deg, #d97706 0%, #f59e0b 100%)',
+        gold: 'linear-gradient(135deg, #b45309 0%, #fbbf24 100%)',
+        info: 'linear-gradient(135deg, #0284c7 0%, #38bdf8 100%)'
+      };
+      const bg = bgColors[type] || bgColors.info;
+      toast.style.cssText = `background:${bg}; color:#ffffff; padding:10px 16px; border-radius:10px; font-size:12px; font-weight:700; box-shadow:0 8px 24px rgba(0,0,0,0.4); text-align:center; transition:all 0.3s cubic-bezier(0.16,1,0.3,1); opacity:0; transform:translateY(-10px); border:1px solid rgba(255,255,255,0.2); letter-spacing:-0.2px;`;
+      toast.textContent = message;
+      toastContainer.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.style.opacity = '1';
+        toast.style.transform = 'translateY(0)';
+      });
+
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateY(-10px)';
+        setTimeout(() => {
+          if (toast.parentNode) {
+            toast.parentNode.removeChild(toast);
+          }
+        }, 300);
+      }, 3000);
+    } catch (_) {}
+  }
+
   // Initialize on load
   initDevDraftSkillTree();
 
   // Export to global.UI and root window
+  global.UI.showToast = showToast;
   global.UI.triggerFearFX = triggerFearFX;
   global.UI.playHeartbeatSFX = playHeartbeatSFX;
   global.UI.playVictoryFanfareSFX = playVictoryFanfareSFX;
@@ -1642,6 +1701,7 @@
   global.UI.renderTownUnitShop = renderTownUnitShop;
   global.UI.renderWildRecruitMenu = renderWildRecruitMenu;
 
+  global.showToast = showToast;
   global.triggerFearFX = triggerFearFX;
   global.playVictoryFanfareSFX = playVictoryFanfareSFX;
   global.showVictoryModal = showVictoryModal;

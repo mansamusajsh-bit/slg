@@ -287,7 +287,11 @@ const MapEditorController = {
 
   addNewWorldSector(sectorId, sectorName, recPower = 400) {
     if (!sectorId || !sectorName) {
-      alert('섹터 ID와 이름을 정확히 입력하세요.');
+      if (typeof window.UI?.showToast === 'function') {
+        window.UI.showToast('⚠️ 섹터 ID와 이름을 정확히 입력하세요.', 'warning');
+      } else {
+        console.warn('섹터 ID와 이름을 정확히 입력하세요.');
+      }
       return;
     }
 
@@ -295,7 +299,11 @@ const MapEditorController = {
       if (!state.worldSectors) state.worldSectors = [];
       const exists = state.worldSectors.some(s => s.id === sectorId);
       if (exists) {
-        alert('이미 존재하는 섹터 ID입니다.');
+        if (typeof window.UI?.showToast === 'function') {
+          window.UI.showToast('⚠️ 이미 존재하는 섹터 ID입니다.', 'warning');
+        } else {
+          console.warn('이미 존재하는 섹터 ID입니다.');
+        }
         return;
       }
 
@@ -449,7 +457,11 @@ const MapEditorController = {
       const currentTotal = tile.units.reduce((acc, u) => acc + u.count, 0);
 
       if (currentTotal + count > 100) {
-        alert('동일 타일에는 최대 100개의 유닛까지만 중첩 배치할 수 있습니다.');
+        if (typeof window.UI?.showToast === 'function') {
+          window.UI.showToast('⚠️ 동일 타일에는 최대 100개의 유닛까지만 중첩 배치할 수 있습니다.', 'warning');
+        } else if (typeof window.addLog === 'function') {
+          window.addLog('⚠️ 동일 타일에는 최대 100개의 유닛까지만 중첩 배치할 수 있습니다.', 'warning');
+        }
         return;
       }
 
@@ -487,11 +499,13 @@ const MapEditorController = {
     const btnNewSector = document.getElementById('btn-civ4-add-sector');
     if (btnNewSector) {
       btnNewSector.onclick = () => {
-        const id = prompt('새 월드 섹터 ID (예: C-1, Sector_Boss):');
-        if (!id) return;
-        const name = prompt('새 월드 섹터 이름 (예: C-1 검은 숲):');
-        if (!name) return;
-        MapEditorController.addNewWorldSector(id, name);
+        const nextNum = (typeof state !== 'undefined' && state?.worldSectors?.length) ? state.worldSectors.length + 1 : 3;
+        const newSecId = `C-${nextNum}`;
+        const newSecName = `신규 전술 섹터 C-${nextNum}`;
+        MapEditorController.addNewWorldSector(newSecId, newSecName);
+        if (typeof window.UI?.showToast === 'function') {
+          window.UI.showToast(`✨ 신규 섹터 [${newSecId} ${newSecName}]이(가) 등록되었습니다.`, 'success');
+        }
       };
     }
 

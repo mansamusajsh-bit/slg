@@ -388,6 +388,8 @@
         selectedSectorId: 'A-1',
         editingSectorId: 'A-1',
         currentMapData: null,
+        isCombatActive: false,
+        isCombatPaused: false,
         strategy: {
           commanderAP: 24,
           maxCommanderAP: 24,
@@ -615,34 +617,77 @@
     let isEnemyTurnProcessing = false; // 적 AI 턴 진행 상태 플래그
 
     // 전술 전장 전투 및 승리 상태 관리
-    let battleActive = true;
     let victoryProcessed = false;
     let defeatedEnemyCount = 0;
 
-    window.battleActive = battleActive;
     window.victoryProcessed = victoryProcessed;
     window.defeatedEnemyCount = defeatedEnemyCount;
 
+    // ========================================================================
+    // 단일 진실 공급원(Single Source of Truth): state.isCombatActive
+    // 4곳(window.isCombatActive, window.battleActive, window.playerState.isCombatActive,
+    // window.gameState.isCombatActive)은 중복 저장하지 않고 getter/setter로 state.isCombatActive를 참조
+    // ========================================================================
+    function defineCombatActiveGetters() {
+      const combatDescriptor = {
+        get() {
+          return (typeof state !== 'undefined' && state) ? !!state.isCombatActive : false;
+        },
+        set(val) {
+          if (typeof state !== 'undefined' && state) {
+            state.isCombatActive = !!val;
+          }
+        },
+        configurable: true,
+        enumerable: true
+      };
+
+      Object.defineProperty(window, 'isCombatActive', combatDescriptor);
+      Object.defineProperty(window, 'battleActive', combatDescriptor);
+
+      if (!window.playerState) {
+        window.playerState = {};
+      }
+      Object.defineProperty(window.playerState, 'isCombatActive', combatDescriptor);
+
+      if (!window.gameState) {
+        window.gameState = {};
+      }
+      Object.defineProperty(window.gameState, 'isCombatActive', combatDescriptor);
+    }
+    defineCombatActiveGetters();
+
     // Global playerState object for universal access across map classes & external modules
     if (!window.playerState) {
-      window.playerState = {
-        get gold() {
+      window.playerState = {};
+    }
+    if (!('gold' in window.playerState)) {
+      Object.defineProperty(window.playerState, 'gold', {
+        get() {
           return (typeof state !== 'undefined' && state && typeof state.gold === 'number') ? state.gold : 0;
         },
-        set gold(val) {
+        set(val) {
           if (typeof state !== 'undefined' && state) {
             state.gold = val;
           }
         },
-        get rewinders() {
+        configurable: true,
+        enumerable: true
+      });
+    }
+    if (!('rewinders' in window.playerState)) {
+      Object.defineProperty(window.playerState, 'rewinders', {
+        get() {
           return (typeof state !== 'undefined' && state && typeof state.rewinders === 'number') ? state.rewinders : 0;
         },
-        set rewinders(val) {
+        set(val) {
           if (typeof state !== 'undefined' && state) {
             state.rewinders = val;
           }
-        }
-      };
+        },
+        configurable: true,
+        enumerable: true
+      });
     }
 
     // 실시간 디버그 & 개발자 파라미터 상태 (Live Binding)
@@ -2048,7 +2093,9 @@
 
       const tile = getTile(unit.x, unit.y);
       if (!tile || !tile.isCity) {
-        alert('도시(2x2) 타일에 위치한 유닛만 매각할 수 있습니다!');
+        const msg = '⚠️ 도시(2x2) 타일에 위치한 유닛만 매각할 수 있습니다!';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -2075,7 +2122,9 @@
       if (!unit) return;
 
       if (state.gold < cost) {
-        alert(`골드가 부족합니다! (필요: ${cost}G)`);
+        const msg = `⚠️ 골드가 부족합니다! (필요: ${cost}G)`;
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -2100,7 +2149,9 @@
        -------------------------------------------------------------------------- */
     function buyVillageItem(type, cost, affAdd) {
       if (state.gold < cost) {
-        alert(`골드가 부족합니다! (필요: ${cost}G)`);
+        const msg = `⚠️ 골드가 부족합니다! (필요: ${cost}G)`;
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -2117,7 +2168,9 @@
       }
 
       if (!unit) {
-        alert('호감도를 부여할 유닛을 먼저 선택하세요!');
+        const msg = '⚠️ 호감도를 부여할 유닛을 먼저 선택하세요!';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -2747,7 +2800,7 @@
       if (!state) return;
 
       // 전투 진행 중인 상태에서 전략 화면으로 전환을 시도하면 전술 일시정지 메뉴 호출
-      const isCombatOngoing = (window.isCombatActive || (state && state.isCombatActive)) && (battleActive || window.battleActive);
+      const isCombatOngoing = !!(state && state.isCombatActive);
       if (targetView === 'STRATEGY' && isCombatOngoing && !state.isCombatPaused) {
         if (typeof window.openTacticalPauseMenu === 'function') {
           window.openTacticalPauseMenu();
@@ -2795,7 +2848,9 @@
       if (!sec) return;
 
       if (sec.locked) {
-        alert(`🔒 [작전 지역 잠김] ${sec.name}은(는) 상위 작전(A-2, B-1)을 완수한 후 개방됩니다.`);
+        const msg = `🔒 [작전 지역 잠김] ${sec.name}은(는) 상위 작전(A-2, B-1)을 완수한 후 개방됩니다.`;
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -3133,14 +3188,18 @@
     function launchSectorOperation() {
       if (!state.strategy) return;
       if (state.strategy.commanderAP < 5) {
-        alert('⚡ 통솔력(AP)이 부족합니다! (출격 필요: 5 AP)');
+        const msg = '⚡ 통솔력(AP)이 부족합니다! (출격 필요: 5 AP)';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
       const activeUnits = (state.playerUnits || []).filter(u => !u.isDead);
       const maxLeadership = state.strategy.commanderAP;
       if (activeUnits.length > maxLeadership) {
-        alert(`⚠️ 현재 편성된 부대 수(${activeUnits.length}개)가 지휘관 통솔력(${maxLeadership})을 초과하여 출격할 수 없습니다!`);
+        const msg = `⚠️ 현재 편성된 부대 수(${activeUnits.length}개)가 지휘관 통솔력(${maxLeadership})을 초과하여 출격할 수 없습니다!`;
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
         return;
       }
 
@@ -3164,25 +3223,20 @@
       const views = window.GAME_VIEWS || { WORLD_STRATEGY: 'WORLD_STRATEGY', SECTOR_FIELD: 'SECTOR_FIELD', STRATEGY_MENU_OVERLAY: 'STRATEGY_MENU_OVERLAY' };
       const sectorView = views.SECTOR_FIELD || 'SECTOR_MAP';
 
-      window.isCombatActive = true;
-      window.isCombatPaused = false;
-      battleActive = true;
-      window.battleActive = true;
-
+      // 단일 진실 공급원인 state.isCombatActive 활성화 (나머지 4곳은 getter로 자동 참조)
       if (state) {
         state.isCombatActive = true;
         state.isCombatPaused = false;
         state.savedTacticalState = null;
         state.currentView = sectorView;
       }
+      window.isCombatPaused = false;
       if (window.playerState) {
-        window.playerState.isCombatActive = true;
         window.playerState.isCombatPaused = false;
         window.playerState.savedTacticalState = null;
         window.playerState.currentView = sectorView;
       }
       if (window.gameState) {
-        window.gameState.isCombatActive = true;
         window.gameState.isCombatPaused = false;
         window.gameState.savedTacticalState = null;
         window.gameState.currentView = sectorView;
@@ -5371,22 +5425,30 @@
       normalizeAllUnitsHP(state);
 
       // 턴 종료 버튼
-      document.getElementById('btn-end-turn').onclick = executeEndTurn;
+      const btnEndTurn = document.getElementById('btn-end-turn');
+      if (btnEndTurn) btnEndTurn.onclick = executeEndTurn;
 
       // 리와인더 버튼
-      document.getElementById('btn-rewind').onclick = executeRewind;
+      const btnRewind = document.getElementById('btn-rewind');
+      if (btnRewind) btnRewind.onclick = executeRewind;
 
       // 스킬 모달 오픈
-      document.getElementById('btn-open-skills').onclick = openSkillsModal;
+      const btnOpenSkills = document.getElementById('btn-open-skills');
+      if (btnOpenSkills) btnOpenSkills.onclick = openSkillsModal;
 
       // 오프라인 수비 시뮬레이션 모달 오픈
-      document.getElementById('btn-open-defense-modal').onclick = () => {
-        document.getElementById('modal-defense').classList.add('open');
-      };
+      const btnOpenDefense = document.getElementById('btn-open-defense-modal');
+      if (btnOpenDefense) {
+        btnOpenDefense.onclick = () => {
+          const modalDef = document.getElementById('modal-defense');
+          if (modalDef) modalDef.classList.add('open');
+        };
+      }
 
       // Turn 버튼 3초 이상 누를 시 관리자 DEV 패널 인증 진입 (Turn 배지 및 턴 종료 버튼 모두 지원)
-      setupTurnLongPress(document.getElementById('ui-turn'), false);
-      setupTurnLongPress(document.getElementById('btn-end-turn'), true);
+      const uiTurnEl = document.getElementById('ui-turn');
+      if (uiTurnEl) setupTurnLongPress(uiTurnEl, false);
+      if (btnEndTurn) setupTurnLongPress(btnEndTurn, true);
 
       // 관리자 비밀번호 엔터키 및 비밀번호 표시 토글
       const adminPwdInput = document.getElementById('input-admin-pwd');
@@ -5537,76 +5599,7 @@
         btnLaunchSim.onclick = launchSectorOperation;
       }
 
-      // ==========================================
-      // 월드 섹터 탐색 롱프레스(3초) & 편집 모드 진입 로직
-      // ==========================================
-      const sectorTitleEl = document.getElementById("sector-nodes-title");
-      let pressTimer = null;
-      const LONG_PRESS_DURATION = 3000; // 3초 (3000ms)
-
-      if (sectorTitleEl) {
-        // 롱프레스 시작 (마우스 눌림 / 터치 시작)
-        const startPress = (e) => {
-          // 기본 선택 동작 방지 (터치 시 텍스트 선택 방지)
-          if (e.type === "touchstart") {
-            // 필요 시 e.preventDefault();
-          }
-
-          // 기존 타이머 초기화
-          clearTimeout(pressTimer);
-
-          // 3초 후 실행될 타이머 등록
-          pressTimer = setTimeout(() => {
-            triggerEditModeAuth();
-          }, LONG_PRESS_DURATION);
-        };
-
-        // 롱프레스 취소 (마우스 뗌 / 영역 벗어남 / 터치 종료)
-        const cancelPress = () => {
-          if (pressTimer) {
-            clearTimeout(pressTimer);
-            pressTimer = null;
-          }
-        };
-
-        // 비밀번호 인증 및 에디터 활성화
-        const triggerEditModeAuth = () => {
-          // Vibration 피드백 (모바일 기기 지원 시)
-          if (navigator.vibrate) {
-            navigator.vibrate(200);
-          }
-
-          const inputPassword = prompt("[개발자 모드] 월드 섹터 편집기 비밀번호를 입력하세요:");
-
-          if (inputPassword === "20250113") {
-            alert("✅ 편집자 인증 성공! 월드 섹터 및 시나리오 맵 에디터가 활성화됩니다.");
-            
-            // 앱 상태 업데이트
-            if (typeof state !== "undefined") {
-              state.isEditMode = true;
-            }
-            
-            // 에디터 UI 활성화 함수 호출
-            if (typeof openMapEditorUI === "function") {
-              openMapEditorUI();
-            } else {
-              console.log("Edit mode enabled. (openMapEditorUI 함수를 구현하여 UI를 띄우세요)");
-            }
-          } else if (inputPassword !== null) {
-            alert("❌ 비밀번호가 올바르지 않습니다.");
-          }
-        };
-
-        // 이벤트 바인딩 (PC 마우스 및 모바일 터치 이벤트 모두 대응)
-        sectorTitleEl.addEventListener("mousedown", startPress);
-        sectorTitleEl.addEventListener("mouseup", cancelPress);
-        sectorTitleEl.addEventListener("mouseleave", cancelPress);
-
-        sectorTitleEl.addEventListener("touchstart", startPress, { passive: true });
-        sectorTitleEl.addEventListener("touchend", cancelPress);
-        sectorTitleEl.addEventListener("touchcancel", cancelPress);
-      }
-
+      // 월드 섹터 탐색 롱프레스는 civ4-editor.js (EditorAuth)에서 안전한 인앱 모달로 전담 관리됨
       // 초기 스냅샷 보관 및 렌더링
       saveHistorySnapshot();
       renderAll();
@@ -6155,18 +6148,20 @@
             clearInterval(intervalId);
             modal.style.display = 'none';
             modal.classList.remove('active');
-            const safeTile = (state.tiles || []).find(t => t.isSafe) || { x: 1, y: 1, name: '평화로운 마을' };
+            const activeTiles = (state.tiles || (typeof tiles !== 'undefined' ? tiles : []) || []);
+            const safeTile = activeTiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village')) || { x: 1, y: 1, name: '평화로운 마을' };
+            const safeTownName = safeTile?.name || '평화로운 마을';
             if (state.playerUnits && state.playerUnits.length > 0) {
               const commanderUnit = state.playerUnits[0];
               commanderUnit.isDead = false;
-              commanderUnit.hp = Math.round(commanderUnit.maxHp * 0.35);
-              commanderUnit.x = safeTile.x;
-              commanderUnit.y = safeTile.y;
+              commanderUnit.hp = Math.round((commanderUnit.maxHp || 100) * 0.35);
+              commanderUnit.x = typeof safeTile?.x === 'number' ? safeTile.x : 1;
+              commanderUnit.y = typeof safeTile?.y === 'number' ? safeTile.y : 1;
               commanderUnit.isInactivated = false;
               commanderUnit.inactivatedUntil = null;
               state.isWipedOut = false;
               state.inactivated = false;
-              addLog(`🏥 [응급 후송] ${safeTile.name} 안전지대로 응급 퇴각하여 ${commanderUnit.name}이(가) 회복되었습니다.`, 'gold');
+              addLog(`🏥 [응급 후송] ${safeTownName} 안전지대로 응급 퇴각하여 ${commanderUnit.name}이(가) 회복되었습니다.`, 'gold');
               saveGameState();
               renderAll();
             }
@@ -6183,10 +6178,9 @@
      * Resets tactical battle state for a new engagement or dynamically generated map.
      */
     function resetTacticalBattleState() {
-      battleActive = true;
+      if (state) state.isCombatActive = true;
       victoryProcessed = false;
       defeatedEnemyCount = 0;
-      window.battleActive = true;
       window.victoryProcessed = false;
       window.defeatedEnemyCount = 0;
     }
@@ -6208,10 +6202,9 @@
       const remainingEnemyCount = remainingEnemies.length;
 
       // If remaining enemy count == 0 and victory has not yet been processed for current battle
-      if (remainingEnemyCount === 0 && !victoryProcessed && !window.victoryProcessed && (battleActive || window.battleActive)) {
-        // Mark battle state as won
-        battleActive = false;
-        window.battleActive = false;
+      if (remainingEnemyCount === 0 && !victoryProcessed && !window.victoryProcessed && state && state.isCombatActive) {
+        // Mark battle state as won on single source of truth
+        state.isCombatActive = false;
         victoryProcessed = true;
         window.victoryProcessed = true;
 
@@ -6685,8 +6678,9 @@
       }
 
       const townLevel = getTownLevel(safeTile);
+      const safeTownName = safeTile?.name || '안전 거점';
       if (townLevel < template.reqTownLevel) {
-        const errorMsg = `🔒 이 유닛은 거점 레벨 ${template.reqTownLevel} 이상에서만 고용할 수 있습니다. (현재 ${safeTile.name}: Lv.${townLevel})`;
+        const errorMsg = `🔒 이 유닛은 거점 레벨 ${template.reqTownLevel} 이상에서만 고용할 수 있습니다. (현재 ${safeTownName}: Lv.${townLevel})`;
         addLog(errorMsg, 'warning');
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(errorMsg, 'warning');
         return { success: false, message: errorMsg, remainingGold: state.gold };
@@ -6749,8 +6743,8 @@
       };
 
       state.playerUnits.push(newUnit);
-
-      const successMsg = `🛒 [안전지대 유닛 고용] [${safeTile.name}]에서 신규 부대 [${newUnit.name}]을(를) 고용했습니다! (-${template.cost}G, 잔여: ${state.gold}G)`;
+      const hiredTownName = safeTile?.name || safeTownName || '안전 거점';
+      const successMsg = `🛒 [안전지대 유닛 고용] [${hiredTownName}]에서 신규 부대 [${newUnit.name}]을(를) 고용했습니다! (-${template.cost}G, 잔여: ${state.gold}G)`;
       addLog(successMsg, 'gold');
 
       if (typeof window.UI?.showToast === 'function') {
@@ -6818,13 +6812,7 @@
      * to STRATEGY_MENU_OVERLAY, and displays UI pause overlay.
      */
     function openTacticalPauseMenu() {
-      const isCombat = !!(
-        window.isCombatActive === true ||
-        (state && state.isCombatActive === true) ||
-        (window.playerState && window.playerState.isCombatActive === true) ||
-        (window.gameState && window.gameState.isCombatActive === true) ||
-        (battleActive === true && state && state.currentView !== 'STRATEGY' && state.currentView !== (window.GAME_VIEWS?.WORLD_STRATEGY || 'WORLD_STRATEGY'))
-      );
+      const isCombat = !!(state && state.isCombatActive);
 
       if (!isCombat) {
         console.warn('[openTacticalPauseMenu] Tactical combat is not currently active.');
@@ -6925,37 +6913,28 @@
         STRATEGY_MENU_OVERLAY: 'STRATEGY_MENU_OVERLAY'
       };
 
-      // 1. Set global combat flags on playerState & global state
-      if (!window.playerState) {
-        window.playerState = {};
-      }
-      window.playerState.isCombatActive = false;
-      window.playerState.isCombatPaused = false;
-
-      // 2. Clear active tactical grid/instance data
-      window.playerState.savedTacticalState = null;
-
-      // 3. Update screen state
-      window.playerState.currentView = views.WORLD_STRATEGY;
-
-      // Synchronize with window.gameState & local state
-      window.isCombatActive = false;
-      window.isCombatPaused = false;
-      battleActive = false;
-      window.battleActive = false;
-
-      if (window.gameState) {
-        window.gameState.isCombatActive = false;
-        window.gameState.isCombatPaused = false;
-        window.gameState.savedTacticalState = null;
-        window.gameState.currentView = views.WORLD_STRATEGY;
-      }
-
+      // 1. 단일 진실 공급원 state.isCombatActive 종료 (getter로 연결된 4곳 동시 반영)
       if (state) {
         state.isCombatActive = false;
         state.isCombatPaused = false;
         state.savedTacticalState = null;
         state.currentView = views.WORLD_STRATEGY;
+      }
+
+      window.isCombatPaused = false;
+
+      // 2. Clear active tactical grid/instance data & update screen state on playerState / gameState
+      if (!window.playerState) {
+        window.playerState = {};
+      }
+      window.playerState.isCombatPaused = false;
+      window.playerState.savedTacticalState = null;
+      window.playerState.currentView = views.WORLD_STRATEGY;
+
+      if (window.gameState) {
+        window.gameState.isCombatPaused = false;
+        window.gameState.savedTacticalState = null;
+        window.gameState.currentView = views.WORLD_STRATEGY;
       }
 
       // 4. Mark current sector node as cleared if isVictory is true
@@ -7035,29 +7014,24 @@
      * triggers retreat notification, and invokes window.completeTacticalStage(false).
      */
     function executeTacticalRetreat() {
-      // 1. Clear active battle flags
-      window.isCombatActive = false;
-      window.isCombatPaused = false;
-      battleActive = false;
-      window.battleActive = false;
-
-      if (!window.playerState) {
-        window.playerState = {};
-      }
-      window.playerState.isCombatActive = false;
-      window.playerState.isCombatPaused = false;
-      window.playerState.savedTacticalState = null;
-
-      if (window.gameState) {
-        window.gameState.isCombatActive = false;
-        window.gameState.isCombatPaused = false;
-        window.gameState.savedTacticalState = null;
-      }
-
+      // 1. Clear active battle flags on single source of truth
       if (state) {
         state.isCombatActive = false;
         state.isCombatPaused = false;
         state.savedTacticalState = null;
+      }
+
+      window.isCombatPaused = false;
+
+      if (!window.playerState) {
+        window.playerState = {};
+      }
+      window.playerState.isCombatPaused = false;
+      window.playerState.savedTacticalState = null;
+
+      if (window.gameState) {
+        window.gameState.isCombatPaused = false;
+        window.gameState.savedTacticalState = null;
       }
 
       // 2. Trigger minor retreat notification / status update
