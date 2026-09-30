@@ -1,0 +1,13 @@
+const fs=require('fs'),vm=require('vm');const c={console:{log(){},error:console.error,warn(){}}};c.window=c;vm.createContext(c);
+for(const f of ['seedEngine.js','mapSchema.js','runEngine.js'])vm.runInContext(fs.readFileSync(require('path').join(__dirname,'..',f),'utf8'),c);
+const MS=c.MapSchema; let fail=0; const ok=(x,m)=>{console.log((x?'PASS ':'FAIL ')+m);if(!x)fail++};
+const raw=MS.createBlankTacticalMapTemplate('A-1',8,14);
+raw.units=[{id:'e1',owner:'ENEMY',x:3,y:2,hp:50}]; raw.roads=[{x:1,y:1}]; raw.structures=[{x:2,y:2,type:'fort'}];
+const n1=MS.normalizeTacticalMapTemplate(raw,'A-1'), n2=MS.normalizeTacticalMapTemplate(n1,'A-1');
+ok(n1.metadata.units.length===1 && n1.metadata.roads.length===1 && n1.metadata.structures.length===1,'원본 → 정규화: units/roads/structures 보존');
+ok(JSON.stringify(n1)===JSON.stringify(n2),'정규화는 멱등 (normalize(normalize(x)) == normalize(x))');
+const b=c.generateBattleMap(n1,'SEED-1');
+ok(b.enemies.length===1 && b.enemies[0].id==='e1','generateBattleMap이 에디터 배치 적을 보존 (이미 정규화된 템플릿 입력)');
+const b2=c.generateBattleMap(raw,'SEED-1');
+ok(JSON.stringify(b.enemies)===JSON.stringify(b2.enemies),'원본 입력 / 정규화 입력 결과 동일');
+console.log(fail?'실패 '+fail:'모든 검증 통과');process.exit(fail?1:0)

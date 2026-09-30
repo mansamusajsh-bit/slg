@@ -66,56 +66,6 @@
       }
     };
 
-    // 타일 맵 데이터 (8x10 = 80개 타일 정의)
-    function generateInitialTiles() {
-      const tiles = [];
-      for (let y = 0; y < GRID_ROWS; y++) {
-        for (let x = 0; x < GRID_COLS; x++) {
-          let type = 'plain';
-          let name = '평지';
-          let defBonus = 0;
-          let isSafe = false;
-          let isCity = false;
-          let terrainIcon = '🌱';
-
-          // 도시 (CITY 2x2): (3,4), (3,5), (4,4), (4,5)
-          if ((x === 3 || x === 4) && (y === 4 || y === 5)) {
-            type = 'city';
-            name = '왕도 에테르니아';
-            defBonus = 0.40;
-            isSafe = true;
-            isCity = true;
-            terrainIcon = '🏰';
-          }
-          // 마을 (VILLAGE 1x1): (1,1), (6,8)
-          else if ((x === 1 && y === 1) || (x === 6 && y === 8)) {
-            type = 'village';
-            name = '평화로운 마을';
-            defBonus = 0.20;
-            isSafe = true;
-            terrainIcon = '🏡';
-          }
-          // 숲 (FOREST): 방어 +20%
-          else if ((x === 1 && (y === 3 || y === 4)) || (x === 5 && y === 2) || (x === 6 && y === 3) || (x === 2 && y === 7) || (x === 0 && y === 7)) {
-            type = 'forest';
-            name = '깊은 숲';
-            defBonus = 0.20;
-            terrainIcon = '🌲';
-          }
-          // 산악 (HILL): 방어 +40%
-          else if ((x === 0 && y === 2) || (x === 7 && y === 1) || (x === 7 && y === 6) || (x === 4 && y === 8) || (x === 3 && y === 1)) {
-            type = 'hill';
-            name = '험준한 산악';
-            defBonus = 0.40;
-            terrainIcon = '⛰️';
-          }
-
-          tiles.push({ x, y, type, name, defBonus, isSafe, isCity, terrainIcon });
-        }
-      }
-      return tiles;
-    }
-
     // 기본 병과별 추천 고유 스킬 프리셋
     const DEFAULT_CLASS_SKILLS = {
       KNIGHT: {
@@ -181,7 +131,12 @@
         recPower: 320,
         upkeep: 15,
         clearReward: '250G + 장비',
-        locked: false
+        locked: false,
+        // 2단계: Sector가 사용할 기본 TacticalMapTemplate id (지금은 sectorId와 1:1).
+        // 나중에 A-1-forest 같은 복수 템플릿을 붙일 때 이 값만 바꾸면 된다.
+        defaultTemplateId: 'A-1',
+        // 로그라이크 노드 생성 시 뽑을 인카운터 유형 풀 (8단계 랜덤화에서 사용 예정, 현재는 미사용)
+        encounterPool: ['battle', 'battle', 'event']
       },
       'A-2': {
         id: 'A-2',
@@ -195,7 +150,9 @@
         recPower: 450,
         upkeep: 25,
         clearReward: '400G + 강철 방패',
-        locked: false
+        locked: false,
+        defaultTemplateId: 'A-2',
+        encounterPool: ['battle', 'battle', 'elite', 'event']
       },
       'B-1': {
         id: 'B-1',
@@ -209,7 +166,9 @@
         recPower: 620,
         upkeep: 35,
         clearReward: '750G + 영웅의 서',
-        locked: false
+        locked: false,
+        defaultTemplateId: 'B-1',
+        encounterPool: ['battle', 'elite', 'event', 'boss']
       },
       'B-2': {
         id: 'B-2',
@@ -223,9 +182,15 @@
         recPower: 880,
         upkeep: 50,
         clearReward: '1500G + 드래곤 하트',
-        locked: true
+        locked: true,
+        defaultTemplateId: 'B-2',
+        encounterPool: ['elite', 'boss']
       }
     };
+    // WORLD_SECTORS는 top-level const로 선언되어 있어 다른 <script> 태그(
+    // civ4-editor.js, mapSchema.js)에서 window.WORLD_SECTORS로는 원래 보이지 않았다.
+    // MapSchema.getSector()가 Sector 데이터를 읽을 수 있도록 명시적으로 전역에 노출한다.
+    window.WORLD_SECTORS = WORLD_SECTORS;
 
     // 게스트 ID 생성기
     function generateGuestId() {
@@ -277,16 +242,12 @@
         if (Array.isArray(s.playerUnits)) s.playerUnits.forEach(normalizeUnit);
         if (Array.isArray(s.enemyUnits)) s.enemyUnits.forEach(normalizeUnit);
         if (Array.isArray(s.units)) s.units.forEach(normalizeUnit);
-        if (Array.isArray(s.tiles)) {
-          s.tiles.forEach(t => {
-            if (Array.isArray(t.units)) t.units.forEach(normalizeUnit);
-          });
-        }
       }
 
-      if (typeof tiles !== 'undefined' && Array.isArray(tiles)) {
-        tiles.forEach(t => {
-          if (Array.isArray(t.units)) t.units.forEach(normalizeUnit);
+      const battleTiles = s && s.currentBattle && s.currentBattle.map && s.currentBattle.map.tiles;
+      if (Array.isArray(battleTiles)) {
+        battleTiles.forEach(t => {
+          if (t && Array.isArray(t.units)) t.units.forEach(normalizeUnit);
         });
       }
 
@@ -374,6 +335,23 @@
       };
     }
 
+    // 아군 전사 시 지휘관 경험치 획득. 레벨업마다 스킬트리 선택권 1개 지급.
+    function awardCommanderCasualtyExp(unit, amount = 25) {
+      if (!unit || unit.owner !== 'PLAYER' || unit._commanderExpAwarded) return;
+      unit._commanderExpAwarded = true;
+      const commander = state.commander;
+      commander.exp = (commander.exp || 0) + amount;
+      addLog(`👑 아군 ${unit.name} 전사: 지휘관 경험치 +${amount} EXP`, 'gold');
+      while (commander.exp >= commander.maxExp) {
+        commander.exp -= commander.maxExp;
+        commander.level += 1;
+        commander.maxExp = Math.round(commander.maxExp * 1.4);
+        commander.skillPoints = (commander.skillPoints || 0) + 1;
+        addLog(`👑 지휘관 레벨업! Lv.${commander.level} — 스킬 선택권 +1`, 'gold');
+      }
+      saveGameState(true);
+    }
+
     // 기본 지휘관 & 유닛 상태 생성
     function createInitialState(customGuestId) {
       const guestId = customGuestId || generateGuestId();
@@ -387,13 +365,20 @@
         currentSector: 'A-1',
         selectedSectorId: 'A-1',
         editingSectorId: 'A-1',
-        currentMapData: null,
+        // 1차 맵 파이프라인의 단일 전술 전투 데이터. 랜덤/Seed는 후속 단계에서 추가한다.
+        currentBattle: null,
+        // 11~13단계: 로그라이크 런(노드 그래프 + 진행도). 전술 타일/적 데이터는 절대 여기에 넣지 않는다.
+        run: RunEngine.createRun(WORLD_SECTORS),
+        encounterSeq: 0,      // Encounter id(enc-00001) 순번. 세이브의 roguelikeRun.encounterSeq로 영속화된다.
+        selectedNodeId: null, // 전략맵에서 고른 노드 (UI 상태, 저장하지 않음)
         isCombatActive: false,
         isCombatPaused: false,
         strategy: {
           commanderAP: 24,
           maxCommanderAP: 24,
           selectedSectorId: 'A-1',
+          deploySelectedIds: null, // 출전 편성으로 선택된 영웅 id 목록 (null = 최초 진입 시 자동 초기화)
+          deployKnownIds: [],
           armyDeck: {
             KNIGHT: 30,
             MAGE: 15,
@@ -430,6 +415,7 @@
             StrategicDominance: false
           }
         },
+        characterCollection: [], // 캐릭터 가챠 획득 기록 (Supabase characters를 원본으로 사용)
         playerUnits: [
           {
             id: 'u1',
@@ -608,7 +594,8 @@
     }
 
     // 전역 상태 변수
-    let tiles = generateInitialTiles();
+    // 전술 타일의 유일한 기준은 state.currentBattle.map.tiles (getBattleTiles() 참고).
+    // 전역 tiles / state.tiles / 기본 8x10 맵은 7~8단계에서 제거되었다.
     let state = createInitialState();
     normalizeAllUnitsHP(state);
     let historyStack = []; // 리와인더용 실행 취소 스택
@@ -622,6 +609,24 @@
 
     window.victoryProcessed = victoryProcessed;
     window.defeatedEnemyCount = defeatedEnemyCount;
+
+    // 스킬 엔진(skillEngine.js)에 전투 상태 접근 경로를 연결한다.
+    let skillTargeting = null; // { unitId, skillId } — 스킬 대상 선택 중일 때만 설정
+    if (window.SkillEngine) {
+      SkillEngine.configure({
+        getState: () => state,
+        getTile: (x, y) => getTile(x, y),
+        log: (msg, type) => addLog(msg, type),
+        onUnitKilled: (unit) => {
+          if (unit.owner === 'ENEMY') {
+            window.defeatedEnemyCount = (window.defeatedEnemyCount || 0) + 1;
+            defeatedEnemyCount = window.defeatedEnemyCount;
+          } else {
+            awardCommanderCasualtyExp(unit);
+          }
+        }
+      });
+    }
 
     // ========================================================================
     // 단일 진실 공급원(Single Source of Truth): state.isCombatActive
@@ -713,12 +718,12 @@
     let currentDebugClass = 'KNIGHT';
 
     /* --------------------------------------------------------------------------
-       Guest Mode & Pure Firebase Firestore Cloud Persistence System
-       Zero LocalStorage: All state saved and loaded directly via Cloud Firestore
+       Guest Mode & Supabase Cloud Persistence System
+       Zero LocalStorage: All state saved and loaded directly via Supabase
        -------------------------------------------------------------------------- */
     const STORAGE_KEY = 'slg_guest_save';
 
-    // 게임 상태를 Firebase Firestore에 안전하게 영구 저장 (Zero LocalStorage)
+    // 게임 상태를 Supabase에 안전하게 영구 저장 (Zero LocalStorage)
     function saveGameState(silent = false) {
       try {
         if (!state) return;
@@ -732,7 +737,7 @@
         state.guest.lastSavedAt = new Date().toISOString();
 
         // 1. 유닛 이미지 중복 저장 방지:
-        // 병과 공통 이미지는 Cloud Firestore game_configs/unit_images에 영구 저장되므로 페이로드 경량화
+        // 병과 공통 이미지는 Supabase game_configs/unit_images에 영구 저장되므로 페이로드 경량화
         const sanitizedPlayerUnits = state.playerUnits.map(u => {
           const isClassImg = u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType];
           return {
@@ -741,50 +746,145 @@
           };
         });
 
+        // 13단계: 저장 구조 분리.
+        //   player        — 전투/런과 무관하게 이어지는 플레이어 진행 (캐릭터, 골드, 진행도, 그리고 현재 런)
+        //   roguelikeRun  — 노드 그래프/진행도. 전술 타일은 들어 있지 않다.
+        //   currentBattle — 전투 중일 때만 별도로 저장 (map + 실시간 전투 상태 live). 전투가 없으면 null.
+        if (state.run) state.run.encounterSeq = state.encounterSeq;
+        const battleToSave = state.currentBattle ? {
+          ...state.currentBattle,
+          live: {
+            enemyUnits: state.enemyUnits,
+            deployedUnitIds: Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [],
+            defeatedEnemyCount: window.defeatedEnemyCount || 0
+          }
+        } : null;
         const payload = {
-          version: '1.0.0',
+          version: '2.0.0',
           savedAt: state.guest.lastSavedAt,
           guest: state.guest,
           currentView: state.currentView || 'STRATEGY',
-          currentSector: state.currentSector || 'A-1',
-          strategy: state.strategy || {
-            commanderAP: 24,
-            maxCommanderAP: 24,
-            selectedSectorId: 'A-1',
-            armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
-            activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
+          player: {
+            characters: sanitizedPlayerUnits,
+            characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : [],
+            inventory: Array.isArray(state.inventory) ? state.inventory : [],
+            gold: state.gold,
+            rewinders: state.rewinders,
+            progression: {
+              commander: state.commander,
+              turn: state.turn,
+              stackMoveEnabled: state.stackMoveEnabled,
+              strategy: state.strategy || {
+                commanderAP: 24,
+                maxCommanderAP: 24,
+                selectedSectorId: 'A-1',
+                armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
+                activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
+              },
+              selectedUnitId: selectedUnitId
+            },
+            roguelikeRun: state.run || null
           },
-          turn: state.turn,
-          gold: state.gold,
-          rewinders: state.rewinders,
-          stackMoveEnabled: state.stackMoveEnabled,
-          commander: state.commander,
-          playerUnits: sanitizedPlayerUnits,
-          enemyUnits: state.enemyUnits,
-          selectedUnitId: selectedUnitId
+          currentBattle: battleToSave
         };
 
-        // Firebase Firestore 동기화 처리 (Cloud Database 영구 저장)
+        // Supabase 동기화 처리 (Cloud Database 영구 저장)
         if (typeof window.saveGameStateToCloud === 'function') {
           window.saveGameStateToCloud(payload);
           updateGuestSaveIndicator(true);
-        } else if (window.FirebaseBridge && typeof window.FirebaseBridge.saveGameStateToCloud === 'function') {
-          window.FirebaseBridge.saveGameStateToCloud(payload);
+        } else if (window.SupabaseBridge && typeof window.SupabaseBridge.saveGameStateToCloud === 'function') {
+          window.SupabaseBridge.saveGameStateToCloud(payload);
           updateGuestSaveIndicator(true);
         }
 
         if (!silent) {
-          addLog(`💾 [클라우드 저장] 게임 상태가 Cloud Firestore에 안전하게 저장되었습니다. (Turn ${state.turn})`, 'system');
+          addLog(`💾 [클라우드 저장] 게임 상태가 Supabase에 안전하게 저장되었습니다. (Turn ${state.turn})`, 'system');
         }
       } catch (err) {
         console.warn('Failed to save to cloud storage:', err);
       }
     }
 
-    // Cloud Firestore에서 저장된 게임 상태 불러오기 (Zero LocalStorage)
+    // Supabase에서 저장된 게임 상태 불러오기 (Zero LocalStorage)
+    // 13단계: 세이브 포맷 어댑터. v2(player / roguelikeRun / currentBattle)와 v1(평평한 구조)을 같은 모양으로 맞춘다.
+    // v1 세이브에는 런이 없으므로 새 런이 만들어지고, 전투 중 상태는 원래 저장되지 않았으므로 전략맵에서 이어진다.
+    function normalizeSavePayload(raw) {
+      if (!raw || typeof raw !== 'object') return null;
+      if (raw.player && typeof raw.player === 'object') {
+        const p = raw.player;
+        const prog = p.progression || {};
+        return {
+          version: raw.version,
+          savedAt: raw.savedAt,
+          guest: raw.guest,
+          currentView: raw.currentView,
+          strategy: prog.strategy,
+          turn: prog.turn,
+          gold: p.gold,
+          rewinders: p.rewinders,
+          stackMoveEnabled: prog.stackMoveEnabled,
+          commander: prog.commander,
+          playerUnits: p.characters,
+          characterCollection: p.characterCollection,
+          inventory: p.inventory,
+          selectedUnitId: prog.selectedUnitId,
+          roguelikeRun: p.roguelikeRun || null,
+          currentBattle: raw.currentBattle || null,
+          enemyUnits: (raw.currentBattle && raw.currentBattle.live && Array.isArray(raw.currentBattle.live.enemyUnits)) ? raw.currentBattle.live.enemyUnits : []
+        };
+      }
+      return { ...raw, roguelikeRun: null, currentBattle: null, enemyUnits: [] };
+    }
+
+    // 저장된 런을 복원한다. 손상됐거나 없으면 새 런을 만든다 (캐릭터/골드는 그대로).
+    function restoreSavedRun(savedRun) {
+      const check = savedRun ? RunEngine.validateRun(savedRun) : { valid: false, errors: [] };
+      if (check.valid) {
+        state.run = savedRun;
+        state.encounterSeq = Number(savedRun.encounterSeq) || savedRun.encounters.length;
+      } else {
+        if (savedRun) console.warn('[Save] 저장된 런이 손상되어 새 런으로 대체합니다:', check.errors);
+        state.run = RunEngine.createRun(WORLD_SECTORS);
+        state.encounterSeq = 0;
+      }
+      state.selectedNodeId = null;
+      ensureNodeSelection();
+    }
+
+    // 전투 중 저장된 currentBattle을 복원한다. 돌려주는 값: 'active' | 'won' | null(복원할 전투 없음)
+    function restoreSavedBattle(saved) {
+      state.currentBattle = null;
+      if (!saved || !saved.map || !Array.isArray(saved.map.tiles) || saved.map.tiles.length === 0) return null;
+      const node = RunEngine.getNode(state.run, saved.nodeId);
+      const stillValid = node && (saved.status === 'won' || RunEngine.isNodeAvailable(state.run, node.id));
+      if (!stillValid) {
+        console.warn('[Save] 저장된 전투의 노드가 현재 런과 맞지 않아 버립니다:', saved.nodeId);
+        return null;
+      }
+      const { live, ...battle } = saved;
+      state.currentBattle = battle;
+      state.currentDeployedUnitIds = (live && Array.isArray(live.deployedUnitIds)) ? live.deployedUnitIds : [];
+      state.selectedNodeId = node.id;
+      state.selectedSectorId = battle.sectorId;
+      state.currentSector = battle.sectorId;
+      if (state.strategy) state.strategy.selectedSectorId = battle.sectorId;
+      state.currentView = 'SECTOR_MAP';
+      historyStack = [];
+      if (battle.status === 'won') {
+        state.isCombatActive = false;
+        victoryProcessed = true;
+        window.victoryProcessed = true;
+        return 'won';
+      }
+      resetTacticalBattleState();
+      defeatedEnemyCount = Number(live && live.defeatedEnemyCount) || 0;
+      window.defeatedEnemyCount = defeatedEnemyCount;
+      return 'active';
+    }
+
     function loadGameState(cloudPayload = null) {
       try {
-        const parsed = cloudPayload;
+        const parsed = normalizeSavePayload(cloudPayload);
         if (!parsed || !parsed.playerUnits || !Array.isArray(parsed.playerUnits)) return false;
 
         if (parsed.guest && parsed.guest.id) {
@@ -797,13 +897,18 @@
           };
         }
 
-        state.currentView = parsed.currentView || 'STRATEGY';
+        // 전술 화면으로 복원할지는 아래 restoreSavedBattle()가 저장된 currentBattle이 있을 때만 결정한다.
+        // (맵 없이 전술 화면이 복원되어 빈 화면이 되는 일이 없도록 기본은 전략맵)
+        state.currentView = 'STRATEGY';
         state.currentSector = parsed.currentSector || 'A-1';
+        restoreSavedRun(parsed.roguelikeRun);
         if (parsed.strategy) {
           state.strategy = {
             commanderAP: (typeof parsed.strategy.commanderAP === 'number') ? parsed.strategy.commanderAP : 24,
             maxCommanderAP: (typeof parsed.strategy.maxCommanderAP === 'number') ? parsed.strategy.maxCommanderAP : 24,
             selectedSectorId: parsed.strategy.selectedSectorId || 'A-1',
+            deploySelectedIds: Array.isArray(parsed.strategy.deploySelectedIds) ? parsed.strategy.deploySelectedIds : null,
+            deployKnownIds: Array.isArray(parsed.strategy.deployKnownIds) ? parsed.strategy.deployKnownIds : [],
             armyDeck: parsed.strategy.armyDeck || { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
             activeSkills: parsed.strategy.activeSkills || { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
           };
@@ -817,6 +922,13 @@
         if (parsed.commander) {
           state.commander = parsed.commander;
         }
+        state.inventory = Array.isArray(parsed.inventory) ? parsed.inventory : (Array.isArray(state.inventory) ? state.inventory : []);
+        if (Array.isArray(parsed.characterCollection)) {
+          state.characterCollection = parsed.characterCollection;
+        } else {
+          state.characterCollection = Array.isArray(state.characterCollection) ? state.characterCollection : [];
+        }
+
         if (Array.isArray(parsed.playerUnits)) {
           state.playerUnits = parsed.playerUnits;
           state.playerUnits.forEach(u => {
@@ -827,7 +939,8 @@
             }
             if (typeof u.favorability !== 'number') u.favorability = u.affection || 50;
             if (typeof u.affection !== 'number') u.affection = u.favorability || 50;
-            if (!u.customSkill && DEFAULT_CLASS_SKILLS[u.unitClass]) {
+            // 스킬트리가 있는 캐릭터는 트리가 스킬을 결정하므로 구버전 기본 고유 스킬을 넣지 않는다.
+            if (!u.customSkill && !(Array.isArray(u.skillTree) && u.skillTree.length) && DEFAULT_CLASS_SKILLS[u.unitClass]) {
               u.customSkill = JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS[u.unitClass]));
             }
             if (typeof u.customSkillCooldown !== 'number') u.customSkillCooldown = 0;
@@ -861,11 +974,28 @@
           selectedUnitId = firstLiving ? firstLiving.id : 'u1';
         }
 
+        // 전투 중이던 세이브라면 전투를 복원한다 (유닛/적 상태는 위에서 이미 복원됨).
+        const restoredBattle = restoreSavedBattle(parsed.currentBattle);
+        if (!restoredBattle) {
+          state.enemyUnits = [];
+          state.currentView = 'STRATEGY';
+        }
+
         updateGuestSaveIndicator(false);
         renderAll();
+
+        if (restoredBattle === 'active') {
+          // 실시간 전투를 곧바로 재개하지 않고 일시정지 상태로 연다 (계속하기/후퇴 선택).
+          addLog(`⚔️ [전투 복원] ${state.currentBattle.nodeId} (seed ${state.currentBattle.seed}) 전투가 저장된 상태로 복원되었습니다. 일시정지 상태입니다.`, 'system');
+          openTacticalPauseMenu();
+        } else if (restoredBattle === 'won') {
+          addLog(`🏆 [전투 복원] ${state.currentBattle.nodeId} 전투는 이미 승리한 상태입니다. 보상을 수령하고 전략맵으로 돌아가세요.`, 'system');
+          const rd = state.currentBattle.result || { gold: 0, rewinderGranted: false, defeatedCount: 0 };
+          if (window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(rd);
+        }
         return true;
       } catch (err) {
-        console.warn('Failed to load from Cloud Firestore:', err);
+        console.warn('Failed to load from Supabase:', err);
         return false;
       }
     }
@@ -1000,6 +1130,7 @@
       state.commander = prev.commander;
       state.playerUnits = prev.playerUnits;
       state.enemyUnits = prev.enemyUnits;
+      cancelSkillTargeting(true);
 
       addLog(`⏳ [리와인더 가동!] 시공간 왜곡으로 1턴 전 상태로 복원 완료! (잔여 리와인더: ${currentRewinders}개)`, 'capture');
       renderAll();
@@ -1021,8 +1152,28 @@
     /* --------------------------------------------------------------------------
        Tile & Grid Logic
        -------------------------------------------------------------------------- */
+    // 전술 타일 배열의 단일 접근점. 전투가 없으면 빈 배열(기본맵으로 대체하지 않는다).
+    // 전략 화면 등 전투 밖에서도 안전하게 호출되므로 여기서는 절대 throw하지 않는다.
+    function getBattleTiles() {
+      const t = state && state.currentBattle && state.currentBattle.map && state.currentBattle.map.tiles;
+      return Array.isArray(t) ? t : [];
+    }
+    window.getBattleTiles = getBattleTiles;
+
+    // 7단계: 전술 화면(SECTOR_MAP)에서만 쓰는 엄격한 버전. state.currentBattle.map이 없다는 건
+    // enterEncounter()를 거치지 않고 전술 화면에 들어왔다는 뜻이므로 버그로 보고 즉시 알려야 한다.
+    // 콘솔/디버깅에서 "지금 활성 전투 맵이 실제로 있는가"를 확인할 때도 이 함수를 쓴다.
+    function getActiveBattleMap() {
+      const map = state && state.currentBattle && state.currentBattle.map;
+      if (!map) {
+        throw new Error('[TacticalEngineError] 활성화된 전투/맵 데이터가 없습니다. enterEncounter()를 거치지 않고 전술 화면에 진입했을 수 있습니다.');
+      }
+      return map;
+    }
+    window.getActiveBattleMap = getActiveBattleMap;
+
     function getTile(x, y) {
-      return tiles.find(t => t.x === x && t.y === y);
+      return getBattleTiles().find(t => t.x === x && t.y === y);
     }
 
     function getUnitsAt(x, y) {
@@ -1173,10 +1324,9 @@
       if (isPlayerAttacker && skills.BearDown && isFirstUnit) {
         atkBonus += 0.20; // BearDown: 첫 유닛 공격력 +20%
       }
-      // 커스텀 패시브 스킬 및 활성 버프 적용
-      if (attacker.customSkill && attacker.customSkill.type === 'PASSIVE') {
-        atkBonus += (Number(attacker.customSkill.effectValue) || 20) / 100;
-      }
+      // 스킬 패시브 · 오라 · 버프/디버프 (skillEngine)
+      const atkMods = window.SkillEngine ? SkillEngine.getCombatModifiers(attacker) : { atk: 0 };
+      atkBonus = Math.max(0.1, atkBonus + atkMods.atk / 100);
       if (attacker.customSkillBuffAtk) {
         atkBonus += attacker.customSkillBuffAtk;
       }
@@ -1198,10 +1348,10 @@
       if (defender.isGuarding || defender.stance === 'GUARD') {
         defBonus += (defender.guardBonusDef || 0.30);
       }
-      // 커스텀 패시브 스킬 및 활성 버프 적용
-      if (defender.customSkill && defender.customSkill.type === 'PASSIVE') {
-        defBonus += (Number(defender.customSkill.effectValue) || 20) / 100;
-      }
+      // 스킬 패시브 · 오라 · 버프/디버프 · 약점 표식 (skillEngine)
+      const defMods = window.SkillEngine ? SkillEngine.getCombatModifiers(defender) : { def: 0, mark: 0 };
+      defBonus += (defMods.def - defMods.mark) / 100;
+      defBonus = Math.max(0.1, defBonus);
       if (defender.customSkillBuffDef) {
         defBonus += defender.customSkillBuffDef;
       }
@@ -1291,9 +1441,23 @@
       // 전투 교환 피해 계산 (Round Combat Damage & Clean Integer HP)
       const roundDmg = calculateRoundCombatDamage(attacker, defender, isWin, parseFloat(winPercent));
 
-      if (isWin) {
+      // 불굴(PROTECT) 스킬: 패배한 쪽이 치명상을 1회 버티면 교전은 무승부로 끝난다.
+      if (window.SkillEngine) SkillEngine.breakStealth(attacker);
+      const combatLoser = isWin ? defender : attacker;
+      const loserSaved = !!(window.SkillEngine && SkillEngine.tryPreventDeath(combatLoser));
+
+      if (loserSaved) {
+        const combatWinner = isWin ? attacker : defender;
+        const winnerDmg = isWin ? roundDmg.attackerDamage : roundDmg.defenderDamage;
+        if (winnerDmg > 0) {
+          combatWinner.hp = Math.max(1, Math.round(combatWinner.hp - winnerDmg));
+          if (combatWinner.stats) combatWinner.stats.hp = combatWinner.hp;
+        }
+        addLog(`🕊️ [교전 무승부] ${combatLoser.name}이(가) 불굴로 버텨 전선이 유지됩니다. (${combatWinner.name} HP ${combatWinner.hp}/${combatWinner.maxHp})`, 'warning');
+      } else if (isWin) {
         // 승리: 피격자(defender) 사망 (HP 0)
         defender.isDead = true;
+        awardCommanderCasualtyExp(defender);
         defender.hp = 0;
         if (defender.stats) defender.stats.hp = 0;
         if (defender.owner === 'ENEMY') {
@@ -1374,18 +1538,8 @@
             expGain = Math.round(expGain * 1.3);
             affGain = Math.round(affGain * 1.3);
           }
-          state.commander.exp += expGain;
           attacker.affection = Math.min(100, attacker.affection + affGain);
-          addLog(`⭐ ${attacker.name} 호감도 +${affGain}, 지휘관 경험치 +${expGain} EXP 획득!`, 'success');
-
-          // 지휘관 레벨업 검사
-          if (state.commander.exp >= state.commander.maxExp) {
-            state.commander.level += 1;
-            state.commander.exp -= state.commander.maxExp;
-            state.commander.maxExp = Math.round(state.commander.maxExp * 1.4);
-            state.commander.skillPoints += 1;
-            addLog(`👑 [지휘관 레벨업!] Lv.${state.commander.level} 달성! (스킬 포인트 +1 SP 획득)`, 'gold');
-          }
+          addLog(`⭐ ${attacker.name} 호감도 +${affGain} 획득!`, 'success');
 
           // 승리 시 적진 돌파 및 타일 전진 점령 (해당 타일에 남은 적이 없을 때)
           const remainingEnemiesAtTile = state.enemyUnits.filter(e => !e.isDead && e.x === defender.x && e.y === defender.y);
@@ -1425,7 +1579,7 @@
             if (adjPlayers.length > 0) {
               adjPlayers.forEach(adj => {
                 adj.hp = Math.max(0, adj.hp - splashDamage);
-                if (adj.hp <= 0) adj.isDead = true;
+                if (adj.hp <= 0 && !adj.isDead) { adj.isDead = true; awardCommanderCasualtyExp(adj); }
                 addLog(`💥 [적군 스플래시 피해] 인접 아군 ${adj.name}에게 ${splashDamage} 피해! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'danger');
               });
             }
@@ -1443,6 +1597,7 @@
       } else {
         // 공격자 패배: 공격자(attacker) 영구 사망 (HP 0)
         attacker.isDead = true;
+        awardCommanderCasualtyExp(attacker);
         attacker.hp = 0;
         if (attacker.stats) attacker.stats.hp = 0;
         if (attacker.owner === 'ENEMY') {
@@ -1532,6 +1687,10 @@
     function executeMove(unit, targetX, targetY) {
       const skills = state.commander.unlockedSkills;
       const costAP = skills.RapidAdvance ? 1 : 1; // 신속한 진격: 적은 AP 소모
+      if (window.SkillEngine && !SkillEngine.canMove(unit)) {
+        addLog(`⛓️ [이동 불가] ${unit.name}은(는) 속박/기절 상태라 이동할 수 없습니다.`, 'warning');
+        return;
+      }
 
       const startX = unit.x;
       const startY = unit.y;
@@ -1544,7 +1703,7 @@
       if (isStackMove) {
         // [사용자 요구사항] 부대가 중첩되었을 때 함께이동(ON) 상태면 최소 AP 기준으로 움직임.
         // 누군가 AP가 부족하여 함께 이동할 수 없으면 팝업으로 알리고 이동 중단!
-        const insufficientUnits = friendlyAtStart.filter(u => u.isInactivated || u.ap < costAP);
+        const insufficientUnits = friendlyAtStart.filter(u => u.isInactivated || u.ap < costAP || (window.SkillEngine && !SkillEngine.canMove(u)));
 
         if (insufficientUnits.length > 0) {
           const namesStr = insufficientUnits.map(u => `${u.name}(AP ${u.ap}/${u.baseAP}${u.isInactivated ? ', 비활성' : ''})`).join(', ');
@@ -1686,8 +1845,29 @@
 
     async function executeEnemyDecision(enemy) {
       if (enemy.isDead || enemy.ap <= 0) return false;
+      const SE = window.SkillEngine;
+      if (SE && !SE.canAct(enemy)) return false;
 
-      const livingPlayers = state.playerUnits.filter(p => !p.isDead);
+      // 스킬 우선: 쓸 만한 스킬(피해·회복·제어 등)이 있으면 먼저 사용한다.
+      if (SE) {
+        const plan = SE.planAISkill(enemy);
+        if (plan && Math.random() < 0.8) {
+          const res = SE.cast(enemy, plan.skill, plan.x, plan.y);
+          if (res.ok) {
+            renderAll();
+            showSkillFloatTexts(res.results);
+            if (typeof checkPartyWipeout === 'function') checkPartyWipeout();
+            await sleep(450);
+            return true;
+          }
+        }
+      }
+
+      // 은신한 아군은 노리지 않고, 도발당했다면 도발한 유닛만 노린다.
+      let livingPlayers = state.playerUnits.filter(p => !p.isDead && (!SE || SE.isTargetableByAI(p)));
+      const forced = SE ? SE.getForcedTarget(enemy) : null;
+      if (forced && forced.owner !== 'ENEMY') livingPlayers = [forced];
+      const enemyCanMove = !SE || SE.canMove(enemy);
       const directions = [
         { dx: 0, dy: -1 },
         { dx: 0, dy: 1 },
@@ -1713,7 +1893,7 @@
               requiresMove: false,
               hp: p.hp
             });
-          } else if (dist === 2 && enemy.ap >= 2) {
+          } else if (dist === 2 && enemy.ap >= 2 && enemyCanMove) {
             // 1보 전진 후 공격 가능 (AP 2 필요)
             // 전진 가능한 중간 타일 탐색 (아군 플레이어 유닛이 없는 빈 타일)
             const midTiles = directions
@@ -1761,6 +1941,8 @@
         }
       }
 
+      if (!enemyCanMove) return false;
+
       // 유닛이 이동할 수 있는 인접 타일 탐색 (플레이어 유닛이 주둔 중이지 않은 타일)
       const validMoves = directions
         .map(d => ({ x: enemy.x + d.dx, y: enemy.y + d.dy }))
@@ -1774,7 +1956,7 @@
       // ========================================================================
       const allyEnemies = state.enemyUnits.filter(e => !e.isDead && e.id !== enemy.id && (Math.abs(e.x - enemy.x) + Math.abs(e.y - enemy.y) <= 3));
       if (allyEnemies.length > 0) {
-        const chokePoints = tiles.filter(t => t.isSafe || t.isCity || t.type === 'village' || t.type === 'city');
+        const chokePoints = getBattleTiles().filter(t => t.isSafe || t.isCity || t.type === 'village' || t.type === 'city');
 
         // 각 후보 타일의 ZOC 포위망 적합도 점수 계산
         function scoreZocTile(pt) {
@@ -1829,7 +2011,7 @@
       // 우선순위 3: 마을/도시 거점 점령 및 압박
       // 가장 가까운 미점령 마을이나 도시(왕도/요새) 방향으로 전진 이동하여 거점 압박
       // ========================================================================
-      const baseTargets = tiles.filter(t => t.isCity || t.type === 'village' || t.isSafe);
+      const baseTargets = getBattleTiles().filter(t => t.isCity || t.type === 'village' || t.isSafe);
       if (baseTargets.length > 0) {
         let nearestBase = null;
         let minDistToBase = Infinity;
@@ -1914,7 +2096,16 @@
         e.owner = 'ENEMY';
         if (typeof e.baseAP !== 'number') e.baseAP = 2;
         e.ap = e.baseAP;
+        if (window.SkillEngine && !e.enemySkillsPrepared) {
+          SkillEngine.prepareEnemySkills(e);
+          e.enemySkillsPrepared = true;
+        }
       });
+      // 적 턴 시작: 지속 피해/회복, 기절·둔화, 쿨다운 감소
+      if (window.SkillEngine) {
+        SkillEngine.startSideTurn('ENEMY');
+        renderAll();
+      }
 
       // 각 적 유닛 순차적으로 행동 실행 (async/await 딜레이 350ms~500ms)
       for (const enemy of aliveEnemies) {
@@ -1928,6 +2119,7 @@
       }
 
       addLog(`🛡️ [적 AI 작전 완료] 적 군단의 모든 행동이 완료되었습니다.`, 'system');
+      if (window.SkillEngine) SkillEngine.endRound();
       await sleep(300);
       isEnemyTurnProcessing = false;
       updateTurnUIState();
@@ -1989,6 +2181,15 @@
       renderAll();
       saveGameState();
 
+      // 유지비 정산 후 보유 골드가 0이면 전투 패배 처리 후 전략 화면으로 복귀한다.
+      // 12단계: 패배도 finishEncounter()를 거친다 (노드는 완료되지 않고, 같은 노드에 다시 도전할 수 있다).
+      if (Number(state.gold) <= 0) {
+        addLog('💀 [패배] 유지비 정산 후 보유 골드가 0G가 되어 작전을 지속할 수 없습니다.', 'danger');
+        finishEncounter({ victory: false, reason: 'bankrupt' });
+        window.alert('패배했습니다. 유지비를 지불한 후 보유 골드가 0원이 되어 전략 화면으로 돌아갑니다.');
+        return;
+      }
+
       // 3. 적 AI 턴 시작 (processEnemyTurn)
       await processEnemyTurn();
 
@@ -2012,6 +2213,13 @@
         u.guardBonusDef = 0;
         u.stance = 'NORMAL';
       });
+      // 아군 턴 시작: 지속 피해/회복, 기절·둔화, 패시브 AP, 스킬 쿨다운 감소
+      if (window.SkillEngine) {
+        SkillEngine.startSideTurn('PLAYER');
+        if (typeof checkPartyWipeout === 'function') checkPartyWipeout();
+        if (typeof window.checkTacticalVictory === 'function') window.checkTacticalVictory();
+      }
+      skillTargeting = null;
 
       // 선택된 유닛 갱신 (적 턴 중 사망했을 수 있으므로)
       const sel = getSelectedUnit();
@@ -2074,6 +2282,7 @@
         fieldUnits.sort((a, b) => (a.atk + a.def + a.hp) - (b.atk + b.def + b.hp));
         const weakest = fieldUnits[0];
         weakest.isDead = true;
+        awardCommanderCasualtyExp(weakest);
 
         addLog(`💥 [방어선 돌파!] 적의 야간 공습으로 방어선이 무너졌습니다!`, 'danger');
         addLog(`💀 [유닛 1기 탈취] 전멸하지 않고 가장 약했던 [${weakest.name}] 1개만 탈취/사망 처리되었습니다!`, 'danger');
@@ -2191,13 +2400,22 @@
       if (!mapEl) return;
       mapEl.innerHTML = '';
 
-      const currentTiles = (state && state.tiles && state.tiles.length > 0) ? state.tiles : tiles;
-      const maxRow = currentTiles.reduce((max, t) => Math.max(max, t.y), 0);
-      const rowCount = maxRow >= 10 ? 14 : 10;
+      // 전술 화면의 맵 원본은 현재 전투 객체 하나만 사용한다.
+      // state.tiles / 전역 tiles / 기본맵을 여기서 fallback으로 사용하지 않는다.
+      const battleMap = state?.currentBattle?.map || null;
+      // 7단계: SECTOR_MAP(전술 화면)인데 battleMap이 없으면 렌더 자체를 막지는 않되(빈 화면으로
+      // 넘어가는 대신 UI가 멈추지 않게), 개발자에게는 getActiveBattleMap()과 동일한 오류를 콘솔에 남긴다.
+      if (!battleMap && state?.currentView === 'SECTOR_MAP') {
+        try { getActiveBattleMap(); } catch (err) { console.error(err.message); }
+      }
+      const currentTiles = Array.isArray(battleMap?.tiles) ? battleMap.tiles : [];
+      const colCount = Number(battleMap?.cols) || 8;
+      const rowCount = Number(battleMap?.rows) || 14;
+
       mapEl.style.display = 'grid';
-      mapEl.style.gridTemplateColumns = 'repeat(8, 1fr)';
+      mapEl.style.gridTemplateColumns = `repeat(${colCount}, 1fr)`;
       mapEl.style.gridTemplateRows = `repeat(${rowCount}, 1fr)`;
-      if (rowCount === 14) {
+      if (colCount === 8 && rowCount === 14) {
         mapEl.classList.add('grid-8x14');
       } else {
         mapEl.classList.remove('grid-8x14');
@@ -2208,7 +2426,18 @@
       let attackTiles = [];
       const zocTiles = computeZocTiles();
 
-      if (selUnit && !selUnit.isDead && !selUnit.isInactivated && selUnit.ap > 0) {
+      // 스킬 대상 선택 중이면 이동/공격 표시 대신 스킬 대상 칸을 표시한다.
+      let skillValid = [];
+      let skillCaster = null;
+      let skillObj = null;
+      if (skillTargeting && window.SkillEngine) {
+        skillCaster = state.playerUnits.find(u => u.id === skillTargeting.unitId && !u.isDead) || null;
+        skillObj = skillCaster ? SkillEngine.getUnitSkills(skillCaster).find(sk => sk.id === skillTargeting.skillId) : null;
+        if (skillCaster && skillObj) skillValid = SkillEngine.getValidTargets(skillCaster, skillObj);
+        else cancelSkillTargeting(true);
+      }
+
+      if (!skillTargeting && selUnit && !selUnit.isDead && !selUnit.isInactivated && selUnit.ap > 0) {
         // 이동 범위 (상하좌우 1~2칸 맨해튼 거리)
         const range = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
         currentTiles.forEach(t => {
@@ -2229,6 +2458,16 @@
         const tileDiv = document.createElement('div');
         const terrainType = t.terrain || t.type || 'plain';
         tileDiv.className = `tile ${terrainType}`;
+        tileDiv.dataset.x = t.x;
+        tileDiv.dataset.y = t.y;
+        if (skillTargeting && skillObj) {
+          if (skillCaster.x === t.x && skillCaster.y === t.y) tileDiv.classList.add('skill-caster');
+          if (skillValid.some(p => p.x === t.x && p.y === t.y)) {
+            tileDiv.classList.add('skill-target');
+            tileDiv.onmouseenter = () => previewSkillArea(skillCaster, skillObj, t.x, t.y);
+            tileDiv.onmouseleave = () => previewSkillArea(null);
+          }
+        }
         if (t.hasRoad) tileDiv.classList.add('has-road');
         if (t.structure) tileDiv.classList.add(`structure-${t.structure}`);
 
@@ -2254,12 +2493,18 @@
           actionIcon = '<span class="tile-action-indicator move" title="클릭 시 즉시 이동">👟</span>';
         }
 
+        const terrainIcons = {
+          plain: '🌱', forest: '🌲', hill: '⛰️', mountain: '🏔️', river: '〰️', sea: '🌊'
+        };
+        const terrainIcon = terrainIcons[terrainType] || t.terrainIcon || '🌱';
+        const structureIcons = { city: '🏰', village: '🏡', resource: '💎', tree: '🌴' };
+        const structureIcon = structureIcons[t.structure] || '';
         const roadBadge = t.hasRoad ? '<span class="tile-road-dot" title="도로 (AP 할인)">🛣️</span>' : '';
 
         tileDiv.innerHTML = `
           <span class="tile-def-badge">${defPct > 0 ? '+' + defPct + '%' : ''}</span>
           ${roadBadge}
-          <span class="tile-terrain-icon">${t.terrainIcon || '🌱'}</span>
+          <span class="tile-terrain-icon">${structureIcon || terrainIcon}</span>
           ${actionIcon}
         `;
 
@@ -2309,6 +2554,7 @@
           const hpPct = Math.max(0, (topUnit.hp / topUnit.maxHp) * 100);
           hpBar.innerHTML = `<div class="unit-hp-fill ${hpPct < 35 ? 'low' : ''}" style="width: ${hpPct}%;"></div>`;
           uDiv.appendChild(hpBar);
+          appendStatusIcons(uDiv, pUnits);
 
           // 체납 비활성화 표시
           if (topUnit.isInactivated) {
@@ -2356,6 +2602,7 @@
           const hpPct = Math.max(0, (topUnit.hp / topUnit.maxHp) * 100);
           hpBar.innerHTML = `<div class="unit-hp-fill ${hpPct < 35 ? 'low' : ''}" style="width: ${hpPct}%;"></div>`;
           uDiv.appendChild(hpBar);
+          appendStatusIcons(uDiv, eUnits);
 
           tileDiv.appendChild(uDiv);
         }
@@ -2373,6 +2620,10 @@
       }
       if (window.isCombatPaused || (state && state.isCombatPaused) || (window.playerState && window.playerState.isCombatPaused)) {
         addLog('⏸️ [전투 일시정지 중] 전술 작전이 일시 정지되었습니다. 일시 정지 메뉴에서 전투를 재개해주세요.', 'warning');
+        return;
+      }
+      if (skillTargeting) {
+        castTargetedSkillAt(tile.x, tile.y);
         return;
       }
       const selUnit = getSelectedUnit();
@@ -2795,9 +3046,443 @@
     // [ 1단계: 월드맵 / 전략 메인 화면 (Strategy Main View) 상호작용 엔진 ]
     // ========================================================================
 
+    // ========================================================================
+    // [ 11단계: 로그라이크 런 / 노드 ]
+    // 노드는 { id, type, sectorId, next }만 가진다. 전술 타일은 전투 진입 시점에 enterEncounter()가 만든다.
+    // 순수 로직(그래프 생성/해금 규칙)은 runEngine.js, 여기서는 state/DOM과 연결만 한다.
+    // ========================================================================
+    function getRun() {
+      return state ? state.run : null;
+    }
+
+    // 노드 조회의 단일 진입점. nodeId를 생략하면 전략맵에서 선택 중인 노드.
+    function getCurrentNode(nodeId) {
+      const run = getRun();
+      if (!run) return null;
+      return RunEngine.getNode(run, nodeId != null ? nodeId : state.selectedNodeId);
+    }
+    window.getCurrentNode = getCurrentNode;
+
+    // 선택 노드가 없거나 이미 완료된 노드면 "지금 갈 수 있는 첫 노드"로 옮긴다. 잠긴 노드는 열람용으로 그대로 선택할 수 있다.
+    function ensureNodeSelection() {
+      const run = getRun();
+      if (!run) return null;
+      const sel = RunEngine.getNode(run, state.selectedNodeId);
+      if (sel && RunEngine.getNodeStatus(run, sel.id) !== 'completed') return sel;
+      const next = RunEngine.getAvailableNodes(run)[0] || null;
+      if (next) state.selectedNodeId = next.id;
+      else if (!sel) state.selectedNodeId = null;
+      return RunEngine.getNode(run, state.selectedNodeId);
+    }
+
+    function nodeTypeLabel(node) {
+      const meta = node && RunEngine.NODE_META[node.type];
+      return meta ? meta.label : '';
+    }
+
+    function selectNode(nodeId) {
+      const node = getCurrentNode(nodeId);
+      if (!node) return false;
+      const sec = WORLD_SECTORS[node.sectorId] || { id: node.sectorId, name: node.sectorId, difficulty: '' };
+      state.selectedNodeId = node.id;
+      state.selectedSectorId = node.sectorId;
+      state.currentSector = node.sectorId;
+      if (state.strategy) state.strategy.selectedSectorId = node.sectorId;
+      renderStrategyView();
+      addLog(`📍 [노드 선택] ${node.id} · ${nodeTypeLabel(node)} — [${sec.id} ${sec.name}] (${RunEngine.getNodeStatus(state.run, node.id)})`, 'system');
+      saveGameState(true);
+      return true;
+    }
+    window.selectNode = selectNode;
+    // 예전 호출부(콘솔 등) 호환용: 섹터 id로 부르면 그 섹터에서 지금 열려 있는 노드를 선택한다. 섹터에서 곧바로 전투에 들어가는 길은 없다.
+    window.selectWorldSector = function selectWorldSector(sectorId) {
+      const run = getRun();
+      const node = run && (RunEngine.getAvailableNodes(run).find(n => n.sectorId === String(sectorId))
+        || run.mapState.nodes.find(n => n.sectorId === String(sectorId) && RunEngine.getNodeStatus(run, n.id) !== 'completed'));
+      if (!node) {
+        addLog(`⚠️ [${sectorId}] 섹터에서 선택할 수 있는 노드가 이번 런에 없습니다.`, 'warning');
+        return false;
+      }
+      return selectNode(node.id);
+    };
+
+    function startNewRun(customSeed = null, opts = {}) {
+      if (state.currentBattle && state.currentBattle.status === 'active') {
+        const msg = '⚠️ 전투 중에는 새 런을 시작할 수 없습니다.';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      }
+      const cur = state.run;
+      if (!opts.force && cur && cur.status === 'active' && cur.completedNodes.length > 0) {
+        if (!window.confirm('진행 중인 런을 포기하고 새 런을 시작할까요? (캐릭터/골드는 유지됩니다)')) return false;
+      }
+      state.run = RunEngine.createRun(WORLD_SECTORS, customSeed);
+      state.encounterSeq = 0;
+      state.selectedNodeId = null;
+      state.currentBattle = null;
+      if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
+      ensureNodeSelection();
+      addLog(`🧭 [새 런 시작] seed ${state.run.seed} — 노드 ${state.run.mapState.nodes.length}개`, 'gold');
+      renderAll();
+      saveGameState();
+      return true;
+    }
+    window.startNewRun = startNewRun;
+
+    // ---- 전투가 없는 노드(이벤트/상점) ----
+    function healAllPlayerUnits() {
+      (state.playerUnits || []).forEach(u => {
+        if (u.isDead) return;
+        const max = Number(u.maxHp) || 100;
+        u.hp = max;
+        if (u.stats && typeof u.stats === 'object') u.stats.hp = max;
+      });
+    }
+
+    function applyNodeEffects(effects) {
+      const lines = [];
+      (effects || []).forEach(e => {
+        if (e.type === 'gold') { state.gold += e.amount; lines.push(`+${e.amount}G`); }
+        else if (e.type === 'rewinder') { state.rewinders += e.amount; lines.push(`리와인더 +${e.amount}`); }
+        else if (e.type === 'heal_all') { healAllPlayerUnits(); lines.push('전원 체력 회복'); }
+      });
+      return lines.join(', ');
+    }
+
+    function closeRunNodeModal() {
+      const m = document.getElementById('modal-run-node');
+      if (m) m.remove();
+    }
+
+    // 이벤트/상점 노드를 끝낸다: 효과는 이 시점에 "한 번만" 적용되고(이중 클릭 방지), 노드가 완료되어 다음 노드가 열린다.
+    function completeNonBattleNode(node, detail) {
+      const run = state.run;
+      if (!RunEngine.isNodeAvailable(run, node.id)) return false;
+      const res = RunEngine.completeNode(run, node.id);
+      if (!res.ok) { console.warn('[Run] 노드 완료 실패:', res.reason); return false; }
+      state.encounterSeq += 1;
+      RunEngine.recordEncounter(run,
+        { id: `enc-${String(state.encounterSeq).padStart(5, '0')}`, nodeId: node.id, sectorId: node.sectorId, type: node.type, seed: run.seed, templateId: null },
+        true, { reason: 'node', detail: detail || null });
+      state.selectedNodeId = null;
+      ensureNodeSelection();
+      addLog(`✅ [${nodeTypeLabel(node)} 완료] ${node.id} → 다음 노드 ${res.unlockedNodes.join(', ') || '없음'}`, 'gold');
+      closeRunNodeModal();
+      renderAll();
+      saveGameState();
+      return true;
+    }
+
+    function openRunNodeModal(node) {
+      closeRunNodeModal();
+      const run = state.run;
+      const overlay = document.createElement('div');
+      overlay.id = 'modal-run-node';
+      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.75);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;z-index:99990;';
+      const card = document.createElement('div');
+      card.style.cssText = 'background:#0f172a;border:2px solid #38bdf8;border-radius:16px;padding:20px;max-width:380px;width:92%;color:#f8fafc;text-align:center;box-shadow:0 20px 40px rgba(0,0,0,0.5);';
+      overlay.appendChild(card);
+      const el = (tag, css, text) => { const n = document.createElement(tag); if (css) n.style.cssText = css; if (text != null) n.textContent = text; return n; };
+      const btnCss = 'width:100%;padding:10px;border-radius:10px;font-weight:800;font-size:13px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#e2e8f0;margin-top:8px;';
+
+      if (node.type === 'event') {
+        const ev = RunEngine.rollEvent(run, node);
+        card.appendChild(el('div', 'font-size:40px;', '❓'));
+        card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', ev.title));
+        card.appendChild(el('p', 'font-size:12px;color:#cbd5e1;line-height:1.6;margin-bottom:10px;', ev.text));
+        const ok = el('button', btnCss + 'background:linear-gradient(135deg,#0284c7,#38bdf8);color:#fff;border:none;', '확인');
+        ok.onclick = () => {
+          if (!RunEngine.isNodeAvailable(state.run, node.id)) return;
+          const applied = applyNodeEffects(ev.effects);
+          addLog(`❓ [이벤트] ${ev.title}: ${applied}`, 'gold');
+          completeNonBattleNode(node, ev.id);
+        };
+        card.appendChild(ok);
+      } else {
+        const offers = RunEngine.getShopOffers(run, node);
+        const bought = new Set();
+        card.appendChild(el('div', 'font-size:40px;', '🛒'));
+        card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', '보급 상점'));
+        const goldLine = el('p', 'font-size:12px;color:#fbbf24;font-weight:800;margin-bottom:6px;');
+        card.appendChild(goldLine);
+        const list = el('div');
+        card.appendChild(list);
+        const refresh = () => {
+          goldLine.textContent = `보유 골드: ${state.gold}G`;
+          list.innerHTML = '';
+          offers.forEach(o => {
+            const done = bought.has(o.id);
+            const b = el('button', btnCss, done ? `${o.label} — 구매 완료` : `${o.label} — ${o.cost}G`);
+            b.disabled = done || state.gold < o.cost;
+            if (b.disabled) b.style.opacity = '0.5';
+            b.onclick = () => {
+              if (bought.has(o.id) || state.gold < o.cost) return;
+              state.gold -= o.cost;
+              bought.add(o.id);
+              const applied = applyNodeEffects(o.effects);
+              addLog(`🛒 [상점] ${o.label} 구매 (-${o.cost}G) → ${applied}`, 'gold');
+              refresh();
+              renderAll();
+              saveGameState(true);
+            };
+            list.appendChild(b);
+          });
+        };
+        refresh();
+        const leave = el('button', btnCss + 'background:linear-gradient(135deg,#0284c7,#38bdf8);color:#fff;border:none;', '떠나기');
+        leave.onclick = () => completeNonBattleNode(node, 'shop');
+        card.appendChild(leave);
+      }
+      document.body.appendChild(overlay);
+    }
+
+    // ========================================================================
+    // [ 적 자동 생성: 아군과 같은 캐릭터 풀에서 뽑는다 ]
+    // 적 후보 = 캐릭터 풀(Supabase characters) 전체. 어떤 캐릭터를 몇 명, 어느 자리에 세울지는
+    // seed로 결정된다(MapSchema.generateBattleMapWithSeed). 여기서는 "후보 목록"만 만든다.
+    // 섹터 난이도와 노드 타입에 따라 레벨/스탯 배율이 붙는다.
+    // ========================================================================
+    const ENEMY_DIFFICULTY_SCALE = {
+      EASY: { level: 1, mult: 0.8 },
+      NORMAL: { level: 2, mult: 1.0 },
+      HARD: { level: 4, mult: 1.25 },
+      NIGHTMARE: { level: 6, mult: 1.6 }
+    };
+    const ENEMY_NODE_TYPE_SCALE = {
+      battle: { levelBonus: 0, mult: 1.0 },
+      elite: { levelBonus: 1, mult: 1.2 },
+      boss: { levelBonus: 2, mult: 1.5 }
+    };
+
+    // 캐릭터 풀이 아직 로드되지 않았다면(전투를 너무 일찍 시작한 경우) 한 번 불러온다.
+    async function ensureCharacterPoolLoaded() {
+      if (customCharactersCloudCache.length > 0) return;
+      try {
+        if (typeof window.getCharactersFromCloud === 'function') {
+          const chars = await window.getCharactersFromCloud();
+          if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
+        }
+      } catch (e) {
+        console.warn('[Encounter] 캐릭터 풀 로드 실패:', e);
+      }
+    }
+
+    function buildEnemyPool(sector, nodeType) {
+      const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
+      const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
+      return getStoredCustomCharacters()
+        .filter(c => c && c.id && c.name && (c.classType || c.unitClass))
+        .map(c => characterRecordToUnit(c, {
+          id: c.id,
+          owner: 'ENEMY',
+          level: diff.level + typ.levelBonus,
+          statMultiplier: diff.mult * typ.mult,
+          fullHp: true
+        }));
+    }
+
+    // 0. Encounter 진입점 — 2단계: Sector → TacticalMapTemplate → CurrentBattle 순서로만 조립한다.
+    //    이 함수 안에서 타일 객체를 직접 손으로 조립하지 않는다. 전부 MapSchema를 거친다.
+    //    8단계: Seed 기반 랜덤화(MapSchema.generateBattleMapWithSeed)가 randomize:true로 적용된다.
+    //    지형 변형/보물 상자는 매 진입마다(같은 노드는 항상 같게) 달라지고, 에디터가 직접
+    //    배치한 적은 그대로, 아닌 경우는 enemyPool에서 seed로 뽑는다(로스터 연결 전까지는 0명).
+    async function enterEncounter(nodeId) {
+      const reportError = (msg) => {
+        console.error(`❌ [Encounter] ${msg}`);
+        addLog(`❌ [Encounter] ${msg}`, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      };
+
+      // 11단계: 전투는 전략맵의 "노드"를 통해서만 들어갈 수 있다. sectorId만으로 전술맵에 들어가는 길은 없다.
+      const requestedNodeId = String(nodeId || state?.selectedNodeId || '');
+      const node = getCurrentNode(requestedNodeId);
+      if (!node) return reportError(`노드 '${requestedNodeId}'를 찾을 수 없습니다. 전투는 전략맵의 노드를 통해서만 시작할 수 있습니다.`);
+      if (!RunEngine.isBattleType(node.type)) return reportError(`'${node.id}'는 전투 노드가 아닙니다 (${node.type}).`);
+      if (!RunEngine.isNodeAvailable(state.run, node.id)) return reportError(`'${node.id}' 노드는 아직 열리지 않았거나 이미 완료되었습니다.`);
+      const targetSectorId = String(node.sectorId);
+
+      if (!window.MapSchema) {
+        return reportError('MapSchema 모듈을 찾을 수 없습니다 (mapSchema.js 로드 순서를 확인하세요).');
+      }
+
+      // Sector(전략) → 이 섹터가 사용할 TacticalMapTemplate id를 해석한다.
+      // WORLD_SECTORS[sectorId].defaultTemplateId(또는 mapTemplateId)만 바꾸면 코드 변경 없이 다른 템플릿을 붙일 수 있다.
+      const sector = WORLD_SECTORS?.[targetSectorId] || { id: targetSectorId };
+      const templateId = node.mapTemplateId || sector.mapTemplateId || sector.defaultTemplateId || MapSchema.resolveDefaultTemplateId(targetSectorId);
+
+      // 8단계: 전투 진입마다 새 seed를 만든다(매판 새로운 전장). seed는 battle.seed와 로그에 남으므로
+      // 버그가 나면 그 값만 있으면 같은 전장을 재현할 수 있다.
+      // 재현하려면 콘솔에서 state.forcedSeed = 'A-1-849201' 을 넣고 다시 진입한다 (1회용).
+      // seed 결정은 enterBattleWithSeed()가 맡는다: forcedSeed가 있으면 그 값(1회용), 없으면 새로 뽑는다.
+      const replaySeed = state.forcedSeed ? String(state.forcedSeed) : null;
+      state.forcedSeed = null;
+
+      console.log(`⚔️ [Encounter] ${targetSectorId} 전투 진입 시작 — 템플릿 [${templateId}]을(를) Supabase에서 로드`);
+
+      let rawTemplateDoc = null;
+      try {
+        const loader = (typeof window.loadTacticalMapTemplateFromSupabase === 'function')
+          ? window.loadTacticalMapTemplateFromSupabase
+          : (window.SupabaseBridge && typeof window.SupabaseBridge.loadTacticalMapTemplateFromSupabase === 'function'
+              ? window.SupabaseBridge.loadTacticalMapTemplateFromSupabase.bind(window.SupabaseBridge)
+              : null);
+
+        if (!loader) {
+          throw new Error('Supabase tacticalMapTemplates 로더를 찾을 수 없습니다.');
+        }
+
+        rawTemplateDoc = await loader(templateId);
+      } catch (err) {
+        console.error(`❌ [Encounter] ${templateId} 템플릿 로드 실패`, err);
+        const msg = `전술 맵 로드 실패: ${err?.message || 'Supabase 연결 오류'}`;
+        addLog(`❌ [Encounter] ${msg}`, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      }
+
+      // TacticalMapTemplate(설계도) 형태로 정규화한다. 없으면(=Supabase에 문서가 없으면) 실패 처리하고,
+      // 절대 기본맵으로 몰래 대체하지 않는다.
+      const template = MapSchema.normalizeTacticalMapTemplate(rawTemplateDoc, templateId);
+      const templateCheck = template ? MapSchema.validateTacticalMapTemplate(template) : { valid: false, errors: ['템플릿이 Supabase(tacticalMapTemplates)에 없습니다.'] };
+
+      if (!template || !templateCheck.valid) {
+        const msg = `${templateId} 전술 맵 템플릿이 유효하지 않습니다: ${templateCheck.errors.join(', ')}`;
+        console.error(`❌ [Encounter] ${msg}`);
+        addLog(`❌ [Encounter] ${msg}`, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      }
+
+      // TacticalMapTemplate → CurrentBattle. 여기서만 실전 인스턴스가 만들어진다.
+      // randomize:true — 8단계 Seed 생성기를 켠다. 에디터가 직접 배치한 적(map.units)이
+      // 있는 템플릿은 MapSchema.generateBattleMapWithSeed()가 자동으로 랜덤화 대상에서 제외한다.
+      // enemyPool은 아직 프로젝트에 '적 유닛 로스터' 데이터가 없어 빈 배열로 둔다 — 로스터가
+      // 생기는 즉시 여기 하나만 채우면 랜덤 적 스폰이 켜진다. 그때까지는 지형/보물 상자만
+      // 매 진입마다(같은 노드는 항상 같게) 달라진다.
+      await ensureCharacterPoolLoaded();
+      const enemyPool = buildEnemyPool(sector, node.type);
+
+      if (typeof window.enterBattleWithSeed !== 'function') {
+        const msg = 'enterBattleWithSeed를 찾을 수 없습니다 (seedEngine.js 로드를 확인하세요).';
+        console.error(`❌ [Encounter] ${msg}`);
+        addLog(`❌ [Encounter] ${msg}`, 'warning');
+        return false;
+      }
+      const battle = window.enterBattleWithSeed(template, replaySeed, {
+        sectorId: targetSectorId,
+        nodeId: node.id,
+        type: node.type, // 'battle' | 'elite' | 'boss' — rewards 배율에 반영된다
+        enemyPool,
+        state
+      });
+      const seed = battle ? battle.seed : null;
+
+      if (!battle) {
+        const msg = `${targetSectorId} CurrentBattle 생성에 실패했습니다.`;
+        console.error(`❌ [Encounter] ${msg}`);
+        addLog(`❌ [Encounter] ${msg}`, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      }
+
+      // 적이 한 명도 없으면 전투가 성립하지 않는다(시작하자마자 승리하는 것을 막는다).
+      // 원인은 둘 중 하나다: 템플릿에 에디터가 배치한 적이 없고, 캐릭터 풀도 비어 있다.
+      if (!Array.isArray(battle.enemies) || battle.enemies.length === 0) {
+        state.currentBattle = null;
+        return reportError(enemyPool.length === 0
+          ? `적으로 쓸 캐릭터가 없습니다. 캐릭터 풀(characters)에 캐릭터를 만들거나, [${templateId}] 맵에 적을 직접 배치하세요.`
+          : `[${templateId}] 맵에 적 스폰 지점을 배치할 수 없어 적이 생성되지 않았습니다.`);
+      }
+
+      const cols = battle.map.width;
+      const rows = battle.map.height;
+
+      // 전술 렌더러의 기준 데이터는 오직 state.currentBattle.map이다.
+      // state.tiles / 전역 tiles 별칭은 7~8단계에서 제거되었다. 전술 코드는 getBattleTiles()로만 접근한다.
+      state.currentBattle = battle;
+      state.currentBattle.nodeId = node.id;
+      state.currentBattle.seed = seed;
+      state.selectedNodeId = node.id;
+      historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
+      state.selectedSectorId = targetSectorId;
+      state.currentSector = targetSectorId;
+      if (state.strategy) state.strategy.selectedSectorId = targetSectorId;
+
+      // 8단계: 적 배치는 이제 MapSchema.createCurrentBattle()이 전부 끝내 놓았다
+      // (에디터가 직접 배치한 적은 그대로, 아니면 seed 기반 생성기 결과를 battle.enemies에 담아 반환).
+      // 여기서는 그 스냅샷을 전투 엔진이 실시간으로 쓰는 state.enemyUnits로 옮기기만 한다.
+      // 항상 대입해서, 적이 0명인 템플릿에 들어갔을 때 이전 전투의 enemyUnits가 남아있는
+      // 문제도 함께 없앤다.
+      state.enemyUnits = Array.isArray(battle.enemies) ? battle.enemies.slice() : [];
+
+      // 아군 배치: 출전 편성에서 선택된 영웅만 배치하고, 지형 타일은 절대 변경하지 않는다.
+      if (Array.isArray(state.playerUnits)) {
+        // 에디터에서 찍은 아군 스폰(map.spawnPoints.player)을 우선 쓰고, 없을 때만 예전 하단 고정 슬롯으로 대체한다.
+        const templatePlayerSpawns = (battle.map.spawnPoints && Array.isArray(battle.map.spawnPoints.player))
+          ? battle.map.spawnPoints.player : [];
+        const fallbackSlots = [
+          { x: 3, y: Math.max(0, rows - 2) },
+          { x: 4, y: Math.max(0, rows - 2) },
+          { x: 2, y: Math.max(0, rows - 2) },
+          { x: 5, y: Math.max(0, rows - 2) },
+          { x: 3, y: Math.max(0, rows - 1) },
+          { x: 4, y: Math.max(0, rows - 1) },
+          { x: 2, y: Math.max(0, rows - 1) },
+          { x: 5, y: Math.max(0, rows - 1) }
+        ];
+        const deploySlots = templatePlayerSpawns.length > 0 ? templatePlayerSpawns : fallbackSlots;
+        const alive = state.playerUnits.filter(u => !u.isDead);
+        // 선택 정보가 없으면(구버전 세이브 등) 기존처럼 전원 출전
+        const deployedIds = (Array.isArray(state.currentDeployedUnitIds) && state.currentDeployedUnitIds.length > 0)
+          ? state.currentDeployedUnitIds
+          : alive.map(u => u.id);
+        let slotIdx = 0;
+        alive.forEach(unit => {
+          if (deployedIds.includes(unit.id)) {
+            const slot = deploySlots[slotIdx % deploySlots.length];
+            slotIdx++;
+            unit.isDeployed = true;
+            unit.x = Math.min(cols - 1, slot.x);
+            unit.y = Math.min(rows - 1, slot.y);
+          } else {
+            // 미편성 영웅은 이번 전장 밖(-1,-1)에 두어 전투/렌더링에서 제외한다.
+            unit.isDeployed = false;
+            unit.x = -1;
+            unit.y = -1;
+          }
+        });
+      }
+
+      console.log(`✅ [Encounter] ${targetSectorId} (템플릿 ${templateId}, seed=${seed}) → state.currentBattle.map 완료`, {
+        tiles: battle.map.tiles.length,
+        enemies: battle.enemies.length,
+        cols,
+        rows
+      });
+      addLog(`🗺️ [Encounter] [${targetSectorId}] 템플릿 [${templateId}] 적용 — seed: ${seed} (${battle.map.tiles.length} tiles, 적 스폰 ${(battle.map.spawnPoints?.enemy || []).length}곳, 적 ${battle.enemies.length}명)`, 'gold');
+      return true;
+    }
+    window.enterEncounter = enterEncounter;
+
     // 1. 뷰 레이어 전환 엔진 (Strategy View <-> Sector Map)
     function switchGameView(targetView) {
       if (!state) return;
+
+      // 12단계: 이미 승리한 전투에서 "전략맵으로" 나가면 그 자리에서 결과 처리(보상/노드 완료)를 끝낸다.
+      // (승리 직후에는 isCombatActive가 꺼져 있어 일시정지 메뉴를 거치지 않고 곧장 전략맵으로 오기 때문)
+      if (targetView === 'STRATEGY' && state.currentBattle && state.currentBattle.status === 'won') {
+        finishEncounter({ victory: true });
+        return;
+      }
+      // 11단계: 진행 중인 전투(currentBattle) 없이 전술 화면으로 들어가는 길은 없다. 섹터 id로 몰래 전투를 만들지 않는다.
+      if (targetView !== 'STRATEGY' && targetView !== 'GACHA' && !(state.currentBattle && state.currentBattle.map && state.currentBattle.map.tiles && state.currentBattle.map.tiles.length)) {
+        const msg = '⚠️ 진행 중인 전투가 없습니다. 전략맵에서 노드를 선택해 출격하세요.';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        targetView = 'STRATEGY';
+      }
 
       // 전투 진행 중인 상태에서 전략 화면으로 전환을 시도하면 전술 일시정지 메뉴 호출
       const isCombatOngoing = !!(state && state.isCombatActive);
@@ -2812,99 +3497,53 @@
 
       const viewStrat = document.getElementById('view-strategy-main');
       const viewSector = document.getElementById('view-sector-field');
+      const viewGacha = document.getElementById('view-character-gacha');
 
-      if (targetView === 'STRATEGY') {
+      if (viewGacha) viewGacha.classList.toggle('active', targetView === 'GACHA');
+
+      if (targetView === 'GACHA') {
+        if (viewStrat) viewStrat.classList.remove('active');
+        if (viewSector) viewSector.classList.remove('active');
+        renderCharacterGacha();
+        addLog(`🎲 [캐릭터 가챠] 캐릭터 소환소를 열었습니다.`, 'system');
+      } else if (targetView === 'STRATEGY') {
         if (viewStrat) viewStrat.classList.add('active');
         if (viewSector) viewSector.classList.remove('active');
+        if (viewGacha) viewGacha.classList.remove('active');
         renderStrategyView();
         addLog(`🗺️ [전략 지휘 본부] 월드맵 및 출전 부대 편성 화면으로 이동했습니다.`, 'system');
       } else {
+        if (viewGacha) viewGacha.classList.remove('active');
         if (viewStrat) viewStrat.classList.remove('active');
         if (viewSector) viewSector.classList.add('active');
 
-        // 동적 섹터 ID 대응: loadAndRenderSectorMap(state.selectedSectorId) 자동 호출
-        const secId = state.selectedSectorId || (state.strategy && state.strategy.selectedSectorId) || state.currentSector || 'A-1';
+        // 전술 화면은 항상 state.currentBattle.map만 그린다 (위에서 전투 존재를 이미 확인했다).
+        const secId = state.currentBattle.sectorId;
         state.selectedSectorId = secId;
         state.currentSector = secId;
-
-        if (typeof window.loadAndRenderSectorMap === 'function') {
-          window.loadAndRenderSectorMap(secId);
-        } else {
-          renderGrid();
-          renderHeaderAndCard();
-          updateFullShotOverlay();
-        }
+        renderGrid();
+        renderHeaderAndCard();
+        updateFullShotOverlay();
 
         const curSec = WORLD_SECTORS[secId] || { id: secId, name: secId };
-        addLog(`⚔️ [전술 작전 전개] [${curSec.id} ${curSec.name}] 8x14 전술 필드로 진입했습니다.`, 'combat');
+        addLog(`⚔️ [전술 작전 전개] [${curSec.id} ${curSec.name}] 전술 필드로 진입했습니다.`, 'combat');
       }
       saveGameState(true);
     }
     window.switchGameView = switchGameView;
 
     // 2. 월드 섹터 노드 선택
-    function selectWorldSector(sectorId) {
-      const sec = WORLD_SECTORS[sectorId];
-      if (!sec) return;
-
-      if (sec.locked) {
-        const msg = `🔒 [작전 지역 잠김] ${sec.name}은(는) 상위 작전(A-2, B-1)을 완수한 후 개방됩니다.`;
-        addLog(msg, 'warning');
-        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
-        return;
-      }
-
-      state.selectedSectorId = sectorId;
-      state.currentSector = sectorId;
-
-      if (!state.strategy) {
-        state.strategy = {
-          commanderAP: 24,
-          maxCommanderAP: 24,
-          selectedSectorId: sectorId,
-          armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
-          activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
-        };
-      } else {
-        state.strategy.selectedSectorId = sectorId;
-      }
-
-      // 노드 핀 시각 갱신
-      document.querySelectorAll('.strat-node-pin').forEach(pin => {
-        pin.classList.remove('active');
-      });
-      const activePin = document.getElementById(`node-pin-${sectorId}`);
-      if (activePin) activePin.classList.add('active');
-
-      renderStrategyView();
-      addLog(`📍 [작전 목표 변경] [${sec.id} ${sec.name}] (${sec.difficulty}) 선택됨`, 'system');
-      saveGameState(true);
-    }
-    window.selectWorldSector = selectWorldSector;
+    // selectWorldSector()는 11단계에서 selectNode()로 대체되었다 (호환용 shim은 run 헬퍼 블록에 있음).
 
     // 3. 지휘관 패시브 스킬 토글
     function toggleCommanderSkill(skillKey) {
-      if (!state.strategy) return;
-      const current = !!state.strategy.activeSkills[skillKey];
-      state.strategy.activeSkills[skillKey] = !current;
-      if (state.commander && state.commander.unlockedSkills) {
-        state.commander.unlockedSkills[skillKey] = !current;
+      const unlocked = !!state.commander?.unlockedSkills?.[skillKey];
+      if (!unlocked) {
+        openSkillsModal();
+        addLog('스킬은 스킬트리에서 레벨업 선택권으로 해금할 수 있습니다.', 'system');
+      } else {
+        addLog('해금한 지휘관 스킬은 항상 적용됩니다. 별도 ON/OFF는 없습니다.', 'system');
       }
-
-      const chip = document.getElementById(`skill-chip-${skillKey}`);
-      if (chip) {
-        const togglePill = chip.querySelector('.strat-skill-toggle-pill');
-        if (!current) {
-          chip.classList.add('active');
-          if (togglePill) togglePill.textContent = 'ON';
-          addLog(`✨ [지휘관 스킬 활성화] ${skillKey} 패시브가 작전에 반영됩니다.`, 'gold');
-        } else {
-          chip.classList.remove('active');
-          if (togglePill) togglePill.textContent = 'OFF';
-          addLog(`⚪ [지휘관 스킬 해제] ${skillKey} 패시브가 비활성화되었습니다.`, 'system');
-        }
-      }
-      saveGameState(true);
     }
     window.toggleCommanderSkill = toggleCommanderSkill;
 
@@ -2948,8 +3587,316 @@
     }
     window.applyArmyPreset = applyArmyPreset;
 
+    // ========================================================================
+    // 캐릭터 가챠 / 소환소
+    // 원본 풀: Supabase 'characters' 컬렉션 -> customCharactersCloudCache
+    // 획득 기록: state.characterCollection (게임 상태에 함께 저장)
+    // ========================================================================
+    let gachaLastResults = [];
+
+    function getCharacterGachaPool() {
+      return Array.isArray(customCharactersCloudCache) ? customCharactersCloudCache.filter(c => c && c.id) : [];
+    }
+
+    function escapeGachaHtml(value) {
+      return String(value ?? '').replace(/[&<>'"]/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[ch]));
+    }
+
+    function getGachaClassName(charObj) {
+      const cls = charObj?.unitClass || charObj?.classType || 'KNIGHT';
+      return (typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls].name : cls;
+    }
+
+    function getGachaAvatarHtml(charObj) {
+      const name = escapeGachaHtml(charObj?.name || '영웅');
+      if (charObj?.imageUrl) return `<img src="${escapeGachaHtml(charObj.imageUrl)}" alt="${name}" />`;
+      const cls = charObj?.unitClass || charObj?.classType || 'KNIGHT';
+      const avatar = charObj?.avatar || ((typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls].avatar : '👤');
+      return `<span>${escapeGachaHtml(avatar)}</span>`;
+    }
+
+    function renderGachaCharacterCard(charObj, extraClass = '') {
+      const stats = charObj?.stats || {};
+      return `<div class="gacha-card ${extraClass}">
+        <div class="gacha-card-image">${getGachaAvatarHtml(charObj)}</div>
+        <div class="gacha-card-info">
+          <div class="gacha-card-name">${escapeGachaHtml(charObj?.name || '이름 없는 영웅')}</div>
+          <div class="gacha-card-class">${escapeGachaHtml(getGachaClassName(charObj))}</div>
+          <div class="gacha-card-stats">HP ${stats.hp || 100} · ATK ${stats.atk || 40} · DEF ${stats.def || 30}</div>
+        </div>
+      </div>`;
+    }
+
+    function renderCharacterGacha() {
+      const pool = getCharacterGachaPool();
+      const collection = Array.isArray(state?.characterCollection) ? state.characterCollection : [];
+      const poolCount = document.getElementById('gacha-pool-count');
+      const ownedCount = document.getElementById('gacha-owned-count');
+      const resultGrid = document.getElementById('gacha-result-grid');
+      const ownedGrid = document.getElementById('gacha-owned-grid');
+      const status = document.getElementById('gacha-status');
+      if (poolCount) poolCount.textContent = `DB ${pool.length}명`;
+      if (ownedCount) ownedCount.textContent = `보유 ${collection.length}명`;
+      if (status && pool.length > 0 && !status.dataset.busy) status.textContent = `소환 가능 캐릭터 ${pool.length}명`;
+
+      if (resultGrid) {
+        resultGrid.innerHTML = gachaLastResults.length
+          ? gachaLastResults.map(c => renderGachaCharacterCard(c, 'result')).join('')
+          : `<div class="gacha-empty">소환 결과가 여기에 표시됩니다.</div>`;
+      }
+
+      if (ownedGrid) {
+        if (!collection.length) {
+          ownedGrid.innerHTML = `<div class="gacha-empty">아직 소환한 캐릭터가 없습니다.</div>`;
+        } else {
+          const counts = new Map();
+          collection.forEach(entry => counts.set(entry.characterId, (counts.get(entry.characterId) || 0) + 1));
+          const ownedChars = [];
+          for (const [characterId, count] of counts.entries()) {
+            const base = pool.find(c => String(c.id) === String(characterId)) || collection.find(e => String(e.characterId) === String(characterId));
+            if (!base) continue;
+            const card = renderGachaCharacterCard(base);
+            ownedChars.push(card.replace('<div class="gacha-card ', `<div data-owned-count="${count}" class="gacha-card `));
+          }
+          ownedGrid.innerHTML = ownedChars.length ? ownedChars.join('') : `<div class="gacha-empty">현재 DB에서 확인할 수 없는 캐릭터만 보유하고 있습니다.</div>`;
+          ownedGrid.querySelectorAll('[data-owned-count]').forEach((el, idx) => {
+            const count = el.getAttribute('data-owned-count');
+            const badge = document.createElement('span');
+            badge.className = 'gacha-card-count';
+            badge.textContent = `×${count}`;
+            el.appendChild(badge);
+          });
+        }
+      }
+    }
+
+    async function openCharacterGacha() {
+      switchGameView('GACHA');
+      const status = document.getElementById('gacha-status');
+      const pool = getCharacterGachaPool();
+      if (pool.length > 0) return;
+      if (status) { status.textContent = '캐릭터 DB를 불러오는 중...'; status.dataset.busy = '1'; }
+      try {
+        if (typeof window.getCharactersFromCloud === 'function') {
+          const chars = await window.getCharactersFromCloud();
+          if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
+        }
+        const loaded = getCharacterGachaPool();
+        if (status) status.textContent = loaded.length ? `소환 가능 캐릭터 ${loaded.length}명` : '소환 가능한 캐릭터가 없습니다. DEV에서 캐릭터를 먼저 등록해주세요.';
+      } catch (err) {
+        console.error('Character gacha pool load error:', err);
+        if (status) status.textContent = '캐릭터 DB를 불러오지 못했습니다.';
+      } finally {
+        if (status) delete status.dataset.busy;
+        renderCharacterGacha();
+      }
+    }
+    window.openCharacterGacha = openCharacterGacha;
+
+    function closeCharacterGacha() {
+      switchGameView('STRATEGY');
+    }
+    window.closeCharacterGacha = closeCharacterGacha;
+
+    function clearGachaResults() {
+      gachaLastResults = [];
+      renderCharacterGacha();
+    }
+    window.clearGachaResults = clearGachaResults;
+
+    async function summonCharacters(amount = 1) {
+      const buttons = document.querySelectorAll('.gacha-summon-btn');
+      buttons.forEach(b => b.disabled = true);
+      const status = document.getElementById('gacha-status');
+      if (status) { status.textContent = '소환 중...'; status.dataset.busy = '1'; }
+      try {
+        let pool = getCharacterGachaPool();
+        if (!pool.length && typeof window.getCharactersFromCloud === 'function') {
+          const chars = await window.getCharactersFromCloud();
+          if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
+          pool = getCharacterGachaPool();
+        }
+        if (!pool.length) throw new Error('소환 가능한 캐릭터가 없습니다.');
+
+        const results = [];
+        for (let i = 0; i < amount; i++) {
+          results.push(pool[Math.floor(Math.random() * pool.length)]);
+        }
+        gachaLastResults = results;
+
+        if (!Array.isArray(state.characterCollection)) state.characterCollection = [];
+        results.forEach(character => {
+          state.characterCollection.push({
+            instanceId: `gacha_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            characterId: character.id,
+            acquiredAt: new Date().toISOString()
+          });
+        });
+
+        saveGameState(true);
+        renderCharacterGacha();
+        const names = results.map(c => c.name || '영웅').join(', ');
+        if (status) status.textContent = `${amount}회 소환 완료: ${names}`;
+        addLog(`🎲 [캐릭터 가챠] ${amount}회 소환 완료 — ${names}`, 'gold');
+      } catch (err) {
+        console.error('Character gacha error:', err);
+        if (status) status.textContent = err.message || '소환에 실패했습니다.';
+      } finally {
+        delete status?.dataset.busy;
+        buttons.forEach(b => b.disabled = false);
+      }
+    }
+    window.summonCharacters = summonCharacters;
+
     // 6. 전략 메인 화면 데이터 전체 렌더링
+    // ---- 전략 화면 지형 막대: 전술맵 템플릿 기준 ---------------------------------
+    const sectorTerrainCache = {}; // templateId -> {plain,forest,hill,water}
+    function applyTerrainBars(comp) {
+      const c = Object.assign({ plain: 0, forest: 0, hill: 0, water: 0 }, comp || {});
+      [['plain', '평지'], ['forest', '숲'], ['hill', '산악'], ['water', '강/바다']].forEach(([k, label]) => {
+        const el = document.getElementById(`strat-bar-${k}`);
+        if (!el) return;
+        el.style.width = `${c[k]}%`;
+        el.title = `${label} ${c[k]}%`;
+      });
+    }
+    async function refreshSectorTerrainBars(sectorId) {
+      const templateId = MapSchema.resolveDefaultTemplateId(sectorId);
+      if (!sectorTerrainCache[templateId]) {
+        try {
+          const loader = (typeof window.loadTacticalMapTemplateFromSupabase === 'function')
+            ? window.loadTacticalMapTemplateFromSupabase
+            : (window.SupabaseBridge && window.SupabaseBridge.loadTacticalMapTemplateFromSupabase
+                ? window.SupabaseBridge.loadTacticalMapTemplateFromSupabase.bind(window.SupabaseBridge) : null);
+          if (!loader) return;
+          const doc = await loader(templateId);
+          const tpl = MapSchema.normalizeTacticalMapTemplate(doc, templateId);
+          const comp = tpl ? MapSchema.computeTerrainComposition(tpl.tiles) : null;
+          if (!comp) return; // 저장된 템플릿이 없으면 기본 수치 유지
+          sectorTerrainCache[templateId] = comp;
+        } catch (e) {
+          console.warn('[Strategy] 지형 비율 계산용 템플릿 로드 실패', e);
+          return;
+        }
+      }
+      // 로딩 중에 다른 섹터로 바뀌었다면 덮어쓰지 않는다.
+      const nowSel = (state.strategy && state.strategy.selectedSectorId) || 'A-1';
+      if (nowSel === sectorId) applyTerrainBars(sectorTerrainCache[templateId]);
+    }
+    // 에디터가 저장한 직후 호출: 방금 저장한 타일로 캐시를 갱신한다.
+    window.updateSectorTerrainCache = function (templateId, tiles) {
+      const comp = MapSchema.computeTerrainComposition(tiles);
+      if (comp) sectorTerrainCache[templateId] = comp;
+    };
+
+    // Supabase에 저장된 월드 섹터를 게임의 섹터 레지스트리와 병합한다.
+    // 정적 WORLD_SECTORS는 기본 메타데이터, game_configs/world_sectors는 사용자 생성 섹터와 맵의 원본이다.
+    let worldSectorsLoadPromise = null;
+    async function ensureWorldSectorsLoaded(force = false) {
+      if (worldSectorsLoadPromise && !force) return worldSectorsLoadPromise;
+      worldSectorsLoadPromise = (async () => {
+        try {
+          const loader = window.loadGameConfigFromCloud || window.SupabaseBridge?.loadGameConfigFromCloud?.bind(window.SupabaseBridge);
+          if (typeof loader !== 'function') return;
+          const config = await loader('world_sectors');
+          const stored = Array.isArray(config?.worldSectors) ? config.worldSectors : [];
+          state.worldSectors = stored;
+          stored.forEach((saved) => {
+            if (!saved?.id) return;
+            const base = WORLD_SECTORS[saved.id] || {};
+            WORLD_SECTORS[saved.id] = {
+              ...base, ...saved,
+              id: String(saved.id),
+              name: saved.name || base.name || String(saved.id),
+              icon: saved.icon || base.icon || '🗺️',
+              difficulty: saved.difficulty || base.difficulty || 'NORMAL',
+              stars: saved.stars || base.stars || '★★☆☆☆',
+              terrainDesc: saved.terrainDesc || base.terrainDesc || '사용자 제작 전술 구역',
+              enemyForce: saved.enemyForce || base.enemyForce || '미확인 적군',
+              recPower: Number(saved.recPower ?? base.recPower ?? 400),
+              upkeep: Number(saved.upkeep ?? base.upkeep ?? 0),
+              clearReward: saved.clearReward || base.clearReward || '보상 미설정',
+              defaultTemplateId: saved.defaultTemplateId || saved.id,
+              locked: saved.locked === true
+            };
+          });
+          refreshWorldSectorNodes();
+        } catch (error) {
+          console.warn('[Strategy] 월드 섹터 동기화 실패', error);
+        } finally {
+          worldSectorsLoadPromise = null;
+        }
+      })();
+      return worldSectorsLoadPromise;
+    }
+    window.ensureWorldSectorsLoaded = ensureWorldSectorsLoaded;
+
+    function refreshWorldSectorNodes() {
+      const canvas = document.getElementById('strat-world-map-canvas');
+      const run = getRun();
+      if (!canvas || !run || !run.mapState) return;
+      ensureNodeSelection();
+      canvas.querySelectorAll('.strat-node-pin').forEach(n => n.remove());
+
+      // 층(layer)은 왼쪽→오른쪽, 같은 층의 노드는 위→아래로 배치한다.
+      const layers = run.mapState.layers;
+      const pos = {};
+      layers.forEach((layer, li) => {
+        const x = layers.length === 1 ? 50 : 8 + (li / (layers.length - 1)) * 84;
+        layer.forEach((id, i) => {
+          pos[id] = { x, y: layer.length === 1 ? 55 : 28 + (i / (layer.length - 1)) * 54 };
+        });
+      });
+
+      const svg = document.getElementById('strat-run-lines');
+      if (svg) {
+        const availIds = new Set(RunEngine.getAvailableNodes(run).map(n => n.id));
+        svg.innerHTML = run.mapState.nodes.map(n => n.next.map(t => {
+          const a = pos[n.id], b = pos[t];
+          if (!a || !b) return '';
+          const traveled = run.completedNodes.includes(n.id) && run.completedNodes.includes(t);
+          const open = n.id === run.currentNodeId && availIds.has(t);
+          const stroke = traveled ? '#16a34a' : open ? '#0284c7' : '#94a3b8';
+          const dash = traveled ? '' : open ? ' stroke-dasharray="3,2"' : ' stroke-dasharray="1.5,2"';
+          return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${stroke}" stroke-width="${traveled || open ? 1.6 : 1.1}" opacity="${traveled || open ? 0.9 : 0.45}"${dash} />`;
+        }).join('')).join('');
+      }
+
+      const statusText = { completed: '완료', available: '진입 가능', locked: '잠김' };
+      run.mapState.nodes.forEach(node => {
+        const p = pos[node.id];
+        if (!p) return;
+        const status = RunEngine.getNodeStatus(run, node.id);
+        const meta = RunEngine.NODE_META[node.type] || { icon: '❔', label: node.type };
+        const sec = WORLD_SECTORS[node.sectorId] || { name: node.sectorId };
+        const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})`;
+        const pin = document.createElement('div');
+        pin.className = `strat-node-pin run-node node-${node.type} is-${status}${state.selectedNodeId === node.id ? ' active' : ''}`;
+        pin.id = `node-pin-${node.id}`;
+        pin.style.left = `${p.x}%`;
+        pin.style.top = `${p.y}%`;
+        pin.setAttribute('role', 'button');
+        pin.setAttribute('tabindex', '0');
+        pin.setAttribute('aria-label', label);
+        pin.title = label;
+        pin.innerHTML = `<div class="strat-node-circle"><div class="strat-node-pulse"></div><span>${meta.icon}</span></div><span class="strat-node-tag">${meta.label}</span>`;
+        pin.addEventListener('click', () => selectNode(node.id));
+        pin.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(node.id); } });
+        canvas.appendChild(pin);
+      });
+
+      const hud = document.getElementById('strat-run-hud-text');
+      if (hud) {
+        hud.textContent = run.status === 'won'
+          ? `🏆 런 클리어 · ${run.seed}`
+          : `🧭 ${run.seed} · ${run.completedNodes.length}/${layers.length}층`;
+      }
+    }
+    window.refreshWorldSectorNodes = refreshWorldSectorNodes;
+
     function renderStrategyView() {
+      if (!state?.worldSectorsLoaded) { ensureWorldSectorsLoaded().then(() => { state.worldSectorsLoaded = true; renderStrategyView(); }); }
+      refreshWorldSectorNodes();
       if (!state) return;
       const strat = state.strategy || {
         commanderAP: 24,
@@ -2978,11 +3925,18 @@
       if (stratGold) stratGold.textContent = `${state.gold}G`;
       if (stratRewind) stratRewind.textContent = `${state.rewinders}/3`;
       if (stratGuestId && state.guest) {
-        stratGuestId.textContent = state.guest.firebaseUid ? `FB_${state.guest.firebaseUid.substring(0, 5)}` : state.guest.id;
+        stratGuestId.textContent = state.guest.supabaseUid ? `FB_${state.guest.supabaseUid.substring(0, 5)}` : state.guest.id;
       }
 
-      // Selected Sector Details
-      const curSec = WORLD_SECTORS[strat.selectedSectorId] || WORLD_SECTORS['A-1'];
+      // Selected Node -> Sector Details (11단계: 섹터가 아니라 "선택한 노드"가 기준)
+      const selNode = ensureNodeSelection();
+      const curSec = (selNode && WORLD_SECTORS[selNode.sectorId]) || WORLD_SECTORS[strat.selectedSectorId] || WORLD_SECTORS['A-1'];
+      if (selNode) {
+        strat.selectedSectorId = selNode.sectorId;
+        state.selectedSectorId = selNode.sectorId;
+        state.currentSector = selNode.sectorId;
+      }
+      const selNodeIsBattle = !selNode || RunEngine.isBattleType(selNode.type);
       const iconEl = document.getElementById('strat-sector-icon');
       const nameEl = document.getElementById('strat-sector-name-text');
       const diffBadge = document.getElementById('strat-sector-diff-badge');
@@ -2993,7 +3947,7 @@
       const rewardEl = document.getElementById('strat-sector-reward');
 
       if (iconEl) iconEl.textContent = curSec.icon;
-      if (nameEl) nameEl.textContent = `[${curSec.id}] ${curSec.name}`;
+      if (nameEl) nameEl.textContent = `${selNode ? (RunEngine.NODE_META[selNode.type]?.label || '') + ' · ' : ''}[${curSec.id}] ${curSec.name}`;
       if (diffBadge) {
         diffBadge.className = `strat-diff-badge ${curSec.difficulty.toLowerCase()}`;
         diffBadge.textContent = `${curSec.difficulty} ${curSec.stars}`;
@@ -3003,14 +3957,24 @@
       if (powerEl) powerEl.textContent = `${curSec.recPower} PWR`;
       if (upkeepEl) upkeepEl.textContent = `${curSec.upkeep}G / 턴`;
       if (rewardEl) rewardEl.textContent = curSec.clearReward;
+      if (!selNodeIsBattle) {
+        // 이벤트/상점 노드에는 적이 없다.
+        if (descEl) descEl.textContent = selNode.type === 'shop' ? '군수 물자를 구입할 수 있는 보급 거점입니다.' : '전투 없이 무작위 사건이 벌어지는 구역입니다.';
+        if (enemyEl) enemyEl.textContent = '— (전투 없음)';
+        if (powerEl) powerEl.textContent = '—';
+        if (upkeepEl) upkeepEl.textContent = '—';
+        if (rewardEl) rewardEl.textContent = selNode.type === 'shop' ? '골드로 구매' : '사건 결과에 따름';
+      }
 
       // Terrain Bars
       const bPlain = document.getElementById('strat-bar-plain');
       const bForest = document.getElementById('strat-bar-forest');
       const bHill = document.getElementById('strat-bar-hill');
-      if (bPlain) bPlain.style.width = `${curSec.terrainComposition.plain}%`;
-      if (bForest) bForest.style.width = `${curSec.terrainComposition.forest}%`;
-      if (bHill) bHill.style.width = `${curSec.terrainComposition.hill}%`;
+      // 지형 막대: 에디터에서 저장한 전술맵 템플릿에서 계산한 값을 우선 쓴다.
+      // 아직 로드되지 않았거나 저장된 템플릿이 없으면 WORLD_SECTORS의 기본 수치를 임시로 보여 주고,
+      // 곧바로 아래 refreshSectorTerrainBars()가 실제 맵 기준 값으로 교체한다.
+      applyTerrainBars(sectorTerrainCache[MapSchema.resolveDefaultTemplateId(curSec.id)] || curSec.terrainComposition);
+      refreshSectorTerrainBars(curSec.id);
 
       // Skill chips active states
       if (strat.activeSkills) {
@@ -3027,7 +3991,8 @@
 
       // 출전 부대 편성 = 아군 캐릭터(영웅) 기반 (1편성부대 = 1캐릭터, 통솔력 제한)
       const activeUnits = (state.playerUnits || []).filter(u => !u.isDead);
-      const totalUnits = activeUnits.length;
+      const selectedIds = ensureDeploySelectionInit();
+      const totalUnits = selectedIds.length;
       const maxLeadership = (typeof strat.commanderAP === 'number') ? strat.commanderAP : (strat.maxCommanderAP || 24);
 
       let totalPower = 0;
@@ -3043,15 +4008,19 @@
             const clsMeta = (typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls] : { name: cls, avatar: '👤' };
             const uPower = Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
             const uUpkeep = (u.upkeep !== undefined) ? u.upkeep : 10;
-            totalPower += uPower;
-            totalUpkeep += uUpkeep;
+            const isSelected = selectedIds.includes(u.id);
+            if (isSelected) {
+              totalPower += uPower;
+              totalUpkeep += uUpkeep;
+            }
 
             const avatarContent = u.imageUrl 
               ? `<img src="${u.imageUrl}" alt="${u.name}" style="width: 100%; height: 100%; object-fit: cover;" />`
               : `<span style="font-size: 15px;">${u.avatar || clsMeta.avatar || '👤'}</span>`;
 
             return `
-              <div class="strat-char-roster-item" title="${u.name} (클릭 시 캐릭터 상태창 열람)" onclick="selectRosterUnitAndOpenProfile('${u.id}')" role="button" tabindex="0">
+              <div class="strat-char-roster-item ${isSelected ? 'is-selected' : 'is-benched'}" title="${u.name} (클릭 시 출전 선택/해제)" onclick="toggleDeployUnitSelection('${u.id}')" role="checkbox" aria-checked="${isSelected}" tabindex="0">
+                <span class="strat-char-roster-check">${isSelected ? '✅' : '⬜'}</span>
                 <div class="strat-char-roster-avatar">
                   ${avatarContent}
                 </div>
@@ -3068,7 +4037,7 @@
                     <span style="color: #0284c7; font-weight: 800;">⚡ ${uPower} PWR</span>
                   </div>
                 </div>
-                <div class="strat-char-roster-badge ready">
+                <div class="strat-char-roster-badge ${isSelected ? 'ready' : 'benched'}" onclick="event.stopPropagation(); selectRosterUnitAndOpenProfile('${u.id}')">
                   상태창 🔍
                 </div>
               </div>
@@ -3077,7 +4046,7 @@
         }
       } else {
         // Fallback calculations if roster container missing
-        activeUnits.forEach(u => {
+        activeUnits.filter(u => selectedIds.includes(u.id)).forEach(u => {
           totalPower += Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
           totalUpkeep += (u.upkeep !== undefined ? u.upkeep : 10);
         });
@@ -3107,11 +4076,34 @@
 
       // Bottom Action Summary
       const destSummary = document.getElementById('strat-action-summary-dest');
-      if (destSummary) destSummary.textContent = `[${curSec.id} ${curSec.name}] 작전 준비`;
+      if (destSummary) destSummary.textContent = `[${curSec.id} ${curSec.name}] ${selNode ? nodeTypeLabel(selNode) + ' ' : ''}작전 준비`;
 
       const actionCostEl = document.getElementById('strat-action-summary-cost');
       if (actionCostEl) {
-        actionCostEl.textContent = `⚡ 통솔력 -5 AP 소모 | ${totalUnits} 영웅 부대 출동`;
+        actionCostEl.textContent = selNodeIsBattle
+          ? `⚡ 통솔력 -5 AP 소모 | ${totalUnits} 영웅 부대 출동`
+          : '⚡ AP 소모 없음 | 전투 없는 노드';
+      }
+
+      // 출격 버튼: 런 상태/노드 상태에 따라 문구와 활성 여부가 바뀐다.
+      const launchBtn = document.getElementById('btn-open-deploy-modal');
+      if (launchBtn && state.run) {
+        const nodeStatus = selNode ? RunEngine.getNodeStatus(state.run, selNode.id) : 'locked';
+        let enabled = false, text = '아직 열리지 않은 노드', icon = '🔒';
+        if (state.run.status !== 'active') { text = '런 종료 — 새 런을 시작하세요'; icon = '🏆'; }
+        else if (nodeStatus === 'completed') { text = '이미 완료한 노드'; icon = '✔'; }
+        else if (nodeStatus === 'available') {
+          enabled = true;
+          if (selNodeIsBattle) { text = '작전 개시 (출격)'; icon = '⚔️'; }
+          else if (selNode.type === 'shop') { text = '상점 입장'; icon = '🛒'; }
+          else { text = '이벤트 진행'; icon = '❓'; }
+        }
+        const spans = launchBtn.querySelectorAll('span');
+        if (spans[0]) spans[0].textContent = icon;
+        if (spans[1]) spans[1].textContent = text;
+        launchBtn.disabled = !enabled;
+        launchBtn.style.opacity = enabled ? '' : '0.55';
+        launchBtn.style.cursor = enabled ? '' : 'not-allowed';
       }
 
       // Header sub-tag in sector map view
@@ -3119,6 +4111,85 @@
       if (subTagEl) subTagEl.textContent = `SECTOR ${curSec.id}: ${curSec.name.toUpperCase()}`;
     }
     window.renderStrategyView = renderStrategyView;
+
+    // ------------------------------------------------------------------------
+    // 출전 부대 편성: 보유 영웅 중 이번 작전에 데려갈 영웅을 직접 고른다.
+    // state.strategy.deploySelectedIds = 출전 선택 영웅 id 목록
+    // ------------------------------------------------------------------------
+    function getDeployLeadershipLimit() {
+      const st = state.strategy || {};
+      return (typeof st.commanderAP === 'number') ? st.commanderAP : (st.maxCommanderAP || 24);
+    }
+
+    function ensureDeploySelectionInit() {
+      if (!state.strategy) return [];
+      const aliveIds = (state.playerUnits || []).filter(u => !u.isDead).map(u => u.id);
+      const st = state.strategy;
+      if (!Array.isArray(st.deployKnownIds)) st.deployKnownIds = [];
+
+      if (!Array.isArray(st.deploySelectedIds)) {
+        // 최초: 기존 동작(전원 출전)과 호환되도록 통솔력 한도 내에서 앞에서부터 자동 선택
+        st.deploySelectedIds = aliveIds.slice(0, getDeployLeadershipLimit());
+        st.deployKnownIds = aliveIds.slice();
+      } else {
+        // 새로 합류한 영웅은 자동으로 편성 명단에 추가 (한도 내에서)
+        aliveIds.forEach(id => {
+          if (!st.deployKnownIds.includes(id)) {
+            st.deployKnownIds.push(id);
+            if (st.deploySelectedIds.length < getDeployLeadershipLimit()) st.deploySelectedIds.push(id);
+          }
+        });
+        // 사망/이탈한 영웅은 선택 목록에서 제거
+        st.deploySelectedIds = st.deploySelectedIds.filter(id => aliveIds.includes(id));
+      }
+      return st.deploySelectedIds;
+    }
+
+    function getSelectedDeployUnits() {
+      const ids = ensureDeploySelectionInit();
+      return (state.playerUnits || []).filter(u => !u.isDead && ids.includes(u.id));
+    }
+
+    function toggleDeployUnitSelection(unitId) {
+      if (!state.strategy) return;
+      const sel = ensureDeploySelectionInit();
+      const idx = sel.indexOf(unitId);
+      if (idx >= 0) {
+        sel.splice(idx, 1);
+      } else {
+        const limit = getDeployLeadershipLimit();
+        if (sel.length >= limit) {
+          const msg = `⚠️ 통솔력 한도(${limit}부대)를 초과하여 더 편성할 수 없습니다.`;
+          addLog(msg, 'warning');
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+          return;
+        }
+        sel.push(unitId);
+      }
+      renderStrategyView();
+      saveGameState(true);
+    }
+    window.toggleDeployUnitSelection = toggleDeployUnitSelection;
+
+    function setDeploySelectionAll(selectAll) {
+      if (!state.strategy) return;
+      ensureDeploySelectionInit();
+      if (selectAll) {
+        const alive = (state.playerUnits || []).filter(u => !u.isDead).map(u => u.id);
+        const limit = getDeployLeadershipLimit();
+        state.strategy.deploySelectedIds = alive.slice(0, limit);
+        if (alive.length > limit) {
+          const msg = `⚠️ 통솔력 한도(${limit}부대)까지만 자동 선택되었습니다.`;
+          addLog(msg, 'warning');
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        }
+      } else {
+        state.strategy.deploySelectedIds = [];
+      }
+      renderStrategyView();
+      saveGameState(true);
+    }
+    window.setDeploySelectionAll = setDeploySelectionAll;
 
     // 전략 편성 화면에서 영웅 카드 클릭 시 캐릭터 상태창(풀샷 오버레이) 열기
     function selectRosterUnitAndOpenProfile(unitId) {
@@ -3139,10 +4210,20 @@
       if (!modal) return;
 
       const strat = state.strategy;
-      const curSec = WORLD_SECTORS[strat?.selectedSectorId || 'A-1'] || WORLD_SECTORS['A-1'];
+      // 11단계: 모달은 "선택한 노드"가 열려 있을 때만 뜬다. 이벤트/상점 노드는 출전 편성 없이 전용 창으로 간다.
+      const selNode = ensureNodeSelection();
+      const warnNode = (msg) => {
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+      };
+      if (!selNode) { warnNode('⚠️ 선택된 노드가 없습니다.'); return; }
+      if (state.run.status !== 'active') { warnNode('🏆 이번 런은 이미 종료되었습니다. 새 런을 시작하세요.'); return; }
+      if (!RunEngine.isNodeAvailable(state.run, selNode.id)) { warnNode('🔒 아직 열리지 않았거나 이미 완료한 노드입니다.'); return; }
+      if (!RunEngine.isBattleType(selNode.type)) { openRunNodeModal(selNode); return; }
+      const curSec = WORLD_SECTORS[selNode.sectorId] || { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '', recPower: 0 };
 
       // 총 부대 수 및 전투력 계산 (1편성부대 = 1캐릭터)
-      const activeUnits = (state.playerUnits || []).filter(u => !u.isDead);
+      const activeUnits = getSelectedDeployUnits();
       const totalUnits = activeUnits.length;
       const maxLeadership = (typeof strat?.commanderAP === 'number') ? strat.commanderAP : 24;
       let myPower = 0;
@@ -3159,8 +4240,8 @@
       const enemyNameEl = document.getElementById('deploy-sim-enemy-name');
       const diffEl = document.getElementById('deploy-sim-diff');
 
-      if (titleEl) titleEl.textContent = `[${curSec.id}] ${curSec.name} 강습 작전`;
-      if (descEl) descEl.textContent = `${curSec.terrainDesc} 아군 선봉 ${totalUnits}개 영웅 부대가 8x14 전술 필드로 워프 전개합니다.`;
+      if (titleEl) titleEl.textContent = `[${curSec.id}] ${curSec.name} ${nodeTypeLabel(selNode)} 작전`;
+      if (descEl) descEl.textContent = `${curSec.terrainDesc} 아군 선봉 ${totalUnits}개 영웅 부대가 전술 필드로 워프 전개합니다.`;
       if (myPowerEl) myPowerEl.textContent = `${myPower} PWR`;
       if (myUnitsEl) myUnitsEl.textContent = `${totalUnits}개 부대 (${totalUnits}명) 편성 완료`;
       if (enemyPowerEl) enemyPowerEl.textContent = `${curSec.recPower} PWR`;
@@ -3185,8 +4266,17 @@
     window.closeSectorDeployModal = closeSectorDeployModal;
 
     // 8. 강습 작전 개시 (출격)
-    function launchSectorOperation() {
+    async function launchSectorOperation() {
       if (!state.strategy) return;
+      // 11단계: 출격은 "지금 열려 있는 전투 노드"에서만 가능하다.
+      const launchNode = ensureNodeSelection();
+      if (!launchNode || state.run.status !== 'active' || !RunEngine.isBattleType(launchNode.type) || !RunEngine.isNodeAvailable(state.run, launchNode.id)) {
+        const msg = '⚠️ 출격할 수 있는 전투 노드가 선택되지 않았습니다.';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        closeSectorDeployModal();
+        return;
+      }
       if (state.strategy.commanderAP < 5) {
         const msg = '⚡ 통솔력(AP)이 부족합니다! (출격 필요: 5 AP)';
         addLog(msg, 'warning');
@@ -3194,8 +4284,15 @@
         return;
       }
 
-      const activeUnits = (state.playerUnits || []).filter(u => !u.isDead);
+      const activeUnits = getSelectedDeployUnits();
       const maxLeadership = state.strategy.commanderAP;
+      if (activeUnits.length === 0) {
+        const msg = '⚠️ 출전할 영웅이 편성되지 않았습니다. 출전 부대 편성에서 영웅을 선택하세요.';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        closeSectorDeployModal();
+        return;
+      }
       if (activeUnits.length > maxLeadership) {
         const msg = `⚠️ 현재 편성된 부대 수(${activeUnits.length}개)가 지휘관 통솔력(${maxLeadership})을 초과하여 출격할 수 없습니다!`;
         addLog(msg, 'warning');
@@ -3204,16 +4301,19 @@
       }
 
       // 1) state.selectedSectorId = currentSector.id; 현재 선택된 섹터 ID 저장
-      const activeSectorId = (state.strategy && state.strategy.selectedSectorId) || state.selectedSectorId || state.currentSector || 'A-1';
+      const activeSectorId = launchNode.sectorId;
       state.selectedSectorId = activeSectorId;
       state.currentSector = activeSectorId;
       if (state.strategy) state.strategy.selectedSectorId = activeSectorId;
+
+      // 이번 전투에 실제로 투입될 영웅 id를 전투 진입 전에 확정한다 (enterEncounter가 이 값으로 배치).
+      state.currentDeployedUnitIds = activeUnits.map(u => u.id);
 
       state.strategy.commanderAP -= 5;
       closeSectorDeployModal();
 
       const curSec = WORLD_SECTORS[activeSectorId] || { id: activeSectorId, name: activeSectorId };
-      addLog(`🚀 [작전 개시] [${curSec.id} ${curSec.name}] 전장으로 아군 선봉 ${activeUnits.length}개 부대가 출격했습니다! (-5 AP 소모)`, 'gold');
+      addLog(`🚀 [작전 개시] ${launchNode.id} · [${curSec.id} ${curSec.name}] 전장으로 아군 선봉 ${activeUnits.length}개 부대가 출격했습니다! (-5 AP 소모)`, 'gold');
 
       // 전술 전장 상태 초기화 및 전투 활성화 플래그 설정
       if (typeof window.resetTacticalBattleState === 'function') {
@@ -3242,7 +4342,20 @@
         window.gameState.currentView = sectorView;
       }
 
-      // 2) state.currentView = 'SECTOR_MAP' 전환 시 loadAndRenderSectorMap(state.selectedSectorId)를 자동 호출
+      // 2) 전투 진입은 enterEncounter() 하나만 담당한다.
+      const activeNodeId = launchNode.id;
+      const encounterReady = await enterEncounter(activeNodeId);
+      if (!encounterReady) {
+        // 맵 로드 실패 시 전투를 시작한 것으로 남기지 않는다.
+        state.isCombatActive = false;
+        state.strategy.commanderAP += 5;
+        state.currentView = 'STRATEGY';
+        renderStrategyView();
+        saveGameState(true);
+        return;
+      }
+
+      state.currentView = 'SECTOR_MAP';
       switchGameView('SECTOR_MAP');
     }
     window.launchSectorOperation = launchSectorOperation;
@@ -3408,6 +4521,8 @@
 
       modal.classList.add('open');
     }
+
+    window.openSkillsModal = openSkillsModal;
 
     function openSkillsModal() {
       const modal = document.getElementById('modal-skills');
@@ -3737,9 +4852,9 @@
     function saveClassImage(classType, imgSource) {
       const meta = CLASS_META[classType] || { name: classType };
 
-      // Base64인 경우 Firebase Storage에 직접 업로드하여 HTTPS URL 획득 후 Firestore 저장
+      // Base64인 경우 Supabase Storage에 직접 업로드하여 공개 URL 획득 후 Supabase 저장
       if (imgSource && imgSource.startsWith('data:') && typeof window.uploadCharacterAvatar === 'function') {
-        addLog(`☁️ [Firebase Storage] ${meta.name} 이미지를 클라우드 스토리지에 전송 중...`, 'system');
+        addLog(`☁️ [Supabase Storage] ${meta.name} 이미지를 클라우드 스토리지에 전송 중...`, 'system');
         window.uploadCharacterAvatar(imgSource, `class_${classType}`).then(downloadUrl => {
           customClassImages[classType] = downloadUrl;
           state.playerUnits.forEach(u => {
@@ -3750,7 +4865,7 @@
           if (typeof window.saveGameConfigToCloud === 'function') {
             window.saveGameConfigToCloud('unit_images', { customClassImages });
           }
-          addLog(`🎨 [캐릭터 이미지 적용] [${meta.name}] Firebase Storage URL이 성공적으로 등록되었습니다!`, 'success');
+          addLog(`🎨 [캐릭터 이미지 적용] [${meta.name}] Supabase Storage URL이 성공적으로 등록되었습니다!`, 'success');
           renderDebugImageManager();
           renderAll();
           updateFullShotOverlay();
@@ -3989,7 +5104,6 @@
     // 병과 선택 변경 시 기본 스탯, 추천 고유 스킬 및 실루엣 자동 동기화
     function onCustomClassSelectChanged(classType) {
       const presetStats = debugParams.unitClassStats[classType] || { atk: 40, def: 30, baseAP: 2, affection: 75, hp: 90 };
-      const defaultSkill = DEFAULT_CLASS_SKILLS[classType];
       const avatarMap = { KNIGHT: '🐴', MAGE: '🔮', ARCHER: '🏹', MELEE: '⚔️', FIREARM: '💥' };
       const avatar = avatarMap[classType] || '👤';
 
@@ -4005,25 +5119,9 @@
       if (mobInput) mobInput.value = presetStats.baseAP;
       if (placeholder && !createCharImageDataUrl) placeholder.textContent = avatar;
 
-      if (defaultSkill) {
-        const nameInput = document.getElementById('create-skill-name');
-        const typeSelect = document.getElementById('create-skill-type');
-        const targetSelect = document.getElementById('create-skill-target');
-        const effectInput = document.getElementById('create-skill-effect');
-        const apInput = document.getElementById('create-skill-ap');
-        const cdInput = document.getElementById('create-skill-cd');
-        const descInput = document.getElementById('create-skill-desc');
-
-        if (nameInput) nameInput.value = defaultSkill.name;
-        if (typeSelect) {
-          typeSelect.value = defaultSkill.type;
-          onCustomSkillTypeChanged(defaultSkill.type);
-        }
-        if (targetSelect) targetSelect.value = defaultSkill.targetType;
-        if (effectInput) effectInput.value = defaultSkill.effectValue;
-        if (apInput) apInput.value = defaultSkill.costAP;
-        if (cdInput) cdInput.value = defaultSkill.coolDown;
-        if (descInput) descInput.value = defaultSkill.description;
+      // 사용자가 손대지 않은 스킬트리 초안이면 새 병과의 추천 트리로 교체
+      if (window.UI && typeof window.UI.resetDevDraftSkillTree === 'function') {
+        window.UI.resetDevDraftSkillTree(classType);
       }
     }
 
@@ -4188,24 +5286,12 @@
       const def = Math.max(1, parseInt(defInput?.value, 10) || 35);
       const mobility = Math.max(1, Math.min(6, parseInt(mobInput?.value, 10) || 2));
 
-      // 고유 스킬 데이터 수집
-      const skillName = (document.getElementById('create-skill-name')?.value || '').trim() || `${charName}의 비기`;
-      const skillType = document.getElementById('create-skill-type')?.value || 'ACTIVE';
-      const skillTarget = document.getElementById('create-skill-target')?.value || 'BUFF';
-      const skillEffect = parseInt(document.getElementById('create-skill-effect')?.value, 10) || 30;
-      const skillCostAP = skillType === 'ACTIVE' ? (parseInt(document.getElementById('create-skill-ap')?.value, 10) || 1) : 0;
-      const skillCoolDown = skillType === 'ACTIVE' ? (parseInt(document.getElementById('create-skill-cd')?.value, 10) || 2) : 0;
-      const skillDesc = (document.getElementById('create-skill-desc')?.value || '').trim() || `${charName}의 고유 특수 기술입니다.`;
-
-      const customSkill = {
-        name: skillName,
-        type: skillType,
-        costAP: skillCostAP,
-        coolDown: skillCoolDown,
-        targetType: skillTarget,
-        effectValue: skillEffect,
-        description: skillDesc
-      };
+      // 스킬트리: DEV 빌더에서 만든 초안 (★ 노드는 생성 즉시 습득)
+      const skillTree = (typeof window.UI?.getDevDraftSkillTree === 'function')
+        ? window.UI.getDevDraftSkillTree()
+        : (window.SkillEngine ? SkillEngine.buildClassTree(unitClass) : []);
+      const initialSkillPoints = Math.max(0, parseInt(document.getElementById('create-char-sp')?.value, 10) || 0);
+      const learnedSkills = skillTree.filter(n => n.startsLearned).map(n => n.id);
 
       const avatarMap = { KNIGHT: '🐴', MAGE: '🔮', ARCHER: '🏹', MELEE: '⚔️', FIREARM: '💥' };
       const avatar = avatarMap[unitClass] || '👤';
@@ -4227,15 +5313,15 @@
 
       saveHistorySnapshot();
 
-      // Firebase Storage 이미지 업로드 처리 (DataURL일 경우 Cloud Storage에 영구 보관)
+      // Supabase Storage 이미지 업로드 처리 (DataURL일 경우 Cloud Storage에 영구 보관)
       let finalImageUrl = createCharImageDataUrl || '';
-      if (window.FirebaseBridge && createCharImageDataUrl && createCharImageDataUrl.startsWith('data:')) {
-        addLog('☁️ [Firebase Storage] 캐릭터 일러스트를 Firebase Storage에 업로드 중...', 'system');
+      if (window.SupabaseBridge && createCharImageDataUrl && createCharImageDataUrl.startsWith('data:')) {
+        addLog('☁️ [Supabase Storage] 캐릭터 일러스트를 Supabase Storage에 업로드 중...', 'system');
         try {
-          const uploadedUrl = await window.FirebaseBridge.uploadCharacterImage(createCharImageDataUrl, charName);
+          const uploadedUrl = await window.SupabaseBridge.uploadCharacterImage(createCharImageDataUrl, charName);
           if (uploadedUrl) {
             finalImageUrl = uploadedUrl;
-            addLog('✅ [Firebase Storage] 일러스트가 클라우드 Storage에 업로드되어 영구 URL이 발급되었습니다!', 'success');
+            addLog('✅ [Supabase Storage] 일러스트가 클라우드 Storage에 업로드되어 영구 URL이 발급되었습니다!', 'success');
           }
         } catch (storageErr) {
           console.warn('Storage upload fallback:', storageErr);
@@ -4273,11 +5359,13 @@
         isInactivated: false,
         isDead: false,
         promotions: { combatRank: 0 },
-        customSkill: customSkill,
-        customSkillCooldown: 0,
-        skillTree: (typeof window.UI?.getDevDraftSkillTree === 'function') 
-          ? window.UI.getDevDraftSkillTree() 
-          : (window.DEFAULT_SKILL_TREE_TEMPLATE ? JSON.parse(JSON.stringify(window.DEFAULT_SKILL_TREE_TEMPLATE)) : [])
+        skillTree: skillTree,
+        learnedSkills: learnedSkills,
+        skillTreeCustomized: true,
+        skillPoints: initialSkillPoints,
+        initialSkillPoints: initialSkillPoints,
+        skillCooldowns: {},
+        statuses: []
       };
 
       // 플레이어 유닛 등록
@@ -4287,11 +5375,11 @@
       // 영구 캐릭터 보관함에도 저장 (LocalStorage 백업)
       saveCustomCharacterRecord(newCharacter);
 
-      // Firestore 'characters' 컬렉션 동기화
-      if (window.FirebaseBridge) {
-        window.FirebaseBridge.syncCharacterToFirestore(newCharacter).then(ok => {
+      // Supabase 'characters' 컬렉션 동기화
+      if (window.SupabaseBridge) {
+        window.SupabaseBridge.syncCharacterToSupabase(newCharacter).then(ok => {
           if (ok) {
-            addLog(`🔥 [Firestore 동기화] 캐릭터 [${charName}] 데이터가 'characters' 컬렉션에 동기화되었습니다.`, 'gold');
+            addLog(`☁️ [Supabase 동기화] 캐릭터 [${charName}] 데이터가 'characters' 컬렉션에 동기화되었습니다.`, 'gold');
           }
         });
       }
@@ -4305,21 +5393,22 @@
       openFullShotOverlay(newCharacter);
 
       addLog(`✨ [신규 영웅 탄생!] Lv.1 ${charName} (${CLASS_META[unitClass]?.name || unitClass})이(가) 전장 (${spawnX}, ${spawnY})에 출진했습니다!`, 'gold');
-      addLog(`⚡ [고유 스킬 장착] [${customSkill.name}] (${customSkill.type}) - ${customSkill.description}`, 'system');
+      const startNames = skillTree.filter(n => learnedSkills.includes(n.id)).map(n => n.name);
+      addLog(`🌳 [스킬트리] ${skillTree.length}개 노드 · 시작 습득: ${startNames.join(', ') || '없음'} · SP ${initialSkillPoints}`, 'system');
     }
 
-    // In-memory cache for Firestore 'characters' collection (Zero LocalStorage)
+    // In-memory cache for Supabase 'characters' collection (Zero LocalStorage)
     let customCharactersCloudCache = [];
 
     function getStoredCustomCharacters() {
       return customCharactersCloudCache;
     }
 
-    // Firestore 전역 'characters' 컬렉션 동기화 (모든 접속자/기기/브라우저 간 완전 실시간 공유)
-    function syncGlobalCharactersFromFirestore(firestoreCharacters) {
-      if (!Array.isArray(firestoreCharacters)) return;
+    // Supabase 전역 'characters' 컬렉션 동기화 (모든 접속자/기기/브라우저 간 완전 실시간 공유)
+    function syncGlobalCharactersFromSupabase(cloudCharacters) {
+      if (!Array.isArray(cloudCharacters)) return;
       try {
-        customCharactersCloudCache = [...firestoreCharacters];
+        customCharactersCloudCache = [...cloudCharacters];
         // 최신 생성일자 순 정렬
         customCharactersCloudCache.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         renderCustomCharactersList();
@@ -4330,10 +5419,10 @@
 
     function saveCustomCharacterRecord(charObj) {
       try {
-        // Direct save to Cloud Firestore & Firebase Storage
+        // Direct save to Supabase (slg_records) & Storage
         if (typeof window.saveCharacterToCloud === 'function') {
           window.saveCharacterToCloud(charObj).then(() => {
-            console.log("☁️ [Cloud Character] 캐릭터 Firestore 동기화 완료:", charObj.id);
+            console.log("☁️ [Cloud Character] 캐릭터 Supabase 동기화 완료:", charObj.id);
           });
         }
         // 즉시 메모리 캐시 반영
@@ -4368,8 +5457,11 @@
 
       container.innerHTML = list.map(c => {
         const meta = CLASS_META[c.unitClass || c.classType] || { icon: c.avatar || '👤', name: c.unitClass || '영웅' };
-        const skill = c.customSkill || { name: '스킬 없음', type: 'PASSIVE', description: '-' };
-        const isActiveSkill = skill.type === 'ACTIVE';
+        const tree = Array.isArray(c.skillTree) ? c.skillTree : [];
+        const starts = tree.filter(n => n.startsLearned).map(n => n.name);
+        const skillSummary = c.customSkill
+          ? `🌟 ${c.customSkill.name}${tree.length ? ` · 트리 ${tree.length}개` : ''}`
+          : `🌳 트리 ${tree.length}개 노드${starts.length ? ` · 시작: ${starts.join(', ')}` : ''}`;
         const imgDisplay = c.imageUrl ? `<img src="${c.imageUrl}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;" alt="${c.name}" />` : `<span style="font-size: 20px;">${c.avatar || meta.icon}</span>`;
 
         return `
@@ -4387,13 +5479,13 @@
                   HP ${c.stats?.hp || 100} / ATK ${c.stats?.atk || 40} / DEF ${c.stats?.def || 30} / 호감도 ${c.favorability || 75}
                 </div>
                 <div style="font-size: 9.5px; color: #6366f1; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;">
-                  ⚡ [${skill.name}] <span style="color:#64748b;">${isActiveSkill ? `(AP ${skill.costAP}, 쿨${skill.coolDown}턴)` : '(PASSIVE)'}</span>: ${skill.description}
+                  ${skillSummary}
                 </div>
               </div>
             </div>
 
             <div style="display: flex; gap: 4px; flex-shrink: 0;">
-              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0284c7;" onclick="if(window.renderDevSkillTreeEditor) window.renderDevSkillTreeEditor('${c.id}'); else if(window.UI?.renderDevSkillTreeEditor) window.UI.renderDevSkillTreeEditor('${c.id}');" title="스킬트리 편집 및 커스텀 아이콘 관리">
+              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0284c7;" onclick="openCharacterSkillTreeEditor('${c.id}')" title="스킬 · 스킬트리 편집">
                 🌳 트리
               </button>
               <button class="btn-cheat purple" style="font-size: 9px; padding: 4px 7px;" onclick="spawnSavedCustomCharacter('${c.id}')" title="현재 전장에 이 캐릭터를 추가 배치합니다.">
@@ -4406,6 +5498,57 @@
           </div>
         `;
       }).join('');
+    }
+
+    // 캐릭터 풀(Supabase characters) 레코드 하나를 전투 유닛으로 만든다.
+    // 아군 소환(spawnSavedCustomCharacter)과 적 자동 생성(buildEnemyPool)이 "같은 함수"를 쓰므로
+    // 같은 캐릭터는 아군으로 나오든 적으로 나오든 같은 스탯/스킬 구조를 가진다.
+    // o: { id, owner, x, y, level, statMultiplier, fullHp }
+    function characterRecordToUnit(target, o = {}) {
+      const clone = (v) => JSON.parse(JSON.stringify(v));
+      const mult = Number(o.statMultiplier) || 1;
+      const scale = (v) => Math.max(1, Math.round((Number(v) || 0) * mult));
+      const baseStats = target.stats || { hp: 100, maxHp: 100, atk: 40, def: 30, mobility: 2 };
+      const maxHp = scale(baseStats.maxHp || baseStats.hp || 100);
+      const hp = o.fullHp ? maxHp : scale(baseStats.hp || 100);
+      const atk = scale(baseStats.atk || 40);
+      const def = scale(baseStats.def || 30);
+      const ap = Number(baseStats.mobility) || 2;
+      const stats = clone(baseStats);
+      if (mult !== 1) Object.assign(stats, { hp, maxHp, atk, def });
+      return {
+        id: o.id || ('custom_' + Date.now()),
+        owner: o.owner || 'PLAYER',
+        sourceCharacterId: target.id || null,
+        name: target.name,
+        unitClass: target.unitClass || target.classType,
+        classType: target.classType || target.unitClass,
+        avatar: target.avatar || '👤',
+        level: Number(o.level) || 1,
+        stats,
+        hp,
+        maxHp,
+        atk,
+        def,
+        baseAP: ap,
+        ap,
+        favorability: target.favorability || 75,
+        affection: target.favorability || 75,
+        upkeep: 10,
+        x: o.x,
+        y: o.y,
+        imageUrl: target.imageUrl || '',
+        isInactivated: false,
+        isDead: false,
+        promotions: { combatRank: 0 },
+        customSkill: target.customSkill ? clone(target.customSkill) : undefined,
+        customSkillCooldown: 0,
+        skillTree: target.skillTree ? clone(target.skillTree) : (window.DEFAULT_SKILL_TREE_TEMPLATE ? clone(window.DEFAULT_SKILL_TREE_TEMPLATE) : []),
+        skillTreeCustomized: !!target.skillTreeCustomized,
+        skillPoints: (o.owner || 'PLAYER') === 'ENEMY' ? 0 : (Number(target.initialSkillPoints) >= 0 ? Number(target.initialSkillPoints) : 2),
+        skillCooldowns: {},
+        statuses: []
+      };
     }
 
     function spawnSavedCustomCharacter(charId) {
@@ -4425,34 +5568,7 @@
         if (empty) { spawnX = empty.x; spawnY = empty.y; }
       }
 
-      const copyChar = {
-        id: newId,
-        owner: 'PLAYER',
-        name: target.name,
-        unitClass: target.unitClass || target.classType,
-        classType: target.classType || target.unitClass,
-        avatar: target.avatar || '👤',
-        level: 1,
-        stats: JSON.parse(JSON.stringify(target.stats || { hp: 100, maxHp: 100, atk: 40, def: 30, mobility: 2 })),
-        hp: target.stats?.hp || 100,
-        maxHp: target.stats?.maxHp || target.stats?.hp || 100,
-        atk: target.stats?.atk || 40,
-        def: target.stats?.def || 30,
-        baseAP: target.stats?.mobility || 2,
-        ap: target.stats?.mobility || 2,
-        favorability: target.favorability || 75,
-        affection: target.favorability || 75,
-        upkeep: 10,
-        x: spawnX,
-        y: spawnY,
-        imageUrl: target.imageUrl || '',
-        isInactivated: false,
-        isDead: false,
-        promotions: { combatRank: 0 },
-        customSkill: JSON.parse(JSON.stringify(target.customSkill)),
-        customSkillCooldown: 0,
-        skillTree: target.skillTree ? JSON.parse(JSON.stringify(target.skillTree)) : (window.DEFAULT_SKILL_TREE_TEMPLATE ? JSON.parse(JSON.stringify(window.DEFAULT_SKILL_TREE_TEMPLATE)) : [])
-      };
+      const copyChar = characterRecordToUnit(target, { id: newId, owner: 'PLAYER', x: spawnX, y: spawnY });
 
       state.playerUnits.push(copyChar);
       selectedUnitId = newId;
@@ -4463,30 +5579,79 @@
       addLog(`✨ [보관함 소환] ${copyChar.name}이(가) 전장 (${spawnX}, ${spawnY})에 출격했습니다!`, 'gold');
     }
 
+    // 보관함 캐릭터의 스킬트리 편집 (저장 시 클라우드 레코드와 로스터의 같은 캐릭터에 반영)
+    function openCharacterSkillTreeEditor(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record || !window.SkillEditor) return;
+      let draft = JSON.parse(JSON.stringify(Array.isArray(record.skillTree) ? record.skillTree : []));
+      document.getElementById('sk-char-tree-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'sk-char-tree-modal';
+      overlay.className = 'sk-modal-overlay';
+      overlay.innerHTML = `
+        <div class="sk-modal">
+          <div class="sk-modal-head"><span>🌳 ${SkillEditor.esc(record.name)} — 스킬 · 스킬트리 편집</span><button class="btn-close" data-close>✕</button></div>
+          <div class="sk-modal-body"><div data-builder></div></div>
+          <div class="sk-modal-foot">
+            <button class="btn-cheat" style="background:#64748b;" data-close>닫기</button>
+            <button class="btn-cheat purple" data-save>💾 스킬트리 저장</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const close = () => overlay.remove();
+      overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      SkillEditor.mountBuilder(overlay.querySelector('[data-builder]'), {
+        getTree: () => draft,
+        setTree: (t) => { draft = t; },
+        getClassType: () => record.unitClass || record.classType || 'DEFAULT'
+      });
+      overlay.querySelector('[data-save]').onclick = () => {
+        record.skillTree = JSON.parse(JSON.stringify(draft));
+        record.skillTreeCustomized = true;
+        if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+        const ids = new Set(draft.map(n => n.id));
+        (state.playerUnits || []).forEach(u => {
+          if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+          if (u !== record) u.skillTree = JSON.parse(JSON.stringify(draft));
+          u.skillTreeCustomized = true;
+          const learned = Array.isArray(u.learnedSkills) ? u.learnedSkills.filter(id => ids.has(id)) : [];
+          draft.forEach(n => { if (n.startsLearned && !learned.includes(n.id)) learned.push(n.id); });
+          u.learnedSkills = learned;
+        });
+        saveGameState(true);
+        renderCustomCharactersList();
+        updateFullShotOverlay();
+        addLog(`🌳 [스킬트리 저장] ${record.name}: ${draft.length}개 노드`, 'gold');
+        close();
+      };
+    }
+    window.openCharacterSkillTreeEditor = openCharacterSkillTreeEditor;
+
     function deleteSavedCustomCharacter(charId) {
       customCharactersCloudCache = customCharactersCloudCache.filter(c => c.id !== charId);
       if (typeof window.deleteCharacterFromCloud === 'function') {
         window.deleteCharacterFromCloud(charId);
       }
       renderCustomCharactersList();
-      addLog('🗑️ Firestore 클라우드 보관함에서 선택한 영웅이 영구 삭제되었습니다.', 'system');
+      addLog('🗑️ Supabase 클라우드 보관함에서 선택한 영웅이 영구 삭제되었습니다.', 'system');
     }
 
     function initCustomCharCreationForm() {
       setupCustomCharDropzone();
       renderCustomCharactersList();
-      // Load initial character list from Cloud Firestore
+      // Load initial character list from Supabase
       if (typeof window.getCharactersFromCloud === 'function') {
         window.getCharactersFromCloud().then(chars => {
           if (Array.isArray(chars) && chars.length > 0) {
-            syncGlobalCharactersFromFirestore(chars);
+            syncGlobalCharactersFromSupabase(chars);
           }
         });
       }
       // Real-time synchronization
       if (typeof window.subscribeCharacterList === 'function') {
         window.subscribeCharacterList((chars) => {
-          syncGlobalCharactersFromFirestore(chars);
+          syncGlobalCharactersFromSupabase(chars);
         });
       }
       if (typeof window.renderDevSkillTreeEditor === 'function') {
@@ -4586,179 +5751,211 @@
         }
       }
 
-      // Visual Custom Skill Card (고유 스킬 연출 및 상태 렌더링)
-      const skillContainer = document.getElementById('fullshot-skill-card-container');
-      if (skillContainer) {
-        if (unit.customSkill) {
-          const s = unit.customSkill;
-          const isActive = s.type === 'ACTIVE';
-          const cdLeft = unit.customSkillCooldown || 0;
-          const isAffDanger = unit.affection <= 30;
-
-          let targetBadgeText = '💖 아군 회복/버프';
-          if (s.targetType === 'SINGLE_TARGET') targetBadgeText = '🎯 단일 강타';
-          else if (s.targetType === 'AOE') targetBadgeText = '💥 사거리 광역';
-          else if (s.targetType === 'SELF') targetBadgeText = '🌟 자신 가속';
-
-          let btnHtml = '';
-          if (isActive) {
-            if (unit.isInactivated) {
-              btnHtml = `<button class="fullshot-btn-use-skill" disabled title="유지비 체납으로 정지됨">체납 정지</button>`;
-            } else if (cdLeft > 0) {
-              btnHtml = `<button class="fullshot-btn-use-skill" disabled title="쿨다운 대기 중">대기 ${cdLeft}턴</button>`;
-            } else if (unit.ap < s.costAP) {
-              btnHtml = `<button class="fullshot-btn-use-skill" disabled title="AP 부족 (필요: ${s.costAP})">AP ${s.costAP} 부족</button>`;
-            } else {
-              btnHtml = `<button class="fullshot-btn-use-skill" onclick="executeCustomSkill(getSelectedUnit())" title="클릭하여 고유 스킬 즉시 발동">⚡ 스킬 발동</button>`;
-            }
-          } else {
-            btnHtml = `<span class="fullshot-skill-type-pill passive" style="font-size: 8.5px; padding: 2px 6px;">항시 적용(PASSIVE)</span>`;
-          }
-
-          const skillImg = s.imageUrl ? `<img src="${s.imageUrl}" alt="${s.name}" style="width:20px; height:20px; border-radius:4px; object-fit:cover; border:1px solid rgba(251,191,36,0.5);">` : `<span style="font-size: 13px;">${isActive ? '⚡' : '🛡️'}</span>`;
-
-          skillContainer.className = 'fullshot-skill-card-container has-skill';
-          skillContainer.innerHTML = `
-            <div class="fullshot-skill-header">
-              <div class="fullshot-skill-title-wrap">
-                ${skillImg}
-                <span class="fullshot-skill-name" title="${s.name}">${s.name}</span>
-                <span class="fullshot-skill-type-pill ${isActive ? 'active' : 'passive'}">${isActive ? 'ACTIVE' : 'PASSIVE'}</span>
-                ${s.tier ? `<span style="font-size: 8px; font-weight:800; background:#3b82f6; color:#fff; border-radius:3px; padding:1px 4px;">T${s.tier}</span>` : ''}
-              </div>
-              <div style="display: flex; align-items: center; gap: 4px;">
-                ${isActive ? `<span class="fullshot-skill-cost-pill">AP -${s.costAP}</span>` : ''}
-                ${isActive && s.coolDown > 0 ? `<span style="font-size: 8.5px; color: #64748b; font-weight: 700;">쿨 ${s.coolDown}턴</span>` : ''}
-              </div>
-            </div>
-            <div class="fullshot-skill-desc" title="${s.description}">${s.description}</div>
-            <div class="fullshot-skill-meta-row">
-              <span class="fullshot-skill-target-tag">${targetBadgeText} (수치: ${s.effectValue}${s.type === 'PASSIVE' ? '%' : ''})</span>
-              ${btnHtml}
-            </div>
-          `;
-        } else {
-          skillContainer.className = 'fullshot-skill-card-container';
-          skillContainer.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; font-size: 10px; color: #64748b;">
-              <span>✨ 등록된 고유 스킬이 없습니다</span>
-              <button class="btn-cheat purple" style="font-size: 8.5px; padding: 2px 6px;" onclick="openDebugModal('create-char')">✨ 스킬 생성</button>
-            </div>
-          `;
-        }
-      }
+      // 스킬 목록 (고유 스킬 + 스킬트리에서 습득한 스킬) 및 현재 상태이상
+      renderFullshotSkillList(unit);
     }
 
     /* --------------------------------------------------------------------------
-       Custom Skill Execution Logic (고유 스킬 판정 및 발동 로직)
+       Skill Usage (skillEngine.js 연동: 스킬 목록 · 대상 선택 · 시전 연출)
        -------------------------------------------------------------------------- */
-    function executeCustomSkill(unit) {
-      if (!unit || unit.isDead) return;
-      const s = unit.customSkill;
-      if (!s) {
-        addLog(`⚠️ [스킬 없음] ${unit.name}에게 등록된 고유 스킬이 없습니다.`, 'warning');
-        return;
-      }
-      if (s.type === 'PASSIVE') {
-        addLog(`🛡️ [패시브 고유 스킬] ${unit.name}의 [${s.name}]은(는) 상시 발동 패시브입니다! 교전 시 공방 +${s.effectValue}%가 자동 적용됩니다.`, 'gold');
-        return;
-      }
-      if (unit.isInactivated) {
-        addLog(`🚫 [발동 불가] ${unit.name}은(는) 유지비 체납으로 행동이 정지된 상태입니다.`, 'danger');
-        return;
-      }
-      if (unit.customSkillCooldown > 0) {
-        addLog(`⏳ [쿨다운 대기] [${s.name}]의 재사용 대기시간이 아직 ${unit.customSkillCooldown}턴 남았습니다.`, 'warning');
-        return;
-      }
-      if (unit.ap < s.costAP) {
-        addLog(`⚡ [AP 부족] [${s.name}] 발동에 필요한 AP(${s.costAP})가 부족합니다. (현재: ${unit.ap})`, 'warning');
-        return;
-      }
+    function isTacticalBattleActive() {
+      return !!(state.currentBattle && state.currentView === 'SECTOR_MAP');
+    }
 
-      // 호감도 30 이하 전투/명령 거부 제약 체크 (공격형/원거리 스킬 시)
-      if (unit.affection <= 30 && (s.targetType === 'SINGLE_TARGET' || s.targetType === 'AOE')) {
-        const skills = state.commander.unlockedSkills;
-        if (!skills.Berserk) {
-          addLog(`❌ [스킬 거부!] ${unit.name}의 호감도가 ${unit.affection}으로 극히 낮아 위험한 스킬 명령을 거부합니다!`, 'danger');
-          addLog(`💬 "${unit.name}: 지휘관님의 무리한 스킬 지시엔 따르지 않겠습니다!"`, 'warning');
-          return;
+    function renderFullshotSkillList(unit) {
+      const box = document.getElementById('fullshot-skill-card-container');
+      if (!box || !unit || !window.SkillEngine) return;
+      const esc = window.SkillEditor ? SkillEditor.esc : (v) => String(v);
+      const iconOf = (sk, size) => window.SkillEditor ? SkillEditor.iconHtml(sk, size) : (sk.icon || '⚡');
+      const skills = SkillEngine.getUnitSkills(unit);
+      const isPlayer = unit.owner !== 'ENEMY';
+      const inBattle = isTacticalBattleActive() && typeof unit.x === 'number';
+
+      const statusChips = SkillEngine.getStatuses(unit).map(st => {
+        const def = SkillEngine.EFFECTS[st.type] || {};
+        const val = ['BUFF_ATK', 'BUFF_DEF', 'DEBUFF_ATK', 'DEBUFF_DEF', 'MARK'].includes(st.type) ? ` ${st.value}%` : (['SHIELD', 'DOT', 'REGEN'].includes(st.type) ? ` ${st.value}` : '');
+        return `<span class="fs-status ${def.hostile ? 'bad' : ''}" title="${esc(st.source || '')}">${def.icon || '•'} ${esc((def.label || st.type).split(' ')[0])}${val} · ${st.turns}턴</span>`;
+      }).join('');
+
+      const rows = skills.map(sk => {
+        let btn;
+        if (sk.type === 'PASSIVE') btn = '<span class="fullshot-skill-type-pill passive">상시</span>';
+        else if (!isPlayer) btn = `<span class="fullshot-skill-cost-pill">AP ${sk.costAP}</span>`;
+        else if (!inBattle) btn = '<button class="fs-skill-btn" disabled>전투 중</button>';
+        else {
+          const check = SkillEngine.canCast(unit, sk);
+          btn = check.ok
+            ? `<button class="fs-skill-btn" data-skill-use="${esc(sk.id)}">사용 · AP ${sk.costAP}</button>`
+            : `<button class="fs-skill-btn" disabled>${esc(check.reason)}</button>`;
         }
-      }
+        return `
+          <div class="fs-skill ${sk.type === 'PASSIVE' ? 'passive' : ''}" title="${esc(sk.description)}">
+            <div class="fs-skill-icon">${iconOf(sk, 20)}</div>
+            <div class="fs-skill-main">
+              <div class="fs-skill-name">${sk.isSignature ? '🌟 ' : ''}${esc(sk.name)}${sk.type === 'ACTIVE' ? ` <span style="font-weight:700;color:#94a3b8;font-size:8.5px;">대기 ${sk.coolDown}</span>` : ''}</div>
+              <div class="fs-skill-desc">${esc(sk.description)}</div>
+            </div>
+            ${btn}
+          </div>`;
+      }).join('');
 
+      box.className = 'fullshot-skill-card-container has-skill';
+      box.innerHTML = `
+        <div class="fs-skill-head">
+          <span>⚡ 스킬 ${skills.length}개${isPlayer ? ` · <span style="color:#d97706;">SP ${Number(unit.skillPoints) || 0}</span>` : ''}</span>
+          ${isPlayer ? '<button class="btn-cheat purple" style="font-size: 8.5px; padding: 2px 6px;" data-skill-tree-open="1">🌳 스킬트리</button>' : ''}
+        </div>
+        ${statusChips ? `<div class="fs-status-row">${statusChips}</div>` : ''}
+        <div class="fs-skill-list">${rows || '<div style="font-size:10px;color:#94a3b8;padding:4px 0;">습득한 스킬이 없습니다. 스킬트리에서 SP로 습득하세요.</div>'}</div>`;
+
+      box.querySelectorAll('[data-skill-use]').forEach(b => { b.onclick = () => useUnitSkill(unit.id, b.dataset.skillUse); });
+      const treeBtn = box.querySelector('[data-skill-tree-open]');
+      if (treeBtn) treeBtn.onclick = () => onFullshotSkillClicked();
+    }
+
+    function findPlayerSkill(unitId, skillId) {
+      const unit = state.playerUnits.find(u => u.id === unitId && !u.isDead) || null;
+      const skill = unit && window.SkillEngine ? SkillEngine.getUnitSkills(unit).find(sk => sk.id === skillId) : null;
+      return { unit, skill };
+    }
+
+    function useUnitSkill(unitId, skillId) {
+      if (isEnemyTurnProcessing) return;
+      const { unit, skill } = findPlayerSkill(unitId, skillId);
+      if (!unit || !skill) return;
+      if (!isTacticalBattleActive()) {
+        addLog('⚠️ 스킬은 전술 전투 중에만 사용할 수 있습니다.', 'warning');
+        return;
+      }
+      const check = SkillEngine.canCast(unit, skill);
+      if (!check.ok) {
+        addLog(`⚠️ [${skill.name}] 사용 불가: ${check.reason}`, 'warning');
+        return;
+      }
+      const hostile = skill.effects.some(e => (SkillEngine.EFFECTS[e.type] || {}).hostile);
+      if (hostile && unit.affection <= 30 && !state.commander.unlockedSkills.Berserk) {
+        addLog(`❌ [스킬 거부!] ${unit.name}의 호감도가 ${unit.affection}으로 극히 낮아 위험한 스킬 명령을 거부합니다!`, 'danger');
+        return;
+      }
+      if (skill.targeting.mode === 'SELF') {
+        performSkillCast(unit, skill, unit.x, unit.y);
+        return;
+      }
+      skillTargeting = { unitId, skillId };
+      selectedUnitId = unitId;
+      closeFullShotOverlay();
+      renderSkillTargetingBanner(skill);
+      renderAll();
+      addLog(`🎯 [${skill.name}] 보라색 칸에서 대상을 선택하세요. (${SkillEngine.describeTargeting(skill)})`, 'system');
+    }
+
+    function castTargetedSkillAt(x, y) {
+      const { unit, skill } = skillTargeting ? findPlayerSkill(skillTargeting.unitId, skillTargeting.skillId) : {};
+      if (!unit || !skill) { cancelSkillTargeting(); return; }
+      if (!SkillEngine.isValidTarget(unit, skill, x, y)) {
+        addLog('⚠️ 지정할 수 없는 칸입니다. 보라색 칸을 선택하거나 상단의 취소를 누르세요.', 'warning');
+        return;
+      }
+      performSkillCast(unit, skill, x, y);
+    }
+
+    function performSkillCast(unit, skill, x, y) {
+      if (!SkillEngine.isValidTarget(unit, skill, x, y)) return false;
       saveHistorySnapshot();
-
-      const effectVal = Number(s.effectValue) || 30;
-      let executed = false;
-
-      if (s.targetType === 'BUFF') {
-        // 아군 및 자신 회복 + 이번 턴 공격/방어 버프
-        unit.hp = Math.min(unit.maxHp, unit.hp + effectVal);
-        unit.customSkillBuffAtk = 0.25;
-        unit.customSkillBuffDef = 0.25;
-
-        // 인접 아군도 회복
-        const allies = state.playerUnits.filter(u => !u.isDead && u.id !== unit.id && Math.abs(u.x - unit.x) <= 1 && Math.abs(u.y - unit.y) <= 1);
-        allies.forEach(a => {
-          a.hp = Math.min(a.maxHp, a.hp + Math.round(effectVal * 0.7));
-          a.customSkillBuffAtk = 0.20;
-          a.customSkillBuffDef = 0.20;
-        });
-
-        addLog(`✨ [고유 스킬 발동: ${s.name}] ${unit.name}이(가) 신성한 수호 성벽을 전개했습니다! HP +${effectVal} 회복 및 공격·방어 +25% 증폭! (인접 아군 ${allies.length}기 연계 수혜)`, 'gold');
-        executed = true;
-
-      } else if (s.targetType === 'SELF') {
-        // 자신 행동력 회복 및 재생
-        unit.ap = unit.baseAP;
-        unit.hp = Math.min(unit.maxHp, unit.hp + effectVal);
-        addLog(`🌟 [고유 스킬 발동: ${s.name}] ${unit.name}이(가) 내재된 잠재력을 각성하여 행동력(AP)을 전량(${unit.baseAP}) 회복하고 HP +${effectVal}을 치유했습니다!`, 'gold');
-        executed = true;
-
-      } else if (s.targetType === 'SINGLE_TARGET') {
-        // 사거리 2칸 내의 적 타격
-        const inRange = state.enemyUnits.filter(e => !e.isDead && (Math.abs(e.x - unit.x) + Math.abs(e.y - unit.y) <= 2));
-        if (inRange.length === 0) {
-          addLog(`⚠️ [사거리 밖] 2칸 내에 [${s.name}]의 목표로 삼을 적군이 없습니다. 적 근처로 접근하세요.`, 'warning');
-          return;
-        }
-        // 타겟팅 우선순위: 현재 검사 중인 적 or 첫 번째 적
-        const target = inRange.find(e => e.id === cardInspectedEnemyId) || inRange[0];
-        target.hp = Math.max(0, target.hp - effectVal);
-        if (target.hp <= 0) {
-          target.isDead = true;
-          addLog(`💥 [고유 스킬 격살!] ${unit.name}의 [${s.name}]이(가) ${target.name}에게 ${effectVal}의 치명타를 꽂아 넣어 격퇴했습니다!`, 'success');
-        } else {
-          addLog(`⚡ [고유 스킬 명중!] ${unit.name}의 [${s.name}]이(가) ${target.name}에게 ${effectVal} 피해를 입혔습니다! (적 잔여 HP: ${target.hp}/${target.maxHp})`, 'combat');
-        }
-        executed = true;
-
-      } else if (s.targetType === 'AOE') {
-        // 사거리 2칸 내의 모든 적에게 광역 피해
-        const inRange = state.enemyUnits.filter(e => !e.isDead && (Math.abs(e.x - unit.x) + Math.abs(e.y - unit.y) <= 2));
-        if (inRange.length === 0) {
-          addLog(`⚠️ [사거리 밖] 사거리 2칸 내에 [${s.name}] 폭격을 가할 적군이 없습니다.`, 'warning');
-          return;
-        }
-        let killedCount = 0;
-        inRange.forEach(target => {
-          target.hp = Math.max(0, target.hp - effectVal);
-          if (target.hp <= 0) {
-            target.isDead = true;
-            killedCount++;
-          }
-        });
-        addLog(`💥 [고유 광역 스킬 작렬: ${s.name}] ${unit.name}의 융단 폭격이 반경 2칸 내 적군 ${inRange.length}기에게 각각 ${effectVal} 피해를 입혔습니다! (격퇴: ${killedCount}기)`, 'gold');
-        executed = true;
+      const res = SkillEngine.cast(unit, skill, x, y);
+      if (!res.ok) {
+        addLog(`⚠️ [${skill.name}] ${res.reason}`, 'warning');
+        return false;
       }
+      cancelSkillTargeting(true);
+      if (typeof checkPartyWipeout === 'function') checkPartyWipeout();
+      if (typeof window.checkTacticalVictory === 'function') window.checkTacticalVictory();
+      renderAll();
+      showSkillFloatTexts(res.results);
+      updateFullShotOverlay();
+      updateDebugInspector();
+      saveGameState();
+      return true;
+    }
 
-      if (executed) {
-        unit.ap = Math.max(0, unit.ap - s.costAP);
-        unit.customSkillCooldown = s.coolDown;
-        saveGameState();
+    function cancelSkillTargeting(silent) {
+      const had = !!skillTargeting;
+      skillTargeting = null;
+      const banner = document.getElementById('skill-targeting-banner');
+      if (banner) banner.remove();
+      if (!silent && had) {
+        addLog('↩️ 스킬 사용을 취소했습니다.', 'system');
         renderAll();
-        updateFullShotOverlay();
       }
+    }
+
+    function renderSkillTargetingBanner(skill) {
+      let banner = document.getElementById('skill-targeting-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'skill-targeting-banner';
+        banner.className = 'skill-targeting-banner';
+        document.body.appendChild(banner);
+      }
+      const esc = window.SkillEditor ? SkillEditor.esc : (v) => String(v);
+      banner.innerHTML = `
+        <div>🎯 ${esc(skill.name)} — 대상 칸을 선택하세요<small>${esc(SkillEngine.describeTargeting(skill))}</small></div>
+        <button type="button">취소</button>`;
+      banner.querySelector('button').onclick = () => cancelSkillTargeting();
+    }
+
+    function previewSkillArea(caster, skill, x, y) {
+      document.querySelectorAll('#grid-map .tile.skill-aoe').forEach(el => el.classList.remove('skill-aoe'));
+      if (!caster || !skill || !window.SkillEngine) return;
+      SkillEngine.getAffectedTiles(caster, skill, x, y).forEach(p => {
+        const el = document.querySelector(`#grid-map .tile[data-x="${p.x}"][data-y="${p.y}"]`);
+        if (el) el.classList.add('skill-aoe');
+      });
+    }
+
+    function appendStatusIcons(avatarEl, units) {
+      if (!window.SkillEngine) return;
+      const icons = [];
+      units.forEach(u => SkillEngine.getStatuses(u).forEach(st => {
+        const icon = (SkillEngine.EFFECTS[st.type] || {}).icon;
+        if (icon && !icons.includes(icon)) icons.push(icon);
+      }));
+      if (!icons.length) return;
+      const el = document.createElement('div');
+      el.className = 'unit-status-icons';
+      el.textContent = icons.slice(0, 3).join('') + (icons.length > 3 ? '+' : '');
+      avatarEl.appendChild(el);
+    }
+
+    function showSkillFloatTexts(results) {
+      if (!Array.isArray(results)) return;
+      const perTile = {};
+      results.forEach(r => {
+        const key = `${r.unit.x},${r.unit.y}`;
+        const idx = perTile[key] = (perTile[key] || 0) + 1;
+        const tileEl = document.querySelector(`#grid-map .tile[data-x="${r.unit.x}"][data-y="${r.unit.y}"]`);
+        if (!tileEl) return;
+        const span = document.createElement('span');
+        span.className = 'skill-float-text';
+        span.textContent = r.text;
+        span.style.color = r.color || '#fff';
+        span.style.top = `${10 + (idx - 1) * 22}%`;
+        span.style.animationDelay = `${(idx - 1) * 0.12}s`;
+        tileEl.appendChild(span);
+        setTimeout(() => span.remove(), 1500);
+      });
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && skillTargeting) cancelSkillTargeting();
+    });
+
+    // 하위호환: 예전 고유 스킬 버튼 (첫 번째 액티브 스킬을 사용한다)
+    function executeCustomSkill(unit) {
+      if (!unit || !window.SkillEngine) return;
+      const skills = SkillEngine.getUnitSkills(unit);
+      const sk = skills.find(x => x.isSignature && x.type === 'ACTIVE') || skills.find(x => x.type === 'ACTIVE');
+      if (sk) useUnitSkill(unit.id, sk.id);
     }
 
     function openFullShotOverlay(targetUnit) {
@@ -4792,7 +5989,7 @@
     function onFullshotMoveClicked() {
       const unit = currentOverlayTargetUnit || getSelectedUnit();
       if (!unit || unit.isDead) return;
-      if (state.currentView === 'STRATEGY') {
+      if (state.currentView === 'STRATEGY' && state.currentBattle) {
         switchGameView('SECTOR_MAP');
       }
       if (unit.isInactivated) {
@@ -4813,7 +6010,7 @@
     function onFullshotAttackClicked() {
       const unit = currentOverlayTargetUnit || getSelectedUnit();
       if (!unit || unit.isDead) return;
-      if (state.currentView === 'STRATEGY') {
+      if (state.currentView === 'STRATEGY' && state.currentBattle) {
         switchGameView('SECTOR_MAP');
       }
       if (unit.isInactivated) {
@@ -4837,10 +6034,10 @@
     }
 
     function onFullshotSkillClicked() {
-      const unit = getSelectedUnit();
+      const unit = currentOverlayTargetUnit || getSelectedUnit();
       if (!unit || unit.isDead) return;
       if (typeof window.renderPromotionMenu === 'function') {
-        window.renderPromotionMenu(unit);
+        window.renderPromotionMenu(unit, { tab: 'skills' });
       } else if (typeof window.UI?.renderPromotionMenu === 'function') {
         window.UI.renderPromotionMenu(unit);
       } else if (unit.customSkill) {
@@ -5502,61 +6699,59 @@
         });
       }
 
-      // Firebase Cloud Firestore & Auth 자동 연동 리스너 설정 (Zero LocalStorage)
-      window.onFirebaseUserReady = function(user) {
+      // Supabase Supabase & Auth 자동 연동 리스너 설정 (Zero LocalStorage)
+      window.onSupabaseUserReady = function(user) {
         if (!user || !user.uid) return;
         try {
-          console.log("🔥 [Firebase Ready] Cloud Firestore 연동 활성화:", user.uid);
+          console.log("🔥 [Supabase Ready] Supabase 연동 활성화:", user.uid);
           if (state && state.guest) {
-            state.guest.firebaseUid = user.uid;
+            state.guest.supabaseUid = user.uid;
           }
           const guestIdEl = document.getElementById('ui-guest-id');
           if (guestIdEl) {
             guestIdEl.textContent = `FB_${user.uid.substring(0, 5)}`;
-            guestIdEl.title = `Firebase 익명 인증 UID: ${user.uid}`;
+            guestIdEl.title = `Supabase 게스트 UID: ${user.uid}`;
           }
-          addLog(`🔥 [Firebase 연동 완료] 익명 인증(UID: ${user.uid.substring(0, 8)}...) 및 Firestore/Storage 실시간 동기화 활성화!`, 'gold');
+          addLog(`🔥 [Supabase 연동 완료] 게스트(UID: ${user.uid.substring(0, 8)}...) 및 DB/Storage 실시간 동기화 활성화!`, 'gold');
 
           if (typeof window.loadGameStateFromCloud === 'function') {
             window.loadGameStateFromCloud().then(data => {
               if (data) {
                 loadGameState(data);
-                addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Firestore에서 복원되었습니다. (Turn ${state.turn})`, 'system');
+                addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
             }).catch(e => console.warn(e));
           }
           if (typeof window.getCharactersFromCloud === 'function') {
             window.getCharactersFromCloud().then(chars => {
               if (Array.isArray(chars) && chars.length > 0) {
-                syncGlobalCharactersFromFirestore(chars);
+                syncGlobalCharactersFromSupabase(chars);
               }
             }).catch(e => console.warn(e));
           }
           if (typeof window.subscribeCharacterList === 'function') {
             try {
               window.subscribeCharacterList((chars) => {
-                syncGlobalCharactersFromFirestore(chars);
+                syncGlobalCharactersFromSupabase(chars);
               });
             } catch (e) {
               console.warn(e);
             }
           }
 
-          // Firestore 'maps' 컬렉션에 현재 맵 데이터 동기화
-          if (window.FirebaseBridge && typeof window.FirebaseBridge.syncMapToFirestore === 'function') {
-            window.FirebaseBridge.syncMapToFirestore('default_map', tiles);
-            saveGameState(true);
-          }
+          // (제거됨) 예전에는 기본 8x10 맵을 Supabase 'maps/default_map'에 올렸다.
+          // 전술 맵은 tacticalMap 템플릿(에디터 산출물)만이 원본이므로 더 이상 기본맵을 동기화하지 않는다.
+          saveGameState(true);
 
           applyStoredCustomImages();
         } catch (err) {
-          console.warn('onFirebaseUserReady error:', err);
+          console.warn('onSupabaseUserReady error:', err);
         }
       };
 
-      // 이미 Firebase가 준비되어 있는 경우 즉시 동기화
-      if (window.FirebaseBridge && window.FirebaseBridge.isReady && window.FirebaseBridge.currentUser) {
-        window.onFirebaseUserReady(window.FirebaseBridge.currentUser);
+      // 이미 Supabase가 준비되어 있는 경우 즉시 동기화
+      if (window.SupabaseBridge && window.SupabaseBridge.isReady && window.SupabaseBridge.currentUser) {
+        window.onSupabaseUserReady(window.SupabaseBridge.currentUser);
       }
 
       // 저장된 커스텀 캐릭터 이미지 복원 및 DEV 패널 초기화
@@ -5615,7 +6810,7 @@
     window.addSkillToTree = addSkillToTree;
     window.updateSkillImage = updateSkillImage;
     window.getCharacterSkillTree = getCharacterSkillTree;
-    window.syncGlobalCharactersFromFirestore = syncGlobalCharactersFromFirestore;
+    window.syncGlobalCharactersFromSupabase = syncGlobalCharactersFromSupabase;
 
     // Window Load
     if (document.readyState === 'loading') {
@@ -5923,7 +7118,7 @@
         unit.skillTree.push(newSkill);
       }
 
-      // Save state to LocalStorage and optional Firestore
+      // Save state to LocalStorage and optional Supabase
       saveGameState();
 
       addLog(`✨ [스킬트리 추가] ${unit.name}에게 새로운 스킬 [${newSkill.name}] (Tier ${newSkill.tier}) 트리가 등록되었습니다.`, 'gold');
@@ -5938,7 +7133,7 @@
     }
 
     /**
-     * Updates the specific skill's imageUrl (Firebase Storage HTTPS URL) and saves to Cloud Firestore.
+     * Updates the specific skill's imageUrl (Supabase Storage 공개 URL) and saves to Supabase.
      *
      * @param {string|number} characterId - Target character/unit ID
      * @param {string} skillId - Target skill node ID
@@ -6148,7 +7343,7 @@
             clearInterval(intervalId);
             modal.style.display = 'none';
             modal.classList.remove('active');
-            const activeTiles = (state.tiles || (typeof tiles !== 'undefined' ? tiles : []) || []);
+            const activeTiles = getBattleTiles();
             const safeTile = activeTiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village')) || { x: 1, y: 1, name: '평화로운 마을' };
             const safeTownName = safeTile?.name || '평화로운 마을';
             if (state.playerUnits && state.playerUnits.length > 0) {
@@ -6248,34 +7443,30 @@
 
       const totalDefeatedCount = count;
 
-      // 2. Gold Reward (100% Probability): goldEarned = defeatedEnemyCount * 100
-      const goldEarned = totalDefeatedCount * 100;
-      if (window.playerState) {
-        window.playerState.gold = (window.playerState.gold || 0) + goldEarned;
-      }
-      if (state && typeof state.gold === 'number' && state.gold !== window.playerState?.gold) {
-        state.gold = (state.gold || 0) + goldEarned;
-      }
+      // 2~4. 12단계: 보상의 기준은 전투 진입 시 seed로 정해 둔 state.currentBattle.rewards다.
+      //      여기서는 "무엇을 받게 되는지"만 계산해 보여 주고, 실제 지급은 finishEncounter()가
+      //      전략맵 복귀 시 딱 한 번 수행한다 (승리 모달을 여러 번 띄워도 이중 지급되지 않는다).
+      const battle = state && state.currentBattle;
+      const battleRewards = battle && Array.isArray(battle.rewards) ? battle.rewards : null;
+      if (!battleRewards) console.warn('[Victory] state.currentBattle.rewards가 없어 표시용 기본값을 사용합니다.');
+      const goldEarned = battleRewards
+        ? battleRewards.filter(r => r && r.type === 'gold').reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+        : totalDefeatedCount * 100;
+      const rewinderGranted = battleRewards
+        ? battleRewards.some(r => r && r.type === 'rewinder' && Number(r.amount) > 0)
+        : false;
 
-      // 3. Rewinder Item Reward (50% Probability): Math.random() < 0.5 -> rewinderGranted
-      const rewinderGranted = Math.random() < 0.5;
-      if (rewinderGranted) {
-        if (window.playerState) {
-          window.playerState.rewinders = (window.playerState.rewinders || 0) + 1;
-        }
-        if (state && typeof state.rewinders === 'number' && state.rewinders !== window.playerState?.rewinders) {
-          state.rewinders = (state.rewinders || 0) + 1;
-        }
-      }
-
-      // 4. Package result object
       const rewardData = {
         gold: goldEarned,
         rewinderGranted: rewinderGranted,
         defeatedCount: totalDefeatedCount
       };
+      if (battle) {
+        battle.status = 'won';
+        battle.result = { ...rewardData };
+      }
 
-      addLog(`✨ [전투 승리 전리품] 적군 ${totalDefeatedCount}기 격퇴 보상: +${goldEarned}G 국고 추가 획득!${rewinderGranted ? ' ⏳ [시간 왜곡 보너스] 시공간 리와인더 +1개 획득!' : ''}`, 'gold');
+      addLog(`✨ [전투 승리 전리품] 적군 ${totalDefeatedCount}기 격퇴 보상: +${goldEarned}G${rewinderGranted ? ' · ⏳ 시공간 리와인더 +1개' : ''} (전략맵 복귀 시 지급)`, 'gold');
 
       // 5. Trigger UI: Call window.UI.showVictoryModal(rewardData) immediately upon victory calculation
       if (window.UI && typeof window.UI.showVictoryModal === 'function') {
@@ -6609,7 +7800,7 @@
      * @returns {Object|null} Safe tile object if adjacent/on, null otherwise.
      */
     function isPlayerAtSafeZone() {
-      if (!state || !state.tiles) return null;
+      if (!state || getBattleTiles().length === 0) return null;
 
       const livingUnits = (state.playerUnits || []).filter(u => !u.isDead);
       if (livingUnits.length === 0) return null;
@@ -6800,7 +7991,12 @@
     window.GameEngine.executeCombat = executeCombat;
     window.GameEngine.calculateCombatModifiers = calculateCombatModifiers;
     window.GameEngine.getState = () => (typeof state !== 'undefined' ? state : null);
-    window.GameEngine.getTiles = () => (typeof tiles !== 'undefined' ? tiles : []);
+    window.GameEngine.getTiles = () => getBattleTiles();
+
+    // 다른 <script>(ui.js/civ4-editor.js 등)가 호출할 수 있도록 전역 렌더링 진입점을 명시적으로 노출한다.
+    window.renderGrid = renderGrid;
+    window.renderHeaderAndCard = renderHeaderAndCard;
+    window.updateFullShotOverlay = updateFullShotOverlay;
 
     // ============================================================================
     // Navigation Flow & Combat Cleanup Logic
@@ -6840,7 +8036,7 @@
             state?.turn || 1,
             state?.playerUnits || [],
             state?.enemyUnits || [],
-            (typeof tiles !== 'undefined' ? tiles : [])
+            getBattleTiles()
           )
         : {
             sectorId: activeSectorId,
@@ -6900,112 +8096,133 @@
     }
 
     /**
-     * 2. Tactical Stage Completion & Full Combat Cleanup
-     * Called ONLY after combat is fully finished (e.g., after victory modal rewards
-     * are claimed or tactical retreat is confirmed).
+     * 12단계: 전투 결과 처리의 단일 진입점.
      *
-     * @param {boolean} [isVictory=true] - Whether combat concluded with victory
+     *   전투 종료 → 보상 지급 → 플레이어 상태 저장 → 노드 완료 처리 → 다음 노드 해금 → 전략맵 복귀
+     *
+     * 승리/후퇴/패배 어느 경로로 끝나든(승리 모달 버튼, 전술적 후퇴, 유지비 파산, 전략맵 복귀 버튼)
+     * 전부 이 함수 하나를 지난다. 진행 중인 전투가 없으면 아무 일도 하지 않는다(중복 호출 안전).
+     *
+     * 판정 규칙:
+     *   - 이미 승리 처리(currentBattle.status === 'won')된 전투는 나중에 어떤 경로로 나가든 "승리"다.
+     *     (승리 후 "계속 탐색"하다가 일시정지 메뉴의 후퇴로 나가도 노드는 완료된다.)
+     *   - 승리가 아니면 노드는 완료되지 않는다. 같은 노드에 다시 도전할 수 있다 (새 seed로 새 전장).
+     *
+     * @param {{victory?:boolean, retreated?:boolean, reason?:string}} [result]
+     * @returns {{victory:boolean, reason:string, casualties:Array, rewards:Array, unlockedNodes:string[], runWon:boolean, encounterId:string, nodeId:string}|null}
+     */
+    function finishEncounter(result = {}) {
+      const battle = state && state.currentBattle;
+      if (!battle) {
+        console.warn('[finishEncounter] 진행 중인 전투가 없어 무시합니다.');
+        return null;
+      }
+      const run = state.run;
+      const node = RunEngine.getNode(run, battle.nodeId);
+      const victory = battle.status === 'won' ? true : !!result.victory;
+      const reason = result.reason || (victory ? 'victory' : (result.retreated ? 'retreat' : 'defeat'));
+
+      // 1) 전투 종료: 단일 진실 공급원 state.isCombatActive 종료 (getter로 연결된 곳 동시 반영)
+      state.isCombatActive = false;
+      state.isCombatPaused = false;
+      state.savedTacticalState = null;
+      window.isCombatPaused = false;
+      [window.playerState, window.gameState].forEach(o => {
+        if (o) { o.isCombatPaused = false; o.savedTacticalState = null; }
+      });
+
+      // 2) 사상자: 이번 전투에 출전했다가 쓰러진 영웅 (유닛 자체의 isDead 상태는 전투 중 이미 반영되어 있다)
+      const deployed = Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [];
+      const casualties = (state.playerUnits || [])
+        .filter(u => deployed.includes(u.id) && (u.isDead || (typeof u.hp === 'number' && u.hp <= 0)))
+        .map(u => ({ id: u.id, name: u.name }));
+
+      // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화, 승리 시 생존한 출전 영웅에게 SP +1
+      cancelSkillTargeting(true);
+      (state.playerUnits || []).forEach(u => {
+        if (window.SkillEngine) SkillEngine.resetBattleState(u);
+        if (victory && deployed.includes(u.id) && !u.isDead) u.skillPoints = (Number(u.skillPoints) || 0) + 1;
+      });
+      if (victory && deployed.length) addLog('🌳 [스킬 포인트] 생존한 출전 영웅 전원 SP +1 — 풀샷 창의 🌳 스킬트리에서 새 스킬을 습득하세요.', 'gold');
+
+      // 3) 보상 지급 (승리 시에만, 전투 진입 때 seed로 정해 둔 battle.rewards 그대로)
+      const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];
+      rewards.forEach(r => {
+        if (r.type === 'gold') state.gold += Number(r.amount) || 0;
+        else if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
+      });
+
+      // 4) 노드 완료 처리 + 다음 노드 해금
+      let unlockedNodes = [];
+      let runWon = false;
+      if (victory && node) {
+        const res = RunEngine.completeNode(run, node.id);
+        if (res.ok) {
+          unlockedNodes = res.unlockedNodes;
+          runWon = res.runWon;
+        } else {
+          console.warn('[finishEncounter] 노드 완료 실패:', res.reason);
+        }
+      }
+      RunEngine.recordEncounter(run, battle, victory, { reason, casualties: casualties.map(c => c.id), rewards });
+      if (victory) {
+        // 노드가 하나 끝났으니 지휘 AP를 회복한다 (AP는 "한 전투 출격 비용"이라 전투 사이에 채워져야 런이 이어진다).
+        if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
+      }
+
+      // 5) 전투 인스턴스 정리: 결과는 run.encounters에 요약으로 남고, 맵/적 데이터는 버린다.
+      battle.status = victory ? 'won' : 'lost';
+      const finished = {
+        victory,
+        reason,
+        casualties,
+        rewards,
+        unlockedNodes,
+        runWon,
+        encounterId: battle.id,
+        nodeId: battle.nodeId
+      };
+      state.currentBattle = null;
+      state.enemyUnits = [];
+      historyStack = [];
+      state.selectedNodeId = null;
+      ensureNodeSelection();
+
+      // 6) 로그
+      const secLabel = `${battle.sectorId}`;
+      if (victory) {
+        const rewardText = rewards.map(r => r.type === 'gold' ? `+${r.amount}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
+        addLog(`🚩 [작전 완수] ${battle.nodeId} (${secLabel}) 클리어 — 보상: ${rewardText || '없음'} · 다음 노드: ${unlockedNodes.join(', ') || '없음'}`, 'gold');
+        if (casualties.length) addLog(`🕯️ [사상자] ${casualties.map(c => c.name).join(', ')}`, 'warning');
+        if (runWon) {
+          addLog(`🏆 [런 클리어] 보스를 격파했습니다! (seed ${run.seed}) — "🔄 새 런"으로 다시 도전할 수 있습니다.`, 'gold');
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast('🏆 런 클리어! 보스를 격파했습니다.', 'success');
+        }
+      } else if (reason === 'retreat') {
+        addLog(`🏳️ [전술 후퇴] ${battle.nodeId} (${secLabel}) 전장에서 이탈했습니다. 노드는 완료되지 않았습니다.`, 'warning');
+      } else {
+        addLog(`💀 [작전 실패] ${battle.nodeId} (${secLabel}) — ${reason}. 노드는 완료되지 않았습니다.`, 'danger');
+      }
+
+      // 7) 열려 있는 전투 관련 오버레이(일시정지/승리 모달) 정리 후 전략맵 복귀 + 플레이어 상태 저장
+      if (window.UI && typeof window.UI.hidePauseOverlay === 'function') window.UI.hidePauseOverlay();
+      const victoryModalEl = document.getElementById('modal-tactical-victory');
+      if (victoryModalEl) { victoryModalEl.style.display = 'none'; victoryModalEl.classList.remove('active'); }
+      state.currentView = 'STRATEGY';
+      [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = 'STRATEGY'; });
+      switchGameView('STRATEGY');
+      renderStrategyView();
+      saveGameState();
+      return finished;
+    }
+    window.finishEncounter = finishEncounter;
+
+    /**
+     * 하위호환 래퍼: 승리 모달 버튼 / 후퇴 핸들러가 부르던 이름. 실제 처리는 finishEncounter()가 한다.
+     * @param {boolean} [isVictory=true]
      */
     function completeTacticalStage(isVictory = true) {
-      const views = window.GAME_VIEWS || {
-        WORLD_STRATEGY: 'WORLD_STRATEGY',
-        SECTOR_FIELD: 'SECTOR_FIELD',
-        STRATEGY_MENU_OVERLAY: 'STRATEGY_MENU_OVERLAY'
-      };
-
-      // 1. 단일 진실 공급원 state.isCombatActive 종료 (getter로 연결된 4곳 동시 반영)
-      if (state) {
-        state.isCombatActive = false;
-        state.isCombatPaused = false;
-        state.savedTacticalState = null;
-        state.currentView = views.WORLD_STRATEGY;
-      }
-
-      window.isCombatPaused = false;
-
-      // 2. Clear active tactical grid/instance data & update screen state on playerState / gameState
-      if (!window.playerState) {
-        window.playerState = {};
-      }
-      window.playerState.isCombatPaused = false;
-      window.playerState.savedTacticalState = null;
-      window.playerState.currentView = views.WORLD_STRATEGY;
-
-      if (window.gameState) {
-        window.gameState.isCombatPaused = false;
-        window.gameState.savedTacticalState = null;
-        window.gameState.currentView = views.WORLD_STRATEGY;
-      }
-
-      // 4. Mark current sector node as cleared if isVictory is true
-      const activeSectorId = (state && (state.selectedSectorId || (state.strategy && state.strategy.selectedSectorId) || state.currentSector)) || 'A-1';
-
-      if (isVictory) {
-        if (!Array.isArray(window.playerState.clearedSectors)) {
-          window.playerState.clearedSectors = [];
-        }
-        if (!window.playerState.clearedSectors.includes(activeSectorId)) {
-          window.playerState.clearedSectors.push(activeSectorId);
-        }
-
-        if (state) {
-          if (!Array.isArray(state.clearedSectors)) state.clearedSectors = [];
-          if (!state.clearedSectors.includes(activeSectorId)) {
-            state.clearedSectors.push(activeSectorId);
-          }
-        }
-
-        if (typeof WORLD_SECTORS !== 'undefined' && WORLD_SECTORS[activeSectorId]) {
-          WORLD_SECTORS[activeSectorId].cleared = true;
-        }
-
-        // Unlock next tier (e.g. B-2) if prerequisites cleared
-        if (typeof WORLD_SECTORS !== 'undefined' && WORLD_SECTORS['B-2'] && (activeSectorId === 'A-2' || activeSectorId === 'B-1')) {
-          WORLD_SECTORS['B-2'].locked = false;
-          const b2Pin = document.getElementById('node-pin-B-2');
-          if (b2Pin) {
-            b2Pin.style.opacity = '1.0';
-            const lockSpan = b2Pin.querySelector('.strat-node-circle span');
-            if (lockSpan && lockSpan.textContent === '🔒') {
-              lockSpan.textContent = '🌋';
-            }
-          }
-        }
-
-        // Visual node pin update
-        const pin = document.getElementById(`node-pin-${activeSectorId}`);
-        if (pin) {
-          pin.classList.add('cleared');
-          if (!pin.querySelector('.strat-node-clear-tag')) {
-            const tag = document.createElement('span');
-            tag.className = 'strat-node-clear-tag';
-            tag.style.cssText = 'position:absolute; top:-12px; left:50%; transform:translateX(-50%); font-size:8px; font-weight:900; background:#22c55e; color:#0f172a; padding:1px 5px; border-radius:4px; white-space:nowrap; box-shadow:0 0 6px rgba(34,197,94,0.6);';
-            tag.textContent = 'CLEARED';
-            pin.appendChild(tag);
-          }
-        }
-
-        addLog(`🚩 [작전 완수 & 전장 정리] 섹터 [${activeSectorId}] 작전이 성공적으로 종결되어 전략 사령부로 복귀했습니다.`, 'gold');
-      } else {
-        addLog(`🏳️ [전술 후퇴 & 전장 이탈] 섹터 [${activeSectorId}] 전술 전장에서 이탈하여 전략 사령부로 복귀했습니다.`, 'warning');
-      }
-
-      // 5. Hide pause overlay if visible
-      if (window.UI && typeof window.UI.hidePauseOverlay === 'function') {
-        window.UI.hidePauseOverlay();
-      }
-
-      // 6. Invokes UI transition: Call window.UI.renderWorldStrategyView()
-      if (window.UI && typeof window.UI.renderWorldStrategyView === 'function') {
-        window.UI.renderWorldStrategyView();
-      } else {
-        switchGameView('STRATEGY');
-        if (typeof renderStrategyView === 'function') {
-          renderStrategyView();
-        }
-      }
-
-      saveGameState();
+      return finishEncounter({ victory: !!isVictory, retreated: !isVictory });
     }
 
     /**

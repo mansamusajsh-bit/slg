@@ -1,6 +1,7 @@
 {
+  "version": 2,
   "framework": null,
-  "buildCommand": "npm run build",
+  "buildCommand": "npm run build:vercel",
   "outputDirectory": "dist",
   "cleanUrls": true
 }

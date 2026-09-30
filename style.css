@@ -3085,7 +3085,7 @@
     /* World Sector Map Canvas / Nodes */
     .strat-map-canvas-container {
       width: 100%;
-      height: 155px;
+      height: 196px;
       background: radial-gradient(circle at 50% 50%, #f0fdf4 0%, #e0f2fe 55%, #bae6fd 100%);
       border: 1.5px solid #bae6fd;
       border-radius: 14px;
@@ -3174,6 +3174,34 @@
       color: #ffffff;
     }
 
+    /* 11단계: 로그라이크 노드 상태 (locked / available / completed) */
+    .strat-node-pin.is-locked { opacity: 0.42; filter: grayscale(0.6); }
+    .strat-node-pin.is-locked .strat-node-circle { border-color: #94a3b8; box-shadow: none; }
+    .strat-node-pin.is-available .strat-node-pulse { opacity: 1; }
+    .strat-node-pin.is-available .strat-node-circle { border-color: #0284c7; background: #ffffff; }
+    .strat-node-pin.is-completed .strat-node-circle { border-color: #16a34a; background: #dcfce7; box-shadow: 0 2px 6px rgba(22, 163, 74, 0.35); }
+    .strat-node-pin.is-completed .strat-node-pulse { display: none; }
+    .strat-node-pin.is-completed::after {
+      content: '✔'; position: absolute; top: -5px; right: -4px; width: 13px; height: 13px; border-radius: 50%;
+      background: #16a34a; color: #fff; font-size: 8px; font-weight: 900; display: flex; align-items: center; justify-content: center; z-index: 2;
+    }
+    .strat-node-pin.node-elite .strat-node-circle { border-color: #ea580c; }
+    .strat-node-pin.node-boss .strat-node-circle { border-color: #dc2626; box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.2), 0 3px 10px rgba(220, 38, 38, 0.4); }
+    .strat-node-pin.run-node .strat-node-circle { width: 28px; height: 28px; font-size: 13px; }
+    .strat-run-hud {
+      position: absolute; left: 6px; top: 5px; right: 6px; z-index: 20;
+      display: flex; justify-content: space-between; align-items: center; gap: 6px; pointer-events: none;
+    }
+    .strat-run-hud span {
+      font-size: 9px; font-weight: 800; color: #0f172a; background: rgba(255, 255, 255, 0.9);
+      border: 1px solid #cbd5e1; border-radius: 6px; padding: 2px 6px;
+    }
+    .strat-run-hud-btn {
+      pointer-events: auto; cursor: pointer; font-size: 9px; font-weight: 800; color: #0f172a;
+      background: rgba(255, 255, 255, 0.95); border: 1px solid #94a3b8; border-radius: 6px; padding: 2px 7px;
+    }
+    .strat-run-hud-btn:hover { background: #fef3c7; border-color: #f59e0b; }
+
     /* Selected Sector Detail Card */
     .strat-sector-detail-box {
       margin-top: 8px;
@@ -3229,6 +3257,7 @@
     .strat-terrain-seg.forest { background: #22c55e; }
     .strat-terrain-seg.hill { background: #f59e0b; }
     .strat-terrain-seg.city { background: #38bdf8; }
+    .strat-terrain-seg.water { background: #60a5fa; }
 
     .strat-intel-grid {
       display: grid;
@@ -5239,3 +5268,37 @@
 
 
 
+
+/* ==========================================================================\n   Character Gacha / Summon UI\n   ========================================================================== */
+.strat-gacha-entry-wrap{display:flex;justify-content:center;margin:8px 0 2px}
+.strat-gacha-entry-btn{border:1px solid rgba(14,165,233,.45);background:linear-gradient(135deg,#eff6ff,#e0f2fe);color:#075985;border-radius:12px;padding:8px 14px;font-size:11px;font-weight:900;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(2,132,199,.12);cursor:pointer}
+.strat-gacha-entry-btn:active{transform:scale(.98)}
+.strat-gacha-entry-icon{font-size:16px}
+#view-character-gacha{background:linear-gradient(180deg,#f8fbff 0%,#eef6ff 100%);overflow:auto}
+.gacha-header-zone{position:sticky;top:0;z-index:5;padding:10px 12px;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);border-bottom:1px solid #dbeafe}
+.gacha-topbar{display:flex;align-items:center;gap:8px}
+.gacha-back-btn{border:1px solid #bae6fd;background:#fff;color:#0369a1;border-radius:10px;padding:8px 9px;font-size:10px;font-weight:900;cursor:pointer;white-space:nowrap}
+.gacha-title-wrap{flex:1;text-align:center}.gacha-title{font-size:14px;font-weight:1000;letter-spacing:1.4px;color:#0f172a}.gacha-subtitle{font-size:9px;color:#64748b;margin-top:2px}.gacha-pool-count{font-size:9px;font-weight:900;color:#075985;background:#e0f2fe;border-radius:999px;padding:5px 7px;white-space:nowrap}
+.gacha-main{padding:12px;display:flex;flex-direction:column;gap:10px}
+.gacha-banner-card{position:relative;overflow:hidden;border:1px solid #bfdbfe;border-radius:18px;padding:18px;background:linear-gradient(135deg,#dbeafe 0%,#f0f9ff 50%,#fff 100%);box-shadow:0 8px 22px rgba(30,64,175,.08)}
+.gacha-banner-glow{position:absolute;width:130px;height:130px;border-radius:50%;right:-25px;top:-40px;background:rgba(125,211,252,.28);filter:blur(5px)}
+.gacha-banner-copy{position:relative;z-index:1;max-width:310px}.gacha-kicker{font-size:8px;letter-spacing:1.5px;font-weight:1000;color:#0284c7}.gacha-banner-copy h2{margin:4px 0;font-size:20px;color:#0f172a}.gacha-banner-copy p{margin:0;font-size:10px;line-height:1.55;color:#475569}.gacha-banner-copy code{font-size:9px;color:#0369a1}.gacha-banner-icon{position:absolute;right:22px;bottom:10px;font-size:58px;color:#38bdf8;opacity:.45}
+.gacha-action-card,.gacha-result-section,.gacha-owned-section{background:rgba(255,255,255,.9);border:1px solid #dbeafe;border-radius:16px;padding:12px;box-shadow:0 5px 16px rgba(15,23,42,.05)}
+.gacha-action-head{display:flex;align-items:center;justify-content:space-between}.gacha-section-title{font-size:14px;font-weight:1000;color:#0f172a}.gacha-section-desc{font-size:9px;color:#64748b;margin-top:2px}.gacha-owned-count{font-size:10px;font-weight:900;color:#0369a1;background:#e0f2fe;border-radius:999px;padding:5px 8px}
+.gacha-buttons{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}.gacha-summon-btn{border:0;border-radius:13px;padding:11px 7px;cursor:pointer;display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto auto;column-gap:5px;align-items:center;color:#fff}.gacha-summon-btn span{grid-row:1/3;font-size:20px}.gacha-summon-btn strong{font-size:12px;text-align:left}.gacha-summon-btn small{font-size:8px;text-align:left;opacity:.85}.gacha-summon-btn.single{background:linear-gradient(135deg,#0284c7,#0369a1)}.gacha-summon-btn.multi{background:linear-gradient(135deg,#7c3aed,#4f46e5)}.gacha-summon-btn:disabled{opacity:.45;cursor:not-allowed}.gacha-status{font-size:9px;color:#64748b;text-align:center;margin-top:8px;min-height:12px}
+.gacha-section-heading{display:flex;align-items:center;justify-content:space-between;font-size:12px;font-weight:1000;color:#0f172a;margin-bottom:9px}.gacha-section-note{font-size:8px;color:#94a3b8;font-weight:700}.gacha-clear-btn{border:0;background:#f1f5f9;color:#64748b;border-radius:7px;padding:4px 7px;font-size:8px;cursor:pointer}
+.gacha-result-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.gacha-owned-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.gacha-card{position:relative;border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:7px;display:flex;gap:7px;align-items:center;min-width:0}.gacha-card.result{animation:gachaReveal .35s ease-out}.gacha-card-image{width:46px;height:46px;flex:0 0 46px;border-radius:10px;overflow:hidden;background:#f1f5f9;border:1px solid #e2e8f0;display:flex;align-items:center;justify-content:center}.gacha-card-image img{width:100%;height:100%;object-fit:cover}.gacha-card-image span{font-size:21px}.gacha-card-info{min-width:0}.gacha-card-name{font-size:10px;font-weight:1000;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gacha-card-class{font-size:8px;color:#0369a1;margin-top:2px}.gacha-card-stats{font-size:7.5px;color:#64748b;margin-top:3px;white-space:nowrap}.gacha-card-count{position:absolute;right:6px;top:5px;font-size:8px;font-weight:1000;color:#7c3aed;background:#ede9fe;border-radius:999px;padding:2px 5px}.gacha-empty{grid-column:1/-1;text-align:center;padding:20px 8px;color:#94a3b8;font-size:9px;background:#f8fafc;border-radius:10px;border:1px dashed #cbd5e1}
+@keyframes gachaReveal{0%{opacity:0;transform:translateY(8px) scale(.96)}100%{opacity:1;transform:none}}
+
+/* 출전 부대 편성: 선택 토글 */
+.strat-deploy-quick-btn {
+  font-size: 9px; font-weight: 800; padding: 3px 7px; border-radius: 6px;
+  border: 1px solid #7dd3fc; background: #f0f9ff; color: #0369a1; cursor: pointer;
+}
+.strat-deploy-quick-btn:active { background: #bae6fd; }
+.strat-char-roster-check { font-size: 14px; flex-shrink: 0; line-height: 1; }
+.strat-char-roster-item.is-selected { border-color: #0284c7; background: linear-gradient(90deg, #f0f9ff 0%, #ffffff 100%); }
+.strat-char-roster-item.is-benched { opacity: 0.55; }
+.strat-char-roster-item.is-benched:hover { opacity: 0.9; }
+.strat-char-roster-badge.benched { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }

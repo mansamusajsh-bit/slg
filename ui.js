@@ -184,7 +184,7 @@
    *
    * @param {Object} unit - Target unit object to promote
    */
-  function renderPromotionMenu(unit) {
+  function renderPromotionMenu(unit, opts = {}) {
     if (!unit || unit.isDead) return;
 
     // Remove existing promotion modal if open
@@ -252,7 +252,7 @@
           ⭐ 병과 승급 (Promotions)
         </button>
         <button id="tab-btn-skills" class="promo-tab-btn" style="flex:1; padding:6px 0; background:transparent; border:none; border-bottom:2px solid transparent; color:#94a3b8; font-weight:800; font-size:12px; cursor:pointer;">
-          🌳 캐릭터 스킬트리 (${skillTree.length})
+          🌳 스킬트리 (SP ${Number(unit.skillPoints) || 0})
         </button>
       </div>
 
@@ -289,38 +289,8 @@
         }
       </div>
 
-      <!-- Tab 2: Character Skill Tree & Image Update -->
-      <div class="promotion-modal-body" id="tab-content-skills" style="display:none;">
-        <div style="font-size:11px; color:#94a3b8; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center;">
-          <span>유닛 고유 스킬 트리 및 커스텀 아이콘</span>
-          <span style="color:#38bdf8; font-weight:800;">총 ${skillTree.length}개 노드</span>
-        </div>
-        <div class="promotion-list-grid">
-          ${skillTree.map((s) => `
-            <div class="promotion-option-card" style="cursor:default; border-color: rgba(56, 189, 248, 0.25);">
-              <div class="promo-card-top" style="align-items:flex-start;">
-                <div style="position:relative; width:44px; height:44px; flex-shrink:0; background:#1e293b; border:1px solid #0284c7; border-radius:8px; overflow:hidden; display:flex; align-items:center; justify-content:center;">
-                  ${s.imageUrl ? `<img src="${s.imageUrl}" alt="${s.name}" style="width:100%; height:100%; object-fit:cover;" id="img-preview-${s.id}">` : `<span style="font-size:22px;">⚡</span>`}
-                  <label for="skill-img-input-${s.id}" title="스킬 이미지 변경" style="position:absolute; bottom:0; right:0; left:0; background:rgba(0,0,0,0.65); color:#fff; font-size:8px; text-align:center; cursor:pointer; padding:1px 0;">변경</label>
-                  <input type="file" id="skill-img-input-${s.id}" accept="image/*" style="display:none;" data-skill-id="${s.id}" class="skill-file-input">
-                </div>
-                <div class="promo-info" style="margin-left:6px;">
-                  <div style="display:flex; align-items:center; gap:6px;">
-                    <span class="promo-name" style="color:#f0f9ff;">${s.name}</span>
-                    <span style="font-size:9px; background:#0284c7; color:#fff; padding:1px 5px; border-radius:4px; font-weight:800;">Tier ${s.tier}</span>
-                    <span style="font-size:9px; background:${s.type === 'PASSIVE' ? '#10b981' : '#f59e0b'}; color:#fff; padding:1px 5px; border-radius:4px; font-weight:800;">${s.type}</span>
-                  </div>
-                  <div style="font-size:10px; color:#cbd5e1; margin-top:2px;">
-                    ${s.type === 'ACTIVE' ? `⚡ 소모 AP: <b>${s.costAP}</b> | ⏳ 쿨다운: <b>${s.coolDown}턴</b> | 🎯 위력: <b>${s.effectValue}</b>` : `🛡️ 위력/계수: <b>+${s.effectValue}%</b> (상시 지속)`}
-                  </div>
-                  ${s.prerequisites && s.prerequisites.length > 0 ? `<div style="font-size:9.5px; color:#f59e0b; margin-top:2px;">🔗 선행 요구 스킬: ${s.prerequisites.join(', ')}</div>` : ''}
-                </div>
-              </div>
-              <div class="promo-desc" style="margin-top:4px;">${s.description}</div>
-            </div>
-          `).join('')}
-        </div>
-      </div>
+      <!-- Tab 2: Character Skill Tree (SP로 습득) -->
+      <div class="promotion-modal-body" id="tab-content-skills" style="display:none;"></div>
     `;
 
     overlay.appendChild(container);
@@ -355,29 +325,20 @@
       };
     }
 
-    // Custom Skill Image Uploader Binding
-    container.querySelectorAll('.skill-file-input').forEach((input) => {
-      input.onchange = (e) => {
-        const file = e.target.files?.[0];
-        const skillId = input.getAttribute('data-skill-id');
-        if (!file || !skillId) return;
-
-        const reader = new FileReader();
-        reader.onload = (re) => {
-          const base64 = re.target?.result;
-          if (typeof base64 === 'string') {
-            if (typeof global.updateSkillImage === 'function') {
-              global.updateSkillImage(unit.id, skillId, base64);
-            }
-            const previewImg = container.querySelector(`#img-preview-${skillId}`);
-            if (previewImg) {
-              previewImg.src = base64;
-            }
-          }
-        };
-        reader.readAsDataURL(file);
-      };
-    });
+    // 스킬트리 탭: SP로 스킬 습득
+    const skillsBody = container.querySelector('#tab-content-skills');
+    if (skillsBody && global.SkillEditor) {
+      global.SkillEditor.renderLearnTree(skillsBody, unit, {
+        onLearn: (u, node) => {
+          if (typeof global.addLog === 'function') global.addLog(`🌳 [스킬 습득] ${u.name}이(가) [${node.name}]을(를) 익혔습니다! (잔여 SP ${u.skillPoints})`, 'gold');
+          if (tabSkillsBtn) tabSkillsBtn.textContent = `🌳 스킬트리 (SP ${u.skillPoints})`;
+          if (typeof global.saveGameState === 'function') global.saveGameState();
+          if (typeof global.updateFullShotOverlay === 'function') global.updateFullShotOverlay();
+          if (typeof global.renderAll === 'function') global.renderAll();
+        }
+      });
+    }
+    if (opts.tab === 'skills' && tabSkillsBtn) tabSkillsBtn.onclick();
 
     container.querySelectorAll('.promotion-option-card[data-promo-id]:not(.disabled)').forEach((card) => {
       card.onclick = () => {
@@ -460,439 +421,56 @@
   }
 
   // ============================================================================
-  // DEV Skill Tree Editor & Custom Skill Image Drag & Drop UI Module
+  // DEV 캐릭터 생성용 스킬트리 빌더 (UI는 skillEditor.js, 데이터 구조는 skillEngine.js)
   // ============================================================================
 
-  // In-memory draft skill tree for character creation in DEV mode
-  let devDraftSkillTree = [];
+  // 생성 대기 중인 캐릭터의 스킬트리 초안
+  let devDraftSkillTree = null;
+  let devDraftTouched = false;
+  let devBuilder = null;
 
-  function initDevDraftSkillTree() {
-    if (global.DEFAULT_SKILL_TREE_TEMPLATE) {
-      devDraftSkillTree = JSON.parse(JSON.stringify(global.DEFAULT_SKILL_TREE_TEMPLATE));
-    } else {
-      devDraftSkillTree = [
-        {
-          id: 'skill_t1_base',
-          name: '전선의 돌파',
-          tier: 1,
-          prerequisites: [],
-          imageUrl: '',
-          type: 'ACTIVE',
-          costAP: 1,
-          coolDown: 1,
-          effectValue: 20,
-          targetType: 'SINGLE_TARGET',
-          description: '적 단일 목표에 20의 피해를 가합니다.'
-        }
-      ];
-    }
+  function currentCreateClass() {
+    const sel = document.getElementById('create-char-class');
+    return (sel && sel.value) || 'KNIGHT';
+  }
+
+  function initDevDraftSkillTree(classType) {
+    devDraftSkillTree = global.SkillEngine
+      ? global.SkillEngine.buildClassTree(classType || currentCreateClass())
+      : JSON.parse(JSON.stringify(global.DEFAULT_SKILL_TREE_TEMPLATE || []));
+    devDraftTouched = false;
   }
 
   /**
-   * Reads an Image file via FileReader, validates it, and triggers a callback with Base64
-   */
-  function handleImageFileToDataURL(file, callback) {
-    if (!file || !file.type.startsWith('image/')) {
-      if (typeof global.addLog === 'function') {
-        global.addLog('⚠️ 올바른 이미지 파일(PNG/JPG/WebP/SVG)을 선택해주세요.', 'warning');
-      }
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const dataUrl = e.target?.result;
-      if (typeof dataUrl === 'string' && typeof callback === 'function') {
-        callback(dataUrl);
-      }
-    };
-    reader.readAsDataURL(file);
-  }
-
-  /**
-   * Attaches drag-and-drop & file selection event listeners to an element
-   */
-  function attachSkillDropzone(dropEl, onImageLoaded) {
-    if (!dropEl) return;
-
-    ['dragenter', 'dragover'].forEach((eventName) => {
-      dropEl.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dropEl.style.borderColor = '#fbbf24';
-        dropEl.style.background = 'rgba(251, 191, 36, 0.15)';
-      }, false);
-    });
-
-    ['dragleave', 'drop'].forEach((eventName) => {
-      dropEl.addEventListener(eventName, (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        dropEl.style.borderColor = '';
-        dropEl.style.background = '';
-      }, false);
-    });
-
-    dropEl.addEventListener('drop', (e) => {
-      const dt = e.dataTransfer;
-      const file = dt?.files?.[0];
-      if (file) {
-        handleImageFileToDataURL(file, onImageLoaded);
-      }
-    }, false);
-  }
-
-  /**
-   * Renders the complete Skill Tree Editor inside the DEV Character Creation modal
-   * or as an interactive modal for an existing character (characterId).
-   *
-   * @param {string|number|null} characterId - Optional character ID. If null, targets the DEV creation draft.
+   * characterId가 있으면 저장된 캐릭터의 스킬트리 편집 모달을 열고,
+   * 없으면 DEV 생성 탭(섹션 3)에 생성 초안용 빌더를 그린다.
    */
   function renderDevSkillTreeEditor(characterId) {
-    let targetContainer = document.getElementById('dev-skill-tree-builder-container');
-    let isModalMode = false;
-    let targetUnit = null;
-
     if (characterId) {
-      // Standalone modal mode for an existing character
-      if (typeof global.findCharacterById === 'function') {
-        targetUnit = global.findCharacterById(characterId);
-      } else {
-        const stateObj = global.state || {};
-        const all = [...(stateObj.playerUnits || []), ...(stateObj.enemyUnits || [])];
-        targetUnit = all.find(u => String(u.id) === String(characterId));
-      }
-      isModalMode = true;
+      if (typeof global.openCharacterSkillTreeEditor === 'function') global.openCharacterSkillTreeEditor(characterId);
+      return;
     }
-
-    if (isModalMode && targetUnit) {
-      // Ensure unit skill tree is initialized
-      if (!Array.isArray(targetUnit.skillTree)) {
-        if (typeof global.getCharacterSkillTree === 'function') {
-          targetUnit.skillTree = global.getCharacterSkillTree(targetUnit.id);
-        } else {
-          targetUnit.skillTree = JSON.parse(JSON.stringify(global.DEFAULT_SKILL_TREE_TEMPLATE || []));
-        }
-      }
-
-      // Open or re-use standalone modal
-      let modalOverlay = document.getElementById('modal-dev-skill-tree-overlay');
-      if (!modalOverlay) {
-        modalOverlay = document.createElement('div');
-        modalOverlay.id = 'modal-dev-skill-tree-overlay';
-        modalOverlay.className = 'promotion-modal-overlay';
-        modalOverlay.onclick = (e) => {
-          if (e.target === modalOverlay) modalOverlay.remove();
-        };
-        document.body.appendChild(modalOverlay);
-      }
-
-      modalOverlay.innerHTML = `
-        <div class="promotion-modal-card" style="max-width: 580px; max-height: 88vh; display: flex; flex-direction: column;" onclick="event.stopPropagation()">
-          <div class="promotion-modal-header" style="border-bottom: 1.5px solid #334155;">
-            <div class="promotion-modal-title">
-              <span class="promotion-modal-icon">🌳</span>
-              <div>
-                <h3>DEV 스킬트리 빌더 & 노드 에디터</h3>
-                <p>${targetUnit.name} | 고유 스킬 트리 계층 구성 및 커스텀 아이콘 드래그&드롭</p>
-              </div>
-            </div>
-            <button class="btn-close" id="btn-close-dev-tree-modal">✕</button>
-          </div>
-          <div class="promotion-modal-body" id="dev-tree-modal-body" style="overflow-y: auto; padding: 12px; flex: 1;">
-            <div id="dev-skill-tree-builder-container"></div>
-          </div>
-        </div>
-      `;
-
-      modalOverlay.querySelector('#btn-close-dev-tree-modal').onclick = () => modalOverlay.remove();
-      targetContainer = modalOverlay.querySelector('#dev-skill-tree-builder-container');
-    }
-
-    if (!targetContainer) {
-      // Find within DEV creation tab
-      const createCharSection = document.getElementById('tab-content-dbg-create-char');
-      if (createCharSection) {
-        let builderWrapper = document.getElementById('dbg-section-skill-tree-builder');
-        if (!builderWrapper) {
-          builderWrapper = document.createElement('div');
-          builderWrapper.id = 'dbg-section-skill-tree-builder';
-          builderWrapper.className = 'dbg-card-section';
-          builderWrapper.style.borderColor = '#0284c7';
-          builderWrapper.style.background = 'linear-gradient(180deg, #ffffff 0%, #f0f9ff 100%)';
-          builderWrapper.style.marginTop = '8px';
-          builderWrapper.innerHTML = `
-            <div class="dbg-card-section-title" style="color: #0369a1; border-bottom-color: #bae6fd; display: flex; justify-content: space-between; align-items: center;">
-              <span>🌳 4. 캐릭터 스킬 트리 빌더 (Skill Tree Builder & Image Drag&Drop)</span>
-              <span style="font-size: 10px; font-weight: 800; color: #0284c7;" id="dbg-skill-tree-count-badge">4개 노드</span>
-            </div>
-            <div id="dev-skill-tree-builder-container"></div>
-          `;
-
-          // Insert right before submit button
-          const submitBtn = createCharSection.querySelector('.dbg-btn-primary-create');
-          if (submitBtn && submitBtn.parentNode) {
-            submitBtn.parentNode.insertBefore(builderWrapper, submitBtn);
-          } else {
-            createCharSection.appendChild(builderWrapper);
-          }
-        }
-        targetContainer = document.getElementById('dev-skill-tree-builder-container');
-      }
-    }
-
-    if (!targetContainer) return;
-
-    // Determine current active skill list
-    let currentTreeList = [];
-    if (targetUnit) {
-      currentTreeList = targetUnit.skillTree;
-    } else {
-      if (devDraftSkillTree.length === 0) {
-        initDevDraftSkillTree();
-      }
-      currentTreeList = devDraftSkillTree;
-    }
-
-    const countBadge = document.getElementById('dbg-skill-tree-count-badge');
-    if (countBadge) countBadge.textContent = `${currentTreeList.length}개 노드`;
-
-    targetContainer.innerHTML = `
-      <div style="font-size: 11px; color: #64748b; margin-bottom: 10px; line-height: 1.4;">
-        각 스킬의 <b>Tier(계층)</b>, <b>AP 소모량</b>, <b>효과 수치</b>를 설정하고, 
-        <b>미리보기 박스에 이미지 파일을 직접 드래그&드롭</b>하거나 클릭하여 커스텀 스킬 아이콘(PNG/JPG/WebP/SVG)을 실시간 변경할 수 있습니다.
-      </div>
-
-      <!-- Add New Node Bar -->
-      <div style="background: #ffffff; border: 1.5px dashed #38bdf8; border-radius: 10px; padding: 10px; margin-bottom: 12px;">
-        <div style="font-size: 11px; font-weight: 900; color: #0369a1; margin-bottom: 6px;">➕ 새 스킬 노드 추가 (Add New Skill Node)</div>
-        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">스킬명</label>
-            <input type="text" id="dev-new-skill-name" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;" placeholder="예: 천벌의 일격" value="천벌의 일격" />
-          </div>
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">계층 (Tier)</label>
-            <select id="dev-new-skill-tier" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;">
-              <option value="1">Tier 1 (기초)</option>
-              <option value="2">Tier 2 (숙련)</option>
-              <option value="3">Tier 3 (심화)</option>
-              <option value="4">Tier 4 (궁극)</option>
-            </select>
-          </div>
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">유형 (Type)</label>
-            <select id="dev-new-skill-type" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;">
-              <option value="ACTIVE">⚡ ACTIVE</option>
-              <option value="PASSIVE">🛡️ PASSIVE</option>
-            </select>
-          </div>
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">소모 AP / 쿨다운</label>
-            <div style="display: flex; gap: 4px;">
-              <input type="number" id="dev-new-skill-ap" class="dbg-form-control" style="padding: 4px; font-size: 11px;" value="2" min="0" max="6" title="소모 AP" />
-              <input type="number" id="dev-new-skill-cd" class="dbg-form-control" style="padding: 4px; font-size: 11px;" value="2" min="0" max="10" title="쿨다운" />
-            </div>
-          </div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">효과 수치 (Effect)</label>
-            <input type="number" id="dev-new-skill-val" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;" value="30" min="1" max="999" />
-          </div>
-          <div>
-            <label style="font-size: 9.5px; font-weight: 800; color: #475569;">선행 스킬 ID (쉼표 구분)</label>
-            <input type="text" id="dev-new-skill-prereqs" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;" placeholder="예: skill_tier1_strike" />
-          </div>
-        </div>
-
-        <div style="margin-bottom: 6px;">
-          <label style="font-size: 9.5px; font-weight: 800; color: #475569;">스킬 설명</label>
-          <input type="text" id="dev-new-skill-desc" class="dbg-form-control" style="padding: 4px 6px; font-size: 11px;" value="단일 적에게 30의 강력한 신성 피해를 입힙니다." />
-        </div>
-
-        <button type="button" id="dev-btn-add-skill-node" class="btn-cheat purple" style="width: 100%; padding: 6px; font-size: 11px; font-weight: 900; border-radius: 6px; display: flex; align-items: center; justify-content: center; gap: 4px;">
-          <span>✨</span> 스킬 노드 트리에 추가하기
-        </button>
-      </div>
-
-      <!-- Skill Nodes List with Drag & Drop Preview -->
-      <div id="dev-skill-nodes-container" style="display: flex; flex-direction: column; gap: 8px;">
-        ${currentTreeList.map((skill, index) => {
-          const hasImg = !!skill.imageUrl;
-          return `
-            <div class="dev-skill-node-card" data-skill-id="${skill.id}" style="background: #ffffff; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 10px; display: flex; gap: 10px; align-items: flex-start; transition: all 0.15s ease;">
-              
-              <!-- Drag & Drop Image Dropzone Box -->
-              <div class="dev-skill-img-dropzone" id="dropzone-${skill.id}" title="클릭하거나 이미지 파일을 여기로 드래그&드롭하여 스킬 아이콘을 변경하세요." style="position: relative; width: 54px; height: 54px; flex-shrink: 0; background: #0f172a; border: 2px dashed #0284c7; border-radius: 10px; overflow: hidden; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s ease;">
-                <input type="file" id="file-input-${skill.id}" accept="image/*" style="display: none;" class="dev-skill-file-input" data-skill-id="${skill.id}" />
-                <div id="preview-wrap-${skill.id}" style="width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;">
-                  ${hasImg 
-                    ? `<img src="${skill.imageUrl}" alt="${skill.name}" style="width: 100%; height: 100%; object-fit: cover;" id="img-display-${skill.id}" />` 
-                    : `<span style="font-size: 22px;">⚡</span>`}
-                </div>
-                <div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: #ffffff; font-size: 8px; font-weight: 800; text-align: center; padding: 2px 0;">
-                  DROP/클릭
-                </div>
-              </div>
-
-              <!-- Node Info & Quick Edit -->
-              <div style="flex: 1; min-width: 0;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
-                  <div style="display: flex; align-items: center; gap: 6px;">
-                    <span style="font-size: 13px; font-weight: 900; color: #0f172a;">${skill.name}</span>
-                    <span style="font-size: 9px; font-weight: 900; background: #0284c7; color: #ffffff; padding: 1px 6px; border-radius: 4px;">Tier ${skill.tier}</span>
-                    <span style="font-size: 9px; font-weight: 900; background: ${skill.type === 'PASSIVE' ? '#10b981' : '#f59e0b'}; color: #ffffff; padding: 1px 6px; border-radius: 4px;">${skill.type}</span>
-                  </div>
-                  <button type="button" class="btn-delete-node" data-skill-id="${skill.id}" style="background: transparent; border: none; color: #ef4444; font-size: 12px; cursor: pointer; padding: 2px 4px;" title="스킬 노드 삭제">🗑️</button>
-                </div>
-
-                <div style="font-size: 10px; color: #475569; margin-bottom: 4px;">
-                  ${skill.type === 'ACTIVE' 
-                    ? `⚡ 소모 AP: <b>${skill.costAP}</b> | ⏳ 쿨다운: <b>${skill.coolDown}턴</b> | 🎯 위력: <b>${skill.effectValue}</b>` 
-                    : `🛡️ 스탯/효과 강화: <b>+${skill.effectValue}%</b> (상시 지속)`}
-                  ${skill.prerequisites && skill.prerequisites.length > 0 ? ` | 🔗 선행: <span style="color:#d97706;">${skill.prerequisites.join(', ')}</span>` : ''}
-                </div>
-
-                <div style="font-size: 10px; color: #64748b; background: #f8fafc; border: 1px solid #f1f5f9; padding: 4px 6px; border-radius: 6px; line-height: 1.3;">
-                  ${skill.description}
-                </div>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `;
-
-    // 1. Add Skill Node Button Handler
-    const addBtn = targetContainer.querySelector('#dev-btn-add-skill-node');
-    if (addBtn) {
-      addBtn.onclick = () => {
-        const nameVal = targetContainer.querySelector('#dev-new-skill-name')?.value?.trim();
-        if (!nameVal) {
-          if (typeof global.addLog === 'function') global.addLog('⚠️ 스킬 이름을 입력해주세요.', 'warning');
-          return;
-        }
-
-        const tierVal = parseInt(targetContainer.querySelector('#dev-new-skill-tier')?.value || '1', 10);
-        const typeVal = targetContainer.querySelector('#dev-new-skill-type')?.value || 'ACTIVE';
-        const apVal = parseInt(targetContainer.querySelector('#dev-new-skill-ap')?.value || '1', 10);
-        const cdVal = parseInt(targetContainer.querySelector('#dev-new-skill-cd')?.value || '1', 10);
-        const effectVal = parseInt(targetContainer.querySelector('#dev-new-skill-val')?.value || '20', 10);
-        const prereqsRaw = targetContainer.querySelector('#dev-new-skill-prereqs')?.value?.trim() || '';
-        const descVal = targetContainer.querySelector('#dev-new-skill-desc')?.value?.trim() || '스킬 효과';
-
-        const prereqs = prereqsRaw ? prereqsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
-
-        const newSkillObj = {
-          id: `skill_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
-          name: nameVal,
-          tier: tierVal,
-          prerequisites: prereqs,
-          imageUrl: '',
-          type: typeVal,
-          costAP: apVal,
-          coolDown: cdVal,
-          effectValue: effectVal,
-          targetType: (typeVal === 'PASSIVE') ? 'BUFF' : 'SINGLE_TARGET',
-          description: descVal
-        };
-
-        if (targetUnit) {
-          if (typeof global.addSkillToTree === 'function') {
-            global.addSkillToTree(targetUnit.id, newSkillObj);
-          } else {
-            targetUnit.skillTree.push(newSkillObj);
-            if (typeof global.saveGameState === 'function') global.saveGameState();
-          }
-        } else {
-          devDraftSkillTree.push(newSkillObj);
-          if (typeof global.addLog === 'function') {
-            global.addLog(`✨ [스킬트리 추가] [${newSkillObj.name}] 노드가 생성 대기 목록에 추가되었습니다.`, 'gold');
-          }
-        }
-
-        // Re-render
-        renderDevSkillTreeEditor(characterId);
-      };
-    }
-
-    // 2. Delete Node Button Handlers
-    targetContainer.querySelectorAll('.btn-delete-node').forEach((delBtn) => {
-      delBtn.onclick = () => {
-        const sId = delBtn.getAttribute('data-skill-id');
-        if (!sId) return;
-
-        if (targetUnit) {
-          targetUnit.skillTree = targetUnit.skillTree.filter(s => s.id !== sId);
-          if (typeof global.saveGameState === 'function') global.saveGameState();
-          if (typeof global.addLog === 'function') {
-            global.addLog(`🗑️ ${targetUnit.name}의 스킬 트리에서 [${sId}] 노드가 제거되었습니다.`, 'system');
-          }
-        } else {
-          devDraftSkillTree = devDraftSkillTree.filter(s => s.id !== sId);
-        }
-
-        renderDevSkillTreeEditor(characterId);
-      };
-    });
-
-    // 3. Dropzone & File Input Binding for Each Skill Node
-    targetContainer.querySelectorAll('.dev-skill-node-card').forEach((card) => {
-      const sId = card.getAttribute('data-skill-id');
-      const dropzone = card.querySelector(`#dropzone-${sId}`);
-      const fileInput = card.querySelector(`#file-input-${sId}`);
-      const imgDisplay = card.querySelector(`#img-display-${sId}`);
-      const previewWrap = card.querySelector(`#preview-wrap-${sId}`);
-
-      if (!dropzone || !fileInput) return;
-
-      dropzone.onclick = () => fileInput.click();
-
-      const onImageReady = (base64) => {
-        if (targetUnit) {
-          if (typeof global.updateSkillImage === 'function') {
-            global.updateSkillImage(targetUnit.id, sId, base64);
-          } else {
-            const skill = targetUnit.skillTree.find(s => s.id === sId);
-            if (skill) skill.imageUrl = base64;
-            if (typeof global.saveGameState === 'function') global.saveGameState();
-          }
-        } else {
-          const draftSkill = devDraftSkillTree.find(s => s.id === sId);
-          if (draftSkill) draftSkill.imageUrl = base64;
-          if (typeof global.addLog === 'function') {
-            global.addLog(`🖼️ [스킬 아이콘 등록] [${draftSkill?.name || '스킬'}] 이미지가 설정되었습니다.`, 'system');
-          }
-        }
-
-        // Live DOM update
-        if (imgDisplay) {
-          imgDisplay.src = base64;
-        } else if (previewWrap) {
-          previewWrap.innerHTML = `<img src="${base64}" alt="스킬" style="width: 100%; height: 100%; object-fit: cover;" id="img-display-${sId}" />`;
-        }
-      };
-
-      // File input change
-      fileInput.onchange = (e) => {
-        const f = e.target.files?.[0];
-        if (f) handleImageFileToDataURL(f, onImageReady);
-      };
-
-      // Drag & Drop
-      attachSkillDropzone(dropzone, onImageReady);
+    const container = document.getElementById('dev-skill-tree-builder-container');
+    if (!container || !global.SkillEditor) return;
+    if (!devDraftSkillTree) initDevDraftSkillTree();
+    devBuilder = global.SkillEditor.mountBuilder(container, {
+      getTree: () => devDraftSkillTree,
+      setTree: (tree) => { devDraftSkillTree = tree; devDraftTouched = true; },
+      getClassType: currentCreateClass
     });
   }
 
-  /**
-   * Helper to retrieve currently prepared skill tree during character creation
-   */
+  /** 병과를 바꿨을 때: 사용자가 손대지 않은 초안이면 새 병과의 추천 트리로 교체한다. */
+  function resetDevDraftSkillTree(classType, force) {
+    if (devDraftTouched && !force) return false;
+    initDevDraftSkillTree(classType);
+    if (devBuilder) devBuilder.render();
+    return true;
+  }
+
+  /** 생성 버튼을 눌렀을 때 사용할 스킬트리 사본 */
   function getDevDraftSkillTree() {
-    if (devDraftSkillTree.length === 0) {
-      initDevDraftSkillTree();
-    }
+    if (!devDraftSkillTree) initDevDraftSkillTree();
     return JSON.parse(JSON.stringify(devDraftSkillTree));
   }
 
@@ -1027,10 +605,7 @@
         modal.classList.remove('active');
 
         // 안전 거점 타일 찾기
-        const tiles = global.state?.tiles
-          || (typeof global.getTiles === 'function' ? global.getTiles() : [])
-          || global.tiles
-          || [];
+        const tiles = (typeof global.getBattleTiles === 'function' ? global.getBattleTiles() : []) || [];
         const safeTile = tiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village'))
           || { x: 1, y: 1, name: '평화로운 마을' };
         const safeTownName = safeTile.name || '평화로운 마을';
@@ -1320,10 +895,7 @@
       ? global.unitShopSystem.isPlayerAtSafeZone()
       : null;
 
-    const allTiles = state.tiles
-      || (typeof global.getTiles === 'function' ? global.getTiles() : [])
-      || global.tiles
-      || [];
+    const allTiles = (typeof global.getBattleTiles === 'function' ? global.getBattleTiles() : []) || [];
 
     const fallbackTile = allTiles.find(t => t && (t.isSafe || t.isCity || t.type === 'city' || t.type === 'village'))
       || { name: '평화로운 마을 거점', isCity: false, x: 1, y: 1 };
@@ -1685,7 +1257,6 @@
   }
 
   // Initialize on load
-  initDevDraftSkillTree();
 
   // Export to global.UI and root window
   global.UI.showToast = showToast;
@@ -1697,6 +1268,7 @@
   global.UI.triggerLevelUpFX = triggerLevelUpFX;
   global.UI.renderDevSkillTreeEditor = renderDevSkillTreeEditor;
   global.UI.getDevDraftSkillTree = getDevDraftSkillTree;
+  global.UI.resetDevDraftSkillTree = resetDevDraftSkillTree;
   global.UI.showDefeatModal = showDefeatModal;
   global.UI.renderTownUnitShop = renderTownUnitShop;
   global.UI.renderWildRecruitMenu = renderWildRecruitMenu;
