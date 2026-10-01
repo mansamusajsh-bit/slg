@@ -1,5 +1,5 @@
 // rewardEngine.js 순수 로직 검증: 검증 규칙, 순환 참조, 시드 결정론, 보유 지휘관 유물 필터
-const fs=require('fs'), vm=require('vm'), path=require('path');
+const fs=require('fs'), vm=require('vm'), path=require('path'), { pathToFileURL }=require('url');
 const ctx={console}; ctx.window=ctx; ctx.globalThis=ctx;
 vm.createContext(ctx);
 for (const f of ['seedEngine.js','rewardEngine.js']) vm.runInContext(fs.readFileSync(path.join(__dirname,'..',f),'utf8'),ctx,{filename:f});
@@ -129,8 +129,8 @@ for(const f of sources){
 
 // ---- 기본 데이터(editors/seedData.js) + 가져오기 계획(editors/seedImporter.js)
 (async()=>{
-  const seed=await import(path.join(__dirname,'..','editors','seedData.js'));
-  const imp=await import(path.join(__dirname,'..','editors','seedImporter.js'));
+  const seed=await import(pathToFileURL(path.join(__dirname,'..','editors','seedData.js')).href);
+  const imp=await import(pathToFileURL(path.join(__dirname,'..','editors','seedImporter.js')).href);
   const S=seed.SEED_SUMMARY;
   ok(S.relics===100&&S.commanderRelics===50&&S.giftRelics===50&&S.items===100,'기본 데이터: 유물 100(지휘관 50/선물 50) · 아이템 100 · 풀 '+S.pools);
   const uniq=a=>new Set(a.map(x=>x.id)).size===a.length;
