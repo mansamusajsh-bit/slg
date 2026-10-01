@@ -1,3 +1,5 @@
+// LEGACY: 이 파일은 index.html/빌드(scripts/vercel-static-build.mjs)에서 로드되지 않는 구버전 코드다.
+// LEGACY: Firestore 'scenarioMaps' + state.tiles + 기본맵 fallback 구조이며, 현재는 supabase-bridge.js(tacticalMapTemplates)를 쓴다.
 /**
  * dbManager.js - Universal Tactical Scenario Map & Firestore Persistence Module
  * 
@@ -458,7 +460,7 @@
         global.state.strategy.selectedSectorId = targetSectorId;
       }
       global.state.currentMapData = loadedMapData;
-      global.state.tiles = loadedMapData.tiles;
+      global.state.tiles = loadedMapData.tiles; // LEGACY: 미사용 파일
     }
 
     // 전역 tiles 변수 동기화

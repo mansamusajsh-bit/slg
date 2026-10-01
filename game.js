@@ -3,6 +3,7 @@
     /* --------------------------------------------------------------------------
        Data State & Declarations
        -------------------------------------------------------------------------- */
+    // LEGACY: 예전 기본 8x10 맵 크기. 전술 코드는 getBattleSize()(= state.currentBattle.map.width/height)를 쓴다.
     const GRID_COLS = 8;
     const GRID_ROWS = 10;
 
@@ -596,7 +597,7 @@
 
     // 전역 상태 변수
     // 전술 타일의 유일한 기준은 state.currentBattle.map.tiles (getBattleTiles() 참고).
-    // 전역 tiles / state.tiles / 기본 8x10 맵은 7~8단계에서 제거되었다.
+    // LEGACY: 전역 tiles / state.tiles / 기본 8x10 맵은 7~8단계에서 제거되었다.
     let state = createInitialState();
     normalizeAllUnitsHP(state);
     let historyStack = []; // 리와인더용 실행 취소 스택
@@ -1175,6 +1176,16 @@
       return map;
     }
     window.getActiveBattleMap = getActiveBattleMap;
+
+    // 전술 맵 크기의 단일 접근점 (하드코딩된 8x10 대신). 전투가 없으면 0x0.
+    function getBattleSize() {
+      const map = state && state.currentBattle && state.currentBattle.map;
+      return { width: Number(map && map.width) || 0, height: Number(map && map.height) || 0 };
+    }
+    function isInsideBattleMap(x, y) {
+      const { width, height } = getBattleSize();
+      return x >= 0 && x < width && y >= 0 && y < height;
+    }
 
     function getTile(x, y) {
       return getBattleTiles().find(t => t.x === x && t.y === y);
@@ -1813,7 +1824,7 @@
             if (dx === 0 && dy === 0) continue;
             const nx = e.x + dx;
             const ny = e.y + dy;
-            if (nx >= 0 && nx < GRID_COLS && ny >= 0 && ny < GRID_ROWS) {
+            if (isInsideBattleMap(nx, ny)) {
               const hasEnemy = aliveEnemies.some(oe => oe.x === nx && oe.y === ny);
               if (!hasEnemy) {
                 zocSet.add(`${nx},${ny}`);
@@ -2405,7 +2416,7 @@
       mapEl.innerHTML = '';
 
       // 전술 화면의 맵 원본은 현재 전투 객체 하나만 사용한다.
-      // state.tiles / 전역 tiles / 기본맵을 여기서 fallback으로 사용하지 않는다.
+      // LEGACY: state.tiles / 전역 tiles / 기본맵을 여기서 fallback으로 사용하지 않는다.
       const battleMap = state?.currentBattle?.map || null;
       // 7단계: SECTOR_MAP(전술 화면)인데 battleMap이 없으면 렌더 자체를 막지는 않되(빈 화면으로
       // 넘어가는 대신 UI가 멈추지 않게), 개발자에게는 getActiveBattleMap()과 동일한 오류를 콘솔에 남긴다.
@@ -3287,6 +3298,38 @@
     }
 
     // 0. Encounter 진입점 — 2단계: Sector → TacticalMapTemplate → CurrentBattle 순서로만 조립한다.
+    /**
+     * 전술 맵 템플릿 로더. tacticalMapTemplates/{templateId}만 조회한다.
+     * 없거나 유효하지 않으면 명확한 에러를 던진다 — 기본맵으로 대체하지 않는다.
+     * @returns {Promise<Object>} 정규화·검증된 TacticalMapTemplate
+     */
+    async function loadTacticalMapTemplate(templateId) {
+      const loader = (typeof window.loadTacticalMapTemplateFromSupabase === 'function')
+        ? window.loadTacticalMapTemplateFromSupabase
+        : (window.SupabaseBridge && typeof window.SupabaseBridge.loadTacticalMapTemplateFromSupabase === 'function'
+            ? window.SupabaseBridge.loadTacticalMapTemplateFromSupabase.bind(window.SupabaseBridge)
+            : null);
+      if (!loader) throw new Error('Supabase tacticalMapTemplates 로더를 찾을 수 없습니다.');
+      let data;
+      try {
+        data = await loader(templateId);
+      } catch (err) {
+        throw new Error(`전술 맵 템플릿 로드 실패 (${templateId}): ${err?.message || 'Supabase 연결 오류'}`);
+      }
+      if (!data) throw new Error(`전술 맵 템플릿을 찾을 수 없음: ${templateId} (맵 에디터에서 저장하거나, 구버전 맵이면 콘솔에서 migrateScenarioMaps() 실행)`);
+      const template = MapSchema.normalizeTacticalMapTemplate(data, templateId);
+      validateTemplate(template);
+      return template;
+    }
+    window.loadTacticalMapTemplate = loadTacticalMapTemplate;
+
+    // width*height와 tiles 크기 일치, spawnPoints 존재 등은 MapSchema.validateTacticalMapTemplate가 확인한다.
+    function validateTemplate(template) {
+      const check = template ? MapSchema.validateTacticalMapTemplate(template) : { valid: false, errors: ['정규화 실패'] };
+      if (!check.valid) throw new Error(`전술 맵 템플릿이 유효하지 않음: ${template?.id || '?'} — ${check.errors.join(', ')}`);
+      return template;
+    }
+
     //    이 함수 안에서 타일 객체를 직접 손으로 조립하지 않는다. 전부 MapSchema를 거친다.
     //    8단계: Seed 기반 랜덤화(MapSchema.generateBattleMapWithSeed)가 randomize:true로 적용된다.
     //    지형 변형/보물 상자는 매 진입마다(같은 노드는 항상 같게) 달라지고, 에디터가 직접
@@ -3325,38 +3368,12 @@
 
       console.log(`⚔️ [Encounter] ${targetSectorId} 전투 진입 시작 — 템플릿 [${templateId}]을(를) Supabase에서 로드`);
 
-      let rawTemplateDoc = null;
+      // 템플릿이 없거나 유효하지 않으면 실패 처리한다. 절대 기본맵으로 몰래 대체하지 않는다.
+      let template;
       try {
-        const loader = (typeof window.loadTacticalMapTemplateFromSupabase === 'function')
-          ? window.loadTacticalMapTemplateFromSupabase
-          : (window.SupabaseBridge && typeof window.SupabaseBridge.loadTacticalMapTemplateFromSupabase === 'function'
-              ? window.SupabaseBridge.loadTacticalMapTemplateFromSupabase.bind(window.SupabaseBridge)
-              : null);
-
-        if (!loader) {
-          throw new Error('Supabase tacticalMapTemplates 로더를 찾을 수 없습니다.');
-        }
-
-        rawTemplateDoc = await loader(templateId);
+        template = await loadTacticalMapTemplate(templateId);
       } catch (err) {
-        console.error(`❌ [Encounter] ${templateId} 템플릿 로드 실패`, err);
-        const msg = `전술 맵 로드 실패: ${err?.message || 'Supabase 연결 오류'}`;
-        addLog(`❌ [Encounter] ${msg}`, 'warning');
-        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
-        return false;
-      }
-
-      // TacticalMapTemplate(설계도) 형태로 정규화한다. 없으면(=Supabase에 문서가 없으면) 실패 처리하고,
-      // 절대 기본맵으로 몰래 대체하지 않는다.
-      const template = MapSchema.normalizeTacticalMapTemplate(rawTemplateDoc, templateId);
-      const templateCheck = template ? MapSchema.validateTacticalMapTemplate(template) : { valid: false, errors: ['템플릿이 Supabase(tacticalMapTemplates)에 없습니다.'] };
-
-      if (!template || !templateCheck.valid) {
-        const msg = `${templateId} 전술 맵 템플릿이 유효하지 않습니다: ${templateCheck.errors.join(', ')}`;
-        console.error(`❌ [Encounter] ${msg}`);
-        addLog(`❌ [Encounter] ${msg}`, 'warning');
-        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
-        return false;
+        return reportError(err?.message || String(err));
       }
 
       // TacticalMapTemplate → CurrentBattle. 여기서만 실전 인스턴스가 만들어진다.
@@ -3404,9 +3421,11 @@
       const rows = battle.map.height;
 
       // 전술 렌더러의 기준 데이터는 오직 state.currentBattle.map이다.
-      // state.tiles / 전역 tiles 별칭은 7~8단계에서 제거되었다. 전술 코드는 getBattleTiles()로만 접근한다.
+      // LEGACY: state.tiles / 전역 tiles 별칭은 7~8단계에서 제거되었다. 전술 코드는 getBattleTiles()로만 접근한다.
       state.currentBattle = battle;
       state.currentBattle.nodeId = node.id;
+      // 전술 화면이 섹터 표시명을 위해 WORLD_SECTORS를 직접 보지 않도록 진입 시점에 복사해 둔다.
+      state.currentBattle.sectorName = sector.name || targetSectorId;
       state.currentBattle.seed = seed;
       state.selectedNodeId = node.id;
       historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
@@ -3529,8 +3548,7 @@
         renderHeaderAndCard();
         updateFullShotOverlay();
 
-        const curSec = WORLD_SECTORS[secId] || { id: secId, name: secId };
-        addLog(`⚔️ [전술 작전 전개] [${curSec.id} ${curSec.name}] 전술 필드로 진입했습니다.`, 'combat');
+        addLog(`⚔️ [전술 작전 전개] [${secId} ${state.currentBattle.sectorName || secId}] 전술 필드로 진입했습니다.`, 'combat');
       }
       saveGameState(true);
     }
@@ -5283,7 +5301,7 @@
         const candidates = [
           { x: 3, y: 5 }, { x: 2, y: 4 }, { x: 4, y: 4 }, { x: 2, y: 5 }, { x: 3, y: 3 }, { x: 4, y: 5 }
         ];
-        const emptyCandidate = candidates.find(c => c.x >= 0 && c.x < GRID_COLS && c.y >= 0 && c.y < GRID_ROWS && !occupiedByAnyPlayer(c.x, c.y));
+        const emptyCandidate = candidates.find(c => isInsideBattleMap(c.x, c.y) && !occupiedByAnyPlayer(c.x, c.y));
         if (emptyCandidate) {
           spawnX = emptyCandidate.x;
           spawnY = emptyCandidate.y;
@@ -6657,8 +6675,9 @@
     function cheatSpawnUnit() {
       const team = document.getElementById('sel-spawn-team').value;
       const classType = document.getElementById('sel-spawn-class').value;
-      const x = Math.max(0, Math.min(GRID_COLS - 1, parseInt(document.getElementById('num-spawn-x').value, 10) || 0));
-      const y = Math.max(0, Math.min(GRID_ROWS - 1, parseInt(document.getElementById('num-spawn-y').value, 10) || 0));
+      const { width: mapW, height: mapH } = getBattleSize();
+      const x = Math.max(0, Math.min(mapW - 1, parseInt(document.getElementById('num-spawn-x').value, 10) || 0));
+      const y = Math.max(0, Math.min(mapH - 1, parseInt(document.getElementById('num-spawn-y').value, 10) || 0));
 
       saveHistorySnapshot();
 
@@ -8514,8 +8533,9 @@
         modal.style.display = 'flex';
         modal.style.zIndex = '9999';
 
-        const secId = (state && (state.selectedSectorId || (state.strategy && state.strategy.selectedSectorId) || state.currentSector)) || 'A-1';
-        const curSec = (typeof WORLD_SECTORS !== 'undefined' && WORLD_SECTORS[secId]) ? WORLD_SECTORS[secId] : { id: secId, name: '전술 작전 구역' };
+        const battle = state && state.currentBattle;
+        const secId = (battle && battle.sectorId) || '?';
+        const curSec = { id: secId, name: (battle && battle.sectorName) || '전술 작전 구역' };
         const turnNum = (state && state.turn) || 1;
         const livingPlayers = (state && state.playerUnits) ? state.playerUnits.filter(u => !u.isDead).length : 0;
         const livingEnemies = (state && state.enemyUnits) ? state.enemyUnits.filter(u => !u.isDead).length : 0;

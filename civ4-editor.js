@@ -263,9 +263,8 @@ const MapEditorController = {
       const strict = window.findTacticalMapTemplateStrict
         || (window.SupabaseBridge && typeof window.SupabaseBridge.findTacticalMapTemplateStrict === 'function'
             ? window.SupabaseBridge.findTacticalMapTemplateStrict.bind(window.SupabaseBridge) : null);
-      const loader = strict
-        || window.loadTacticalMapTemplateFromSupabase
-        || window.loadScenarioMapFromSupabase;
+      // LEGACY: window.loadScenarioMapFromSupabase(scenarioMaps) fallback은 제거했다. tacticalMapTemplates만 읽는다.
+      const loader = strict || window.loadTacticalMapTemplateFromSupabase;
       if (typeof loader !== 'function') throw new Error('Supabase 템플릿 로더가 연결되지 않았습니다.');
       // strict 로더: Supabase 오류는 여기서 throw(→ 아래 catch, 빈 맵 덮어쓰기 방지), 정말 없으면 null.
       const raw = await loader(id);
@@ -367,11 +366,10 @@ const MapEditorController = {
       updatedAt: new Date().toISOString()
     };
 
+    // LEGACY: window.saveScenarioMapToSupabase(scenarioMaps) fallback은 제거했다. tacticalMapTemplates에만 저장한다.
     const saver = (typeof window.saveTacticalMapTemplateToSupabase === 'function')
       ? window.saveTacticalMapTemplateToSupabase
-      : (typeof window.saveScenarioMapToSupabase === 'function')
-        ? window.saveScenarioMapToSupabase
-        : null;
+      : null;
 
     if (!saver) {
       const msg = '❌ [에디터] Supabase 저장 함수를 찾을 수 없습니다.';
@@ -380,10 +378,12 @@ const MapEditorController = {
       return false;
     }
 
-    // 기본 섹터 맵은 실제 원본인 game_configs/world_sectors의 scenarioMap에도 반영한다.
-    // tacticalMapTemplates는 구버전 호환 및 향후 다중 템플릿용으로 병행 유지한다.
+    // 저장 위치는 tacticalMapTemplates/{templateId} 하나뿐이다.
     let ok = await saver(templateId, payload);
-    if (ok && templateId === MapEditorController.currentSectorId && typeof window.saveSectorScenarioMapToSupabase === 'function') {
+    if (ok && MapEditorController.isDevMode()) ok = await MapEditorController.verifySavedTemplate(templateId, template);
+    // LEGACY: game_configs/world_sectors.scenarioMap 미러 저장은 사용 중단 (전투는 tacticalMapTemplates만 읽는다).
+    const LEGACY_MIRROR_TO_WORLD_SECTORS = false;
+    if (LEGACY_MIRROR_TO_WORLD_SECTORS && ok && templateId === MapEditorController.currentSectorId && typeof window.saveSectorScenarioMapToSupabase === 'function') {
       // 저장의 성공 기준은 tacticalMapTemplates(위 saver) 하나다. world_sectors 미러는 구버전 호환용이라
       // 실패하거나(false) 섹터가 없어 건너뛰어도('skipped') 저장 자체는 성공으로 본다. 실패는 경고만 남긴다.
       const sectorSaveOk = await window.saveSectorScenarioMapToSupabase(templateId, payload);
@@ -395,9 +395,8 @@ const MapEditorController = {
     if (ok) {
       MapEditorController.currentTemplateMeta = template;
       if (typeof window.updateSectorTerrainCache === 'function') window.updateSectorTerrainCache(templateId, template.tiles);
-      // 이 템플릿이 섹터의 '기본' 템플릿(= sectorId와 동일한 id)일 때만
-      // 레거시 state.worldSectors 캐시를 함께 갱신한다 (다른 코드와의 하위호환용).
-      if (typeof state !== 'undefined' && state.worldSectors && templateId === MapEditorController.currentSectorId) {
+      // LEGACY: state.worldSectors[].scenarioMap 캐시 갱신은 사용 중단 (Sector는 타일을 갖지 않는다).
+      if (LEGACY_MIRROR_TO_WORLD_SECTORS && typeof state !== 'undefined' && state.worldSectors && templateId === MapEditorController.currentSectorId) {
         const targetSec = state.worldSectors.find(s => s.id === MapEditorController.currentSectorId);
         if (targetSec) targetSec.scenarioMap = template.tiles;
       }
@@ -412,6 +411,48 @@ const MapEditorController = {
       if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
     }
     return ok;
+  },
+
+  // 개발 모드: localhost/127.0.0.1 또는 URL에 ?dev 가 있을 때
+  isDevMode() {
+    try {
+      const h = window.location.hostname;
+      return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || /[?&]dev/.test(window.location.search);
+    } catch (e) { return false; }
+  },
+
+  /**
+   * 개발 모드 전용: 저장 직후 tacticalMapTemplates에서 다시 읽어 저장한 내용과 같은지 확인한다.
+   * 다르면 저장 실패로 보고 화면에 알린다.
+   */
+  async verifySavedTemplate(templateId, expected) {
+    const fail = (why) => {
+      const msg = `❌ [에디터 검증] [${templateId}] 저장 후 다시 불러온 템플릿이 다릅니다: ${why}`;
+      console.error(msg);
+      if (typeof addLog === 'function') addLog(msg, 'warning');
+      if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+      return false;
+    };
+    try {
+      const loader = window.loadTacticalMapTemplateFromSupabase;
+      if (typeof loader !== 'function') return fail('로더 없음');
+      const reloaded = MapSchema.normalizeTacticalMapTemplate(await loader(templateId), templateId);
+      if (!reloaded) return fail('문서를 찾을 수 없음');
+      if (reloaded.width !== expected.width || reloaded.height !== expected.height) {
+        return fail(`크기 ${reloaded.width}x${reloaded.height} ≠ ${expected.width}x${expected.height}`);
+      }
+      const key = (t) => `${t.x},${t.y}:${t.terrain}|${t.hasRoad ? 1 : 0}|${t.structure || ''}`;
+      const a = expected.tiles.map(key).sort();
+      const b = reloaded.tiles.map(key).sort();
+      if (a.length !== b.length) return fail(`타일 수 ${b.length} ≠ ${a.length}`);
+      const diff = a.findIndex((v, i) => v !== b[i]);
+      if (diff >= 0) return fail(`타일 불일치 (${a[diff]} vs ${b[diff]})`);
+      if (JSON.stringify(reloaded.spawnPoints) !== JSON.stringify(expected.spawnPoints)) return fail('스폰 지점 불일치');
+      console.info(`✅ [에디터 검증] [${templateId}] 저장 후 재조회 일치 (${a.length} tiles)`);
+      return true;
+    } catch (err) {
+      return fail(err?.message || String(err));
+    }
   },
 
   // 하위호환 별칭
@@ -430,7 +471,7 @@ const MapEditorController = {
   /**
    * 4단계: '독립 테스트' 모드.
    * 저장하지 않은 현재 편집 상태를 그대로 CurrentBattle 스키마로 감싸서
-   * MapEditorController.testBattle에만 넣는다. state.currentBattle / state.tiles는
+   * MapEditorController.testBattle에만 넣는다. state.currentBattle은
    * 절대 건드리지 않으므로, 실제 진행 중인 게임 상태를 오염시키지 않는다.
    */
   testPlayCurrentMap() {
@@ -547,7 +588,9 @@ const MapEditorController = {
         recPower: Number(recPower) || 400,
         stars: '★★★☆☆',
         terrainComposition: { plain: 50, forest: 30, hill: 20 },
-        scenarioMap: blankTiles
+        // Sector는 타일을 갖지 않는다. 맵은 "저장" 시 tacticalMapTemplates/{sectorId}에 생긴다.
+        // LEGACY: 예전에는 여기에 scenarioMap: blankTiles를 함께 저장했다.
+        defaultTemplateId: sectorId
       };
 
       state.worldSectors.push(newSector);

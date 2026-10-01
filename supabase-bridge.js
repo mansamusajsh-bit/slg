@@ -80,7 +80,9 @@ const bridge = {
   subscribeGameConfig(id,cb){return subscribeOne('game_configs',id||'global_config',cb);},
   async syncMapToSupabase(id,tiles,name='Standard 8x14 Grid Map'){try{return await putRecord('maps',id||'default_map',{id:id||'default_map',name,cols:8,rows:14,tiles:tiles||[],updatedAt:new Date().toISOString()});}catch(e){warn('save map',e);return false;}},
   async loadMapFromSupabase(id){try{return await getRecord('maps',id||'default_map');}catch(e){warn('load map',e);return null;}},
+  // LEGACY: 기본 collection 'scenarioMaps'는 사용 중단. saveTacticalMapTemplateToSupabase(→ tacticalMapTemplates)만 쓴다.
   async saveScenarioMapToSupabase(id,data,collection='scenarioMaps'){try{return await putRecord(collection,id,{...data,sectorId:String(id),updatedAt:new Date().toISOString()});}catch(e){warn('save scenario map',e);return false;}},
+  // LEGACY: scenarioMaps 직접 조회. 사용처 없음 (migrateScenarioMaps 참고).
   async loadScenarioMapFromSupabase(id,collection='scenarioMaps'){try{return await getRecord(collection,id);}catch(e){warn('load scenario map',e);return null;}},
   saveTacticalMapTemplateToSupabase(id,data){return this.saveScenarioMapToSupabase(id,data,'tacticalMapTemplates');},
   async loadWorldSectorsFromSupabase(){
@@ -89,6 +91,7 @@ const bridge = {
       return Array.isArray(config?.worldSectors) ? config.worldSectors : [];
     } catch (e) { warn('load world sectors', e); return []; }
   },
+  // LEGACY: world_sectors.scenarioMap 조회. 전투/에디터 로더에서 더 이상 호출하지 않는다.
   async loadSectorScenarioMapFromSupabase(id){
     try {
       const sectors = await this.loadWorldSectorsFromSupabase();
@@ -99,6 +102,7 @@ const bridge = {
       return null;
     } catch (e) { warn(`load sector map ${id}`, e); return null; }
   },
+  // LEGACY: world_sectors.scenarioMap 미러 저장. 에디터 저장에서 더 이상 호출하지 않는다.
   async saveSectorScenarioMapToSupabase(id, mapData){
     try {
       const current = await getRecord('game_configs', 'world_sectors') || {};
@@ -113,20 +117,19 @@ const bridge = {
       return ok;
     } catch (e) { warn(`save sector map ${id}`, e); return false; }
   },
+  // 전술 맵 템플릿의 유일한 저장소는 tacticalMapTemplates다 (전투 진입·에디터 공용).
+  // Supabase 오류는 throw하고, 문서가 정말 없을 때만 null을 돌려준다. 구버전 위치(scenarioMaps,
+  // world_sectors.scenarioMap)는 더 이상 조회하지 않는다 — 옮기려면 콘솔에서 migrateScenarioMaps()를 호출한다.
   async loadTacticalMapTemplateFromSupabase(id){
-    try{
-      const doc=await getRecord('tacticalMapTemplates',id);
-      if(doc) return doc;
-      const legacy=await getRecord('scenarioMaps',id);
-      if(legacy&&Array.isArray(legacy.tiles)&&legacy.tiles.length) return legacy;
-      // 실제 운영 데이터인 game_configs/world_sectors/{worldSectors[].scenarioMap}도 조회한다.
-      return await this.loadSectorScenarioMapFromSupabase(id);
-    }catch(e){warn('load tactical map template',e);return null;}
-  },
-  // 에디터 전용: Supabase 오류는 throw, 정말 없을 때만 null 반환 (오류 시 빈 맵으로 덮어쓰는 사고 방지)
-  async findTacticalMapTemplateStrict(id){
     const doc=await getRecord('tacticalMapTemplates',id);
-    if(doc&&Array.isArray(doc.tiles)&&doc.tiles.length) return doc;
+    return (doc&&Array.isArray(doc.tiles)&&doc.tiles.length) ? doc : null;
+  },
+  // 에디터 전용 이름. 동작은 위와 같다 (오류 시 throw → 에디터가 빈 맵으로 덮어쓰는 사고 방지).
+  async findTacticalMapTemplateStrict(id){
+    return this.loadTacticalMapTemplateFromSupabase(id);
+  },
+  // LEGACY: 1차 검증 전까지 남겨 두는 구버전 조회. migrateScenarioMaps()만 사용한다.
+  async findLegacyScenarioMapStrict(id){
     const legacy=await getRecord('scenarioMaps',id);
     if(legacy&&Array.isArray(legacy.tiles)&&legacy.tiles.length) return legacy;
     const config=await getRecord('game_configs','world_sectors');
@@ -136,6 +139,40 @@ const bridge = {
     if(Array.isArray(raw)&&raw.length) return {id:String(id),sectorId:String(id),cols:8,rows:14,tiles:raw,name:sector.name||String(id)};
     if(raw&&Array.isArray(raw.tiles)&&raw.tiles.length) return {...raw,id:String(id),sectorId:String(id)};
     return null;
+  },
+  /**
+   * 일회성 마이그레이션: scenarioMaps 컬렉션과 game_configs/world_sectors의 scenarioMap을
+   * tacticalMapTemplates로 복사한다. 자동 실행하지 않는다 — 개발자 도구 콘솔에서 직접 호출한다.
+   *   await migrateScenarioMaps()                  // 미리보기(dryRun): 무엇을 옮길지만 출력
+   *   await migrateScenarioMaps({ dryRun:false })  // 실제 저장
+   * 이미 tacticalMapTemplates에 있는 id는 건너뛴다(overwrite:true로 덮어쓰기). 검증에 실패한 맵은 저장하지 않는다.
+   * 원본(scenarioMaps / world_sectors)은 지우지 않는다.
+   */
+  async migrateScenarioMaps({ dryRun=true, overwrite=false }={}){
+    const MapSchema=window.MapSchema;
+    if(!MapSchema) throw new Error('MapSchema 모듈이 없습니다.');
+    const sources=new Map();
+    (await listRecords('scenarioMaps')).forEach(doc=>{ const id=String(doc?.sectorId||doc?.id||''); if(id) sources.set(id,{from:'scenarioMaps',doc}); });
+    const ids=new Set(sources.keys());
+    (await this.loadWorldSectorsFromSupabase()).forEach(s=>{ if(s?.id&&s.scenarioMap) ids.add(String(s.id)); });
+    const report=[];
+    for(const id of ids){
+      const raw=sources.has(id) ? sources.get(id).doc : await this.findLegacyScenarioMapStrict(id);
+      const from=sources.has(id) ? 'scenarioMaps' : 'world_sectors';
+      if(!overwrite && await getRecord('tacticalMapTemplates',id)){ report.push({id,from,result:'skip(이미 있음)'}); continue; }
+      const tpl=MapSchema.normalizeTacticalMapTemplate(raw,id);
+      const check=tpl?MapSchema.validateTacticalMapTemplate(tpl):{valid:false,errors:['정규화 실패']};
+      if(!check.valid){ report.push({id,from,result:'invalid: '+check.errors.join(', ')}); continue; }
+      if(!dryRun){
+        await putRecord('tacticalMapTemplates',id,{sectorId:tpl.sectorId||id,name:tpl.metadata?.name||id,cols:tpl.width,rows:tpl.height,
+          tiles:tpl.tiles,spawnPoints:tpl.spawnPoints,roads:tpl.metadata?.roads,structures:tpl.metadata?.structures,units:tpl.metadata?.units,
+          migratedFrom:from,updatedAt:new Date().toISOString()});
+      }
+      report.push({id,from,result:dryRun?'would migrate':'migrated'});
+    }
+    console.table(report);
+    if(dryRun) console.info('[migrateScenarioMaps] 미리보기입니다. 실제로 옮기려면 migrateScenarioMaps({ dryRun:false })');
+    return report;
   },
   async saveGameStateToCloud(payload){try{const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
   async loadGameStateFromCloud(uid){try{return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
@@ -236,6 +273,6 @@ window.SupabaseBridge.loadCharacters=bridge.getCharactersFromCloud.bind(bridge);
 window.SupabaseBridge.subscribeCharacters=bridge.subscribeCharacterList.bind(bridge);
 window.SupabaseBridge.uploadCharacterImage=bridge.uploadCharacterAvatar.bind(bridge);
 window.SupabaseBridge.syncGameStateToSupabase=bridge.saveGameStateToCloud.bind(bridge);
-for (const [name,fn] of Object.entries({saveCharacterToCloud:bridge.saveCharacterToCloud,getCharactersFromCloud:bridge.getCharactersFromCloud,subscribeCharacterList:bridge.subscribeCharacterList,deleteCharacterFromCloud:bridge.deleteCharacterFromCloud,uploadCharacterAvatar:bridge.uploadCharacterAvatar,uploadSkillIcon:bridge.uploadSkillIcon,saveSkillToCloud:bridge.saveSkillToCloud,getSkillsFromCloud:bridge.getSkillsFromCloud,subscribeSkillList:bridge.subscribeSkillList,saveGameConfigToCloud:bridge.saveGameConfigToCloud,loadGameConfigFromCloud:bridge.loadGameConfigFromCloud,subscribeGameConfig:bridge.subscribeGameConfig,saveGameStateToCloud:bridge.saveGameStateToCloud,loadGameStateFromCloud:bridge.loadGameStateFromCloud,subscribeGameState:bridge.subscribeGameState,syncMapToSupabase:bridge.syncMapToSupabase,loadMapFromSupabase:bridge.loadMapFromSupabase,saveScenarioMapToSupabase:bridge.saveScenarioMapToSupabase,loadScenarioMapFromSupabase:bridge.loadScenarioMapFromSupabase,saveTacticalMapTemplateToSupabase:bridge.saveTacticalMapTemplateToSupabase,loadTacticalMapTemplateFromSupabase:bridge.loadTacticalMapTemplateFromSupabase,findTacticalMapTemplateStrict:bridge.findTacticalMapTemplateStrict,loadWorldSectorsFromSupabase:bridge.loadWorldSectorsFromSupabase,loadSectorScenarioMapFromSupabase:bridge.loadSectorScenarioMapFromSupabase,saveSectorScenarioMapToSupabase:bridge.saveSectorScenarioMapToSupabase})) window[name]=fn.bind(bridge);
+for (const [name,fn] of Object.entries({saveCharacterToCloud:bridge.saveCharacterToCloud,getCharactersFromCloud:bridge.getCharactersFromCloud,subscribeCharacterList:bridge.subscribeCharacterList,deleteCharacterFromCloud:bridge.deleteCharacterFromCloud,uploadCharacterAvatar:bridge.uploadCharacterAvatar,uploadSkillIcon:bridge.uploadSkillIcon,saveSkillToCloud:bridge.saveSkillToCloud,getSkillsFromCloud:bridge.getSkillsFromCloud,subscribeSkillList:bridge.subscribeSkillList,saveGameConfigToCloud:bridge.saveGameConfigToCloud,loadGameConfigFromCloud:bridge.loadGameConfigFromCloud,subscribeGameConfig:bridge.subscribeGameConfig,saveGameStateToCloud:bridge.saveGameStateToCloud,loadGameStateFromCloud:bridge.loadGameStateFromCloud,subscribeGameState:bridge.subscribeGameState,syncMapToSupabase:bridge.syncMapToSupabase,loadMapFromSupabase:bridge.loadMapFromSupabase,saveScenarioMapToSupabase:bridge.saveScenarioMapToSupabase,loadScenarioMapFromSupabase:bridge.loadScenarioMapFromSupabase,saveTacticalMapTemplateToSupabase:bridge.saveTacticalMapTemplateToSupabase,loadTacticalMapTemplateFromSupabase:bridge.loadTacticalMapTemplateFromSupabase,findTacticalMapTemplateStrict:bridge.findTacticalMapTemplateStrict,migrateScenarioMaps:bridge.migrateScenarioMaps,loadWorldSectorsFromSupabase:bridge.loadWorldSectorsFromSupabase,loadSectorScenarioMapFromSupabase:bridge.loadSectorScenarioMapFromSupabase,saveSectorScenarioMapToSupabase:bridge.saveSectorScenarioMapToSupabase})) window[name]=fn.bind(bridge);
 bridge.initAuth();
 console.info(client?'Supabase 연결 준비 완료':'Supabase 설정 대기 중: supabase-config.js 확인');

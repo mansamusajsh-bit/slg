@@ -1,3 +1,4 @@
+// LEGACY: 이 파일은 로드되지 않는 구버전 에디터다 (scenarioMaps + 기본맵 fallback). 실제 에디터는 루트의 civ4-editor.js.
 /* ==========================================================================
    scenario-editor.js - 8x14 Tactical Scenario Map Editor
    & Editor Auth System (3-second LongPress Detection)
