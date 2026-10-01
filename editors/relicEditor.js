@@ -23,7 +23,7 @@ class RelicEditor extends RecordEditorBase {
   }
 
   emptyRecord() {
-    return { id: '', name: '', kind: 'gift', rarity: 'common', effects: [{ scope: 'self', stat: 'atk', value: 1 }] };
+    return { id: '', name: '', kind: 'gift', rarity: 'common', description: '', effects: [{ scope: 'self', stat: 'atk', value: 1 }] };
   }
   normalize(x) { return this.engine.normalizeRelic(x); }
   validate(x) { return this.engine.validateRelic(x); }
@@ -52,6 +52,10 @@ class RelicEditor extends RecordEditorBase {
       selectEl(E.RELIC_RARITIES, d.rarity, (v) => { d.rarity = v; this.markDirty(); })
     ]));
     form.appendChild(grid);
+    form.appendChild(h('label', { class: 'slg-ed-field' }, [
+      h('span', { text: '설명' }),
+      h('textarea', { class: 'slg-ed-input', rows: '2', value: d.description || '', on: { input: (e) => { d.description = e.target.value; this.markDirty(); } } })
+    ]));
     form.appendChild(h('div', { class: 'slg-ed-muted', text: d.kind === 'gift'
       ? '선물 유물: 유닛에게 1개 선물, 받은 유닛 본인에게만 적용 → scope는 self 고정'
       : '지휘관 유물: 지휘관이 착용, 군 전체/전투 규칙/런 전체에 적용 (슬롯 제한 있음)' }));
@@ -63,7 +67,7 @@ class RelicEditor extends RecordEditorBase {
       const scopeSel = selectEl(scopes.map(s => ({ value: s, label: SCOPE_LABELS[s] || s })), fx.scope, (v) => { fx.scope = v; this.markDirty(); });
       if (d.kind === 'gift') scopeSel.disabled = true;
       row.appendChild(scopeSel);
-      row.appendChild(selectEl(E.RELIC_STATS, fx.stat, (v) => { fx.stat = v; this.markDirty(); }));
+      row.appendChild(selectEl(E.RELIC_STATS.map(k => ({ value: k, label: E.RELIC_STAT_LABELS[k] })), fx.stat, (v) => { fx.stat = v; this.markDirty(); }));
       row.appendChild(numberEl(fx.value, (v) => { fx.value = v; this.markDirty(); }, { step: 'any' }));
       row.appendChild(h('button', { class: 'slg-ed-btn danger small', text: '✕', on: { click: () => { d.effects.splice(i, 1); this.markDirty(); this.render(); } } }));
       form.appendChild(row);

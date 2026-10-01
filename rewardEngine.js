@@ -14,9 +14,9 @@
  *       { type:'recruit', id | pool, weight }            // id = characters 컬렉션의 캐릭터 id
  *     - id(특정 대상)와 pool(하위 풀에서 1번 다시 뽑기) 중 정확히 하나만 쓴다.
  *     - 하위 풀의 entry는 모두 부모 entry와 같은 type(relic이면 같은 kind)이어야 한다.
- *   relics/{id}: { id, name, kind:'commander'|'gift', rarity, effects:[{ scope, stat, value }] }
+ *   relics/{id}: { id, name, kind:'commander'|'gift', rarity, description, effects:[{ scope, stat, value }] }
  *     - gift는 scope가 항상 'self'. commander는 'army' | 'battle' | 'run'.
- *   items/{id}:  { id, name, description }
+ *   items/{id}:  { id, name, description, category?, rarity? }   (category: ITEM_CATEGORIES)
  *
  * 노출: window.RewardEngine (브라우저), 전역 RewardEngine (node vm 테스트)
  */
@@ -37,7 +37,19 @@
     gift: Object.freeze(['self']),
     commander: Object.freeze(['army', 'battle', 'run'])
   });
-  const RELIC_STATS = Object.freeze(['atk', 'def', 'hp', 'mobility', 'ap', 'critRate', 'goldGain', 'expGain']);
+  // 유물 효과 어휘. 값의 의미(단위)는 RELIC_STAT_LABELS에 적는다. 실제 적용 로직은 아직 없다(데이터만).
+  const RELIC_STAT_LABELS = Object.freeze({
+    atk: '공격력 (+)', def: '방어력 (+)', hp: '최대 HP (+)', mobility: '이동력 (+)', ap: '행동력 AP (+)',
+    critRate: '치명타율 (%p)', evasion: '회피율 (%p)', lifesteal: '흡혈 (피해의 %)', counterDmg: '반격 피해 (%)',
+    terrainDef: '지형 방어 보너스 (%p)', range: '사거리 (+칸)', regen: '턴 시작 HP 회복 (+)', shield: '전투 시작 보호막 (+)',
+    firstTurnAp: '첫 턴 추가 AP (+)', healAfterBattle: '전투 후 HP 회복 (최대 HP의 %)', skillCooldown: '스킬 재사용 대기 (턴, 음수=감소)',
+    goldGain: '골드 획득 (%)', expGain: '경험치 획득 (%)', spGain: '승리 시 SP (+)', affection: '호감도 (+)',
+    shopDiscount: '상점 할인 (%)', commanderAP: '지휘 AP 최대치 (+)', rewinder: '시공간 리와인더 (+개)', deploySlots: '출전 슬롯 (+)'
+  });
+  const RELIC_STATS = Object.freeze(Object.keys(RELIC_STAT_LABELS));
+  const ITEM_CATEGORIES = Object.freeze({
+    consumable: '소모품', material: '강화 재료', gift: '선물(호감도)', book: '교본(SP)', key: '열쇠·특수'
+  });
 
   // 레코드 id = slg_records.record_id. 영문/숫자/_/- 만 허용한다.
   const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -97,6 +109,7 @@
       name: r.name,
       kind: r.kind,
       rarity: r.rarity,
+      description: r.description ?? '',
       effects: Array.isArray(r.effects)
         ? r.effects.map(fx => ({ scope: fx?.scope, stat: fx?.stat, value: fx?.value }))
         : r.effects
@@ -105,7 +118,11 @@
 
   function normalizeItem(raw) {
     const it = raw || {};
-    return { id: it.id, name: it.name, description: it.description ?? '' };
+    const out = { id: it.id, name: it.name, description: it.description ?? '' };
+    // category/rarity는 선택 항목 (예전에 만든 아이템에는 없을 수 있음)
+    if (hasValue(it.category)) out.category = it.category;
+    if (hasValue(it.rarity)) out.rarity = it.rarity;
+    return out;
   }
 
   // ==========================================================================
@@ -258,6 +275,7 @@
     if (!hasValue(x.name) || !String(x.name).trim()) r.error(null, 'name', '이름이 비어 있습니다.');
     if (!RELIC_KINDS.includes(x.kind)) r.error(null, 'kind', `kind는 commander 또는 gift여야 합니다. (현재: ${x.kind})`);
     if (!RELIC_RARITIES.includes(x.rarity)) r.error(null, 'rarity', `rarity는 ${RELIC_RARITIES.join('/')} 중 하나여야 합니다. (현재: ${x.rarity})`);
+    if (x.description != null && typeof x.description !== 'string') r.error(null, 'description', '설명은 문자열이어야 합니다.');
     if (!Array.isArray(x.effects) || x.effects.length === 0) {
       r.error(null, 'effects', '효과(effects)를 1개 이상 추가하세요.');
       return r.done();
@@ -279,6 +297,8 @@
     if (idErr) r.error(null, 'id', idErr);
     if (!hasValue(x.name) || !String(x.name).trim()) r.error(null, 'name', '이름이 비어 있습니다.');
     if (x.description != null && typeof x.description !== 'string') r.error(null, 'description', '설명은 문자열이어야 합니다.');
+    if (hasValue(x.category) && !ITEM_CATEGORIES[x.category]) r.error(null, 'category', `알 수 없는 분류 "${x.category}"`);
+    if (hasValue(x.rarity) && !RELIC_RARITIES.includes(x.rarity)) r.error(null, 'rarity', `rarity는 ${RELIC_RARITIES.join('/')} 중 하나여야 합니다.`);
     return r.done();
   }
 
@@ -468,6 +488,9 @@
     RELIC_RARITIES,
     RELIC_SCOPES,
     RELIC_STATS,
+    RELIC_STAT_LABELS,
+    ITEM_CATEGORIES,
+    RARITIES: RELIC_RARITIES,
     ID_PATTERN,
     normalizeEntry,
     normalizeRewardPool,

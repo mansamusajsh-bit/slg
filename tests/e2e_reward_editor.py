@@ -35,6 +35,7 @@ STORE_STUB = r"""
     async exists(c, id) { return col(c)[id] != null; },
     async list(c) { return Object.values(col(c)).map(copy); },
     async save(c, id, data, v) { this.validate(data, v); window.__saves++; col(c)[id] = copy({...data, id}); return true; },
+    async saveMany(c, list, v) { list.forEach(x => this.validate(x, v)); list.forEach(x => { col(c)[x.id] = copy(x); }); window.__saves += list.length; return list.length; },
     async remove(c, id) { delete col(c)[id]; return true; }
   };
 })();
@@ -216,6 +217,18 @@ with sync_playwright() as pw:
     btn(page, ROOT_RP, '+ 💎 유물').click(); page.wait_for_timeout(100)
     opts = page.locator(f'{ROOT_RP} .slg-ed-entry').nth(1).locator('select').nth(3).locator('option').all_inner_texts()
     c.ok(any('행운의 부적' in o for o in opts) and not any('전쟁 뿔피리' in o for o in opts), f'유물 드롭다운은 kind(gift) 필터: {opts}')
+
+    print('\n=== 기본 데이터 가져오기 ===')
+    page.evaluate("() => { window.confirm = () => true; }")
+    page.locator(f'{ROOT_RP} .slg-ed-list-item').first.click(); page.wait_for_timeout(150)  # 편집 중인 draft 정리
+    btn(page, ROOT_RP, '기본 데이터 가져오기').click(); page.wait_for_timeout(1500)
+    counts = page.evaluate("() => ({ items: Object.keys(__db.items).length, relics: Object.keys(__db.relics).length, pools: Object.keys(__db.rewardPools).length, potion: __db.items.potion.name })")
+    c.ok('추가 완료' in status(page, ROOT_RP), '가져오기 완료 메시지: ' + status(page, ROOT_RP))
+    c.ok(counts['relics'] >= 100 and counts['items'] >= 100 and counts['pools'] >= 80 and counts['potion'] == '회복약', f'유물/아이템/풀 추가, 기존 id는 유지: {counts}')
+    btn(page, ROOT_RP, '기본 데이터 가져오기').click(); page.wait_for_timeout(800)
+    c.ok('이미 모두' in status(page, ROOT_RP), '두 번째 가져오기 → 추가할 것 없음')
+    load_item(page, ROOT_RP, 'B-2-boss-relic')
+    c.ok('검증 통과' in page.locator(f'{ROOT_RP} .slg-ed-validation').inner_text(), '가져온 풀(B-2-boss-relic) 불러오기 + 검증 통과')
 
     print('\n=== 저장소 오류 시 폴백 금지 ===')
     page.evaluate("() => { window.SlgStore.list = async () => { throw new Error('network down'); }; }")

@@ -124,3 +124,20 @@ SLG_ROOT=dist python3 tests/e2e_battle.py   # 빌드 산출물(dist)을 대상�
 - 상태이상 지속시간은 라운드(아군 턴 + 적 턴)가 끝날 때 1씩 줄어든다. 전투가 끝나면 상태이상·재사용 대기가 초기화된다.
 - 적은 레벨에 따라 트리의 상위 계층까지 습득한 것으로 간주되며, 점수가 충분한 스킬이 있으면 공격 대신 스킬을 쓴다.
 - 구버전 `customSkill`(단일 고유 스킬)은 그대로 동작하며 🌟 고유 스킬로 표시된다. 스킬트리가 없는 기존 캐릭터에는 병과 추천 트리가 자동으로 붙는다.
+
+## 보상 풀 / 유물 / 아이템 (DEV 에디터)
+
+| 파일 | 역할 |
+| --- | --- |
+| `rewardEngine.js` | **순수 로직**: 보상 풀·유물·아이템 정규화/검증, `rollRewardPool(pool, rng, context)`, 시뮬레이션 집계 |
+| `editors/*.js` | DEV 패널 `🎁 보상 풀` · `💎 유물` · `📦 아이템` 탭. 탭을 열 때만 `import()`로 로드되고 게임 state를 모른다 |
+| `editors/seedData.js` | 기본 데이터: 유물 100(지휘관 50/선물 50) · 아이템 100 · 보상 풀 82 |
+
+- 저장: Supabase `slg_records`의 `rewardPools` / `relics` / `items` 컬렉션. 공용 저장 계층은 `window.SlgStore`(load는 데이터가 없으면 에러, save는 검증 실패 시 저장하지 않음).
+- 뽑기는 `SeedEngine.createRNG(seed)`만 쓴다. 같은 시드 = 같은 결과.
+- `📥 기본 데이터 가져오기`: 이미 있는 id는 건너뛰고, 새 데이터를 기존 데이터와 함께 전부 검증한 뒤에만 저장한다.
+- 기본 보상 풀 구성: 하위 풀(유물 종류×등급 8개, 아이템 분류×등급 18개) + 섹터 4곳 × 13종
+  (`{섹터}-battle`, `-battle-ambush`, `-elite`, `-elite-hoard`, `-boss`, `-boss-relic`(3택1 후보), `-event-shrine`, `-event-ruins`,
+  `-event-caravan`, `-chest-small`, `-chest-large`, `-shop-relics`, `-shop-items`) + `run-start-commander`, `run-start-supplies`.
+  난이도가 오를수록 높은 등급 하위 풀의 weight가 커진다. 영입(recruit) 항목은 캐릭터 id가 DB마다 달라 기본 데이터에 없다.
+- 유물 효과(`effects`)는 아직 데이터일 뿐이며 전투/런에 적용되지 않는다. 스탯 키 목록과 단위는 `RewardEngine.RELIC_STAT_LABELS`.

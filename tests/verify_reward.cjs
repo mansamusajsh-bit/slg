@@ -127,4 +127,35 @@ for(const f of sources){
   ok(!/\bstate\b|playerState|currentBattle/.test(code),f+': 게임 state 미참조');
 }
 
-console.log(fail?`\n${fail} FAILED`:'\nALL PASS'); process.exit(fail?1:0);
+// ---- 기본 데이터(editors/seedData.js) + 가져오기 계획(editors/seedImporter.js)
+(async()=>{
+  const seed=await import(path.join(__dirname,'..','editors','seedData.js'));
+  const imp=await import(path.join(__dirname,'..','editors','seedImporter.js'));
+  const S=seed.SEED_SUMMARY;
+  ok(S.relics===100&&S.commanderRelics===50&&S.giftRelics===50&&S.items===100,'기본 데이터: 유물 100(지휘관 50/선물 50) · 아이템 100 · 풀 '+S.pools);
+  const uniq=a=>new Set(a.map(x=>x.id)).size===a.length;
+  ok(uniq(seed.SEED_RELICS)&&uniq(seed.SEED_ITEMS)&&uniq(seed.SEED_POOLS),'기본 데이터 id 중복 없음');
+  const scat={pools:seed.SEED_POOLS,relics:seed.SEED_RELICS,items:seed.SEED_ITEMS,characters:[]};
+  const bad=[...seed.SEED_RELICS.filter(r=>!RE.validateRelic(r).valid).map(r=>r.id),...seed.SEED_ITEMS.filter(i=>!RE.validateItem(i).valid).map(i=>i.id),
+    ...seed.SEED_POOLS.filter(p=>!RE.validateRewardPool(p,scat).valid).map(p=>p.id)];
+  ok(bad.length===0,'기본 데이터 전부 검증 통과 '+bad.slice(0,5));
+  ok(seed.SEED_POOLS.every(p=>RE.validateRewardPool(p,scat).warnings.length===0),'기본 풀 경고 없음 (rolls만큼 항상 뽑힘)');
+  let empty=0; const rng=SE.createRNG('SEED-ALL');
+  for(const p of seed.SEED_POOLS) for(let i=0;i<50;i++) if(RE.rollRewardPool(p,rng,{pools:seed.SEED_POOLS}).length<p.rolls) empty++;
+  ok(empty===0,'모든 기본 풀 × 50회: 빈 뽑기 없음');
+  // 난이도가 오를수록 보스 유물 후보의 전설 비율이 오른다
+  const legRate=id=>{const r=RE.simulateRewardPool(seed.SEED_POOLS.find(p=>p.id===id),SE.createRNG('L'),3000,{pools:seed.SEED_POOLS});
+    const leg=new Set(seed.SEED_RELICS.filter(x=>x.rarity==='legendary').map(x=>x.id)); return r.rows.filter(x=>leg.has(x.id)).reduce((s,x)=>s+x.count,0)/r.totalRewards;};
+  ok(legRate('A-1-boss-relic')<legRate('B-2-boss-relic'),'보스 유물 전설 비율: A-1 '+legRate('A-1-boss-relic').toFixed(2)+' < B-2 '+legRate('B-2-boss-relic').toFixed(2));
+
+  // 가져오기 계획: 이미 있는 id는 건너뛰고, 기존 데이터와 충돌하면 문제로 보고
+  const mem=(data)=>({ async list(c){return JSON.parse(JSON.stringify(Object.values(data[c]||{})));} });
+  const plan=await imp.planSeedImport(mem({items:{potion:{id:'potion',name:'내 회복약'}}}),RE,seed);
+  ok(plan.problems.length===0&&plan.skipped.items===1&&plan.add.items.length===99&&plan.add.pools.length===S.pools,'가져오기: 기존 potion은 건너뜀, 나머지 추가 예정');
+  const conflict=await imp.planSeedImport(mem({relics:{cmd_field_banner:{id:'cmd_field_banner',name:'x',kind:'gift',rarity:'common',effects:[{scope:'self',stat:'atk',value:1}]}}}),RE,seed);
+  ok(conflict.problems.some(m=>/cmd_field_banner/.test(m)),'가져오기: 기존 유물 kind가 달라 풀과 충돌 → 문제 보고 ('+conflict.problems.length+'건)');
+  let threw=false; try{await imp.runSeedImport({saveMany(){throw new Error('should not write');}},RE,conflict);}catch(e){threw=/아무것도 저장하지/.test(e.message);}
+  ok(threw,'문제가 있으면 아무것도 쓰지 않음');
+
+  console.log(fail?`\n${fail} FAILED`:'\nALL PASS'); process.exit(fail?1:0);
+})();

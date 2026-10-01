@@ -177,6 +177,22 @@ const SlgStore = {
     await putRecord(collection, id, { ...data, id: String(id), updatedAt: new Date().toISOString() });
     return true;
   },
+  /** 여러 레코드를 한 번에 저장. 전부 검증한 뒤에만 쓴다 (하나라도 실패하면 아무것도 쓰지 않음). */
+  async saveMany(collection, records, validator) {
+    const list = Array.isArray(records) ? records : [];
+    for (const rec of list) {
+      if (!rec || !rec.id) throw new SlgStoreError('VALIDATION', `[${collection}] id가 없는 레코드가 있어 저장하지 않았습니다.`);
+      try { this.validate(rec, validator); }
+      catch (e) { throw new SlgStoreError('VALIDATION', `[${collection}/${rec.id}] ${e.message}`, e.details); }
+    }
+    const now = new Date().toISOString();
+    for (let i = 0; i < list.length; i += 100) {
+      const rows = list.slice(i, i + 100).map(rec => ({ collection_name: collection, record_id: String(rec.id), data: clean({ ...rec, id: String(rec.id), updatedAt: now }), updated_at: now }));
+      const { error } = await requireClient().from(TABLE).upsert(rows, { onConflict: 'collection_name,record_id' });
+      if (error) throw error;
+    }
+    return list.length;
+  },
   async remove(collection, id) { await deleteRecord(collection, id); return true; }
 };
 window.SlgStore = SlgStore;

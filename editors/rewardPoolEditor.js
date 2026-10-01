@@ -164,6 +164,31 @@ class RewardPoolEditor {
     this.render();
   }
 
+  /** 기본 보상 데이터(editors/seedData.js) 가져오기. 이미 있는 id는 건너뛰고, 전부 검증된 경우에만 저장한다. */
+  async importSeed() {
+    try {
+      this.status.set('⏳ 기본 데이터를 확인하는 중...', 'info');
+      const [seed, importer] = await Promise.all([import('./seedData.js'), import('./seedImporter.js')]);
+      const plan = await importer.planSeedImport(this.store, this.engine, seed);
+      const { add, skipped, problems } = plan;
+      if (problems.length) {
+        this.status.set(`❌ 기본 데이터가 기존 데이터와 맞지 않아 가져오지 않았습니다 (${problems.length}건). 예: ${problems[0]}`, 'error');
+        console.error('[기본 데이터 가져오기] 검증 실패', problems);
+        return;
+      }
+      const total = add.items.length + add.relics.length + add.pools.length;
+      if (total === 0) { this.status.set('ℹ️ 기본 데이터가 이미 모두 들어 있습니다.', 'info'); return; }
+      const msg = `기본 데이터를 추가합니다.\n\n아이템 ${add.items.length}개 (이미 있음 ${skipped.items})\n유물 ${add.relics.length}개 (이미 있음 ${skipped.relics})\n보상 풀 ${add.pools.length}개 (이미 있음 ${skipped.pools})\n\n이미 있는 id는 덮어쓰지 않습니다. 계속할까요?`;
+      if (!window.confirm(msg)) { this.status.set('가져오기를 취소했습니다.', 'info'); return; }
+      const done = await importer.runSeedImport(this.store, this.engine, plan, (m) => this.status.set(`⏳ ${m}`, 'info'));
+      this.catalog = await loadCatalog(this.store, this.engine);
+      this.status.set(`📥 기본 데이터 추가 완료: 아이템 ${done.items} · 유물 ${done.relics} · 보상 풀 ${done.pools}`, 'success');
+    } catch (err) {
+      this.status.set(`❌ 가져오기 실패: ${errorText(err)}`, 'error');
+    }
+    this.render();
+  }
+
   markDirty() { this.dirty = true; this.sim.result = null; this.refreshDerived(); }
 
   addEntry(type = 'gold') {
@@ -206,6 +231,7 @@ class RewardPoolEditor {
     section.appendChild(h('div', { class: 'slg-ed-toolbar' }, [
       h('span', { class: 'slg-ed-title', text: `📚 풀 목록 (${this.catalog.pools.length})` }),
       h('button', { class: 'slg-ed-btn', text: '🔄', title: '목록 새로고침', on: { click: () => this.refreshCatalog() } }),
+      h('button', { class: 'slg-ed-btn', text: '📥 기본 데이터 가져오기', title: '유물 100 · 아이템 100 · 보상 풀 기본 세트 (이미 있는 id는 건너뜀)', on: { click: () => this.importSeed() } }),
       h('button', { class: 'slg-ed-btn primary', text: '➕ 새로 만들기', on: { click: () => this.newPool() } })
     ]));
     const list = h('div', { class: 'slg-ed-list' });
