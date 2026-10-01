@@ -18,6 +18,7 @@ const files = [
   'ui.js',
   'game.js',
   'civ4-editor.js',
+  'audio', // 사망회귀 연출 (Web Audio 합성, 외부 음원 없음)
   'supabase-bridge.js', 'supabase-config.js',
   // DEV 데이터 에디터: rewardEngine.js(순수 로직)와 editors/ 폴더는 에디터 탭을 열 때 import()로만 로드된다.
   'rewardEngine.js',
