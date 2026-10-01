@@ -5347,6 +5347,8 @@
 .rbd-row-pick{cursor:pointer;text-align:left}
 .rbd-row-pick:hover,.rbd-row-pick:focus-visible{border-color:#a78bfa;background:#272548;outline:none}
 .rbd-row-avatar{font-size:22px;width:28px;text-align:center;flex:none}
+.rbd-row-avatar img{width:28px;height:28px;border-radius:6px;object-fit:cover;display:block}
+.rbd-draw-result{border-color:#f59e0b;background:rgba(245,158,11,.12);margin-bottom:10px}
 .rbd-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .rbd-row-main b{font-size:13px}
 .rbd-row-main small{font-size:11px;color:#94a3b8}

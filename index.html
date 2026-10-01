@@ -244,16 +244,16 @@
           <div class="gacha-action-head">
             <div>
               <div class="gacha-section-title">고용</div>
-              <div class="gacha-section-desc">현재는 테스트 단계로 무료 고용입니다.</div>
+              <div class="gacha-section-desc" id="gacha-cost-desc">1회 100G</div>
             </div>
             <div class="gacha-owned-count" id="gacha-owned-count">미편입 사본 0장</div>
           </div>
           <div class="gacha-buttons">
-            <button class="gacha-summon-btn single" onclick="summonCharacters(1)">
-              <span>✦</span><strong>1회 고용</strong><small>RANDOM × 1</small>
+            <button class="gacha-summon-btn single" data-amount="1" onclick="summonCharacters(1)">
+              <span>✦</span><strong>1회 고용</strong><small>100G · RANDOM × 1</small>
             </button>
-            <button class="gacha-summon-btn multi" onclick="summonCharacters(10)">
-              <span>✦✦</span><strong>10회 고용</strong><small>RANDOM × 10</small>
+            <button class="gacha-summon-btn multi" data-amount="10" onclick="summonCharacters(10)">
+              <span>✦✦</span><strong>10회 고용</strong><small>1000G · RANDOM × 10</small>
             </button>
           </div>
           <div class="gacha-status" id="gacha-status">캐릭터 DB를 불러오는 중...</div>

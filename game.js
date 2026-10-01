@@ -3784,9 +3784,50 @@
     // 획득 기록: state.characterCollection (게임 상태에 함께 저장)
     // ========================================================================
     let gachaLastResults = [];
+    const GACHA_HIRE_COST = 100;          // 용병 고용 1회
+    const EMERGENCY_RECRUIT_COST = 200;   // 전멸 후 긴급 모집 1회 (무작위)
 
     function getCharacterGachaPool() {
       return Array.isArray(customCharactersCloudCache) ? customCharactersCloudCache.filter(c => c && c.id) : [];
+    }
+
+    async function ensureCharacterGachaPool() {
+      if (!getCharacterGachaPool().length && typeof window.getCharactersFromCloud === 'function') {
+        const chars = await window.getCharactersFromCloud();
+        if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
+      }
+      return getCharacterGachaPool();
+    }
+
+    // ---- 전사한 캐릭터의 재등장: 같은 캐릭터 데이터지만 다른 사람(이름만 다름)으로 나온다 ----
+    const MERC_ALIAS_NAMES = [
+      '카일', '에단', '로웰', '브람', '세드릭', '오스윈', '루카', '다리우스', '하랄', '이안', '펠릭스', '가렛',
+      '마커스', '레온', '빅토르', '엘리아', '세라', '미렐', '아델', '노라', '이솔데', '카린', '리아나', '벨라'
+    ];
+
+    // 이번 런에서 전사한 캐릭터 id (전사한 유닛은 출전 명단에 isDead로 남는다)
+    function getFallenCharacterIds() {
+      return new Set((state.playerUnits || []).filter(u => u && !isUnitAlive(u)).map(getCharacterId).filter(Boolean));
+    }
+
+    // "성기사 롤랑" → "성기사 세드릭": 칭호는 두고 이름만 바꾼다. 지금 쓰는 이름과 겹치지 않게 고른다.
+    function makeMercAlias(record) {
+      const used = new Set([...(state.playerUnits || []), ...(state.reserveUnits || [])].map(u => u && u.name));
+      (state.characterCollection || []).forEach(e => { if (e && e.alias) used.add(e.alias); });
+      const parts = String(record.name || '').trim().split(/\s+/);
+      const title = parts.length > 1 ? parts.slice(0, -1).join(' ') + ' ' : '';
+      const free = MERC_ALIAS_NAMES.map(n => title + n).filter(n => n !== record.name && !used.has(n));
+      if (free.length) return free[Math.floor(Math.random() * free.length)];
+      let i = 2;
+      while (used.has(`${title}무명 ${i}`)) i++;
+      return `${title}무명 ${i}`;
+    }
+
+    // 시작 파티(u1~u3)처럼 DB id가 없는 유닛도 있으므로 이름이 같은 전사자도 같은 사람으로 본다.
+    function getHireAlias(record) {
+      const fallenNames = new Set((state.playerUnits || []).filter(u => u && !isUnitAlive(u)).map(u => u.name));
+      const fallen = getFallenCharacterIds().has(String(record.id)) || fallenNames.has(record.name);
+      return fallen ? makeMercAlias(record) : null;
     }
 
     function escapeGachaHtml(value) {
@@ -3827,6 +3868,12 @@
       const status = document.getElementById('gacha-status');
       if (poolCount) poolCount.textContent = `DB ${pool.length}명`;
       if (ownedCount) ownedCount.textContent = `미편입 사본 ${collection.length}장`;
+      const costDesc = document.getElementById('gacha-cost-desc');
+      if (costDesc) costDesc.textContent = `1회 ${GACHA_HIRE_COST}G · 보유 골드 ${Number(state.gold) || 0}G`;
+      document.querySelectorAll('.gacha-summon-btn').forEach(b => {
+        if (status && status.dataset.busy) return;
+        b.disabled = (Number(state.gold) || 0) < GACHA_HIRE_COST * (Number(b.dataset.amount) || 1);
+      });
       if (status && pool.length > 0 && !status.dataset.busy) status.textContent = `고용 가능 용병 ${pool.length}명`;
 
       if (resultGrid) {
@@ -3875,41 +3922,41 @@
       buttons.forEach(b => b.disabled = true);
       const status = document.getElementById('gacha-status');
       if (status) { status.textContent = '고용 중...'; status.dataset.busy = '1'; }
+      let message = '';
       try {
-        let pool = getCharacterGachaPool();
-        if (!pool.length && typeof window.getCharactersFromCloud === 'function') {
-          const chars = await window.getCharactersFromCloud();
-          if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
-          pool = getCharacterGachaPool();
-        }
+        const cost = GACHA_HIRE_COST * amount;
+        if ((Number(state.gold) || 0) < cost) throw new Error(`골드가 부족합니다. (필요 ${cost}G · 보유 ${Number(state.gold) || 0}G)`);
+        const pool = await ensureCharacterGachaPool();
         if (!pool.length) throw new Error('고용 가능한 용병이 없습니다.');
-
-        const results = [];
-        for (let i = 0; i < amount; i++) {
-          results.push(pool[Math.floor(Math.random() * pool.length)]);
-        }
-        gachaLastResults = results;
+        state.gold -= cost;
 
         if (!Array.isArray(state.characterCollection)) state.characterCollection = [];
-        results.forEach(character => {
+        const results = [];
+        for (let i = 0; i < amount; i++) {
+          const character = pool[Math.floor(Math.random() * pool.length)];
+          const alias = getHireAlias(character); // 전사한 캐릭터면 다른 이름의 사람으로 고용된다
           state.characterCollection.push({
             instanceId: `gacha_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
             characterId: character.id,
+            ...(alias ? { alias } : {}),
             acquiredAt: new Date().toISOString()
           });
-        });
+          results.push(alias ? { ...character, name: alias } : character);
+        }
+        gachaLastResults = results;
 
         saveGameState(true);
-        renderCharacterGacha();
         const names = results.map(c => c.name || '영웅').join(', ');
-        if (status) status.textContent = `${amount}회 고용 완료: ${names} — 용병 명부에서 출전 명단에 편입하세요.`;
-        addLog(`💰 [용병 고용] ${amount}회 고용 완료 — ${names} (용병 명부에서 편입)`, 'gold');
+        message = `${amount}회 고용 완료 (-${cost}G): ${names} — 용병 명부에서 출전 명단에 편입하세요.`;
+        addLog(`💰 [용병 고용] ${amount}회 고용 완료 (-${cost}G, 잔여 ${state.gold}G) — ${names} (용병 명부에서 편입)`, 'gold');
       } catch (err) {
         console.error('Character gacha error:', err);
-        if (status) status.textContent = err.message || '고용에 실패했습니다.';
+        message = err.message || '고용에 실패했습니다.';
       } finally {
         delete status?.dataset.busy;
-        buttons.forEach(b => b.disabled = false);
+        renderCharacterGacha();
+        if (status) status.textContent = message;
+        if (typeof renderStrategyView === 'function') renderStrategyView();
       }
     }
     window.summonCharacters = summonCharacters;
@@ -5777,11 +5824,16 @@
       const entryOf = (charId) => {
         const key = String(charId);
         if (!map.has(key)) {
-          map.set(key, { id: key, record: records.find(c => String(c.id) === key) || null, copies: 0, unit: null, reserve: null });
+          map.set(key, { id: key, record: records.find(c => String(c.id) === key) || null, copies: 0, alias: null, unit: null, reserve: null });
         }
         return map.get(key);
       };
-      (state.characterCollection || []).forEach(e => { if (e && e.characterId != null) entryOf(e.characterId).copies++; });
+      (state.characterCollection || []).forEach(e => {
+        if (!e || e.characterId == null) return;
+        const entry = entryOf(e.characterId);
+        entry.copies++;
+        if (e.alias && !entry.alias) entry.alias = e.alias; // 전사한 캐릭터의 사본: 편입하면 이 이름으로 들어온다
+      });
       (state.playerUnits || []).forEach(u => { if (u && !u.isDead && u.sourceCharacterId) entryOf(u.sourceCharacterId).unit = u; });
       reserve.forEach(u => { if (u && u.sourceCharacterId) entryOf(u.sourceCharacterId).reserve = u; });
       return [...map.values()].filter(e => e.record || e.unit || e.reserve);
@@ -5798,10 +5850,14 @@
         state.reserveUnits.splice(state.reserveUnits.indexOf(unit), 1);
       } else {
         if (!entry.record) return { ok: false, reason: '캐릭터 DB에서 원본을 찾을 수 없습니다.' };
-        const copyIdx = state.characterCollection.findIndex(e => e && String(e.characterId) === entry.id);
+        const isCopy = (e) => e && String(e.characterId) === entry.id;
+        let copyIdx = state.characterCollection.findIndex(e => isCopy(e) && e.alias);
+        if (copyIdx < 0) copyIdx = state.characterCollection.findIndex(isCopy);
         if (copyIdx < 0) return { ok: false, reason: '편입할 사본이 없습니다.' };
-        state.characterCollection.splice(copyIdx, 1);
-        unit = characterRecordToUnit(entry.record, {
+        const [copy] = state.characterCollection.splice(copyIdx, 1);
+        // 전사한 캐릭터는 같은 사람으로 돌아오지 않는다 — 고용 때 정한 다른 이름(없으면 지금 새로 지은 이름)으로 편입
+        const alias = copy.alias || getHireAlias(entry.record);
+        unit = characterRecordToUnit(alias ? { ...entry.record, name: alias } : entry.record, {
           id: `merc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           owner: 'PLAYER', x: 0, y: 0
         });
@@ -5842,7 +5898,7 @@
         return src.unitClass || src.classType || 'KNIGHT';
       };
       const levelOf = (e) => Number((e.unit || e.reserve || {}).level) || 0;
-      const nameOf = (e) => String((e.unit || e.reserve || e.record || {}).name || '');
+      const nameOf = (e) => String((e.unit || e.reserve || {}).name || e.alias || (e.record || {}).name || '');
 
       let rows = all.filter(e => {
         if (q && !nameOf(e).toLowerCase().includes(q)) return false;
@@ -5888,7 +5944,7 @@
           <div class="pool-card ${e.unit ? 'in-roster' : ''}">
             <div class="gacha-card-image">${getGachaAvatarHtml(src)}</div>
             <div class="pool-card-info">
-              <div class="pool-card-name">${esc(src.name || '이름 없는 용병')} ${owned ? `<span class="pool-lv">Lv.${Number(owned.level) || 1}</span>` : ''}</div>
+              <div class="pool-card-name">${esc(nameOf(e) || '이름 없는 용병')} ${owned ? `<span class="pool-lv">Lv.${Number(owned.level) || 1}</span>` : ''}</div>
               <div class="gacha-card-class">${esc(getGachaClassName(src))} ${status}</div>
               <div class="gacha-card-stats">HP ${stats.hp || 100} · ATK ${stats.atk || 40} · DEF ${stats.def || 30} · 사본 ${e.copies}장</div>
             </div>
@@ -8570,7 +8626,7 @@
     //   finishEncounter() 끝에서만 판정한다:
     //     생존 유닛(출전 명단 + 예비) 0 AND 골드 0          → returnByDeath()
     //     생존 유닛 0 AND 골드 > 0                           → openEmergencyRecruit()
-    //       └ 골드가 MIN_RECRUIT_COST 미만이라 아무도 못 뽑으면 안내 후 골드 0 → returnByDeath()
+    //       └ 골드가 EMERGENCY_RECRUIT_COST 미만이라 아무도 못 뽑으면 안내 후 골드 0 → returnByDeath()
     //   상점 구매 등으로 골드가 0이 되는 것은 회귀를 일으키지 않는다.
 
     // 같은 캐릭터인지 판단하는 id (인스턴스 id가 아니라 원본 캐릭터 id)
@@ -8656,86 +8712,42 @@
     }
 
     // ---- 긴급 모집 ---------------------------------------------------------
-    // 모집 비용은 데이터(TOWN_UNIT_SHOP_CATALOG)에서 계산한다. 쓰러진 기존 대원은 같은 병과 용병 비용으로 재모집할 수 있다.
-    function getRecruitCatalog() {
-      return (window.TOWN_UNIT_SHOP_CATALOG || []).filter(c => c && typeof c.cost === 'number' && c.stats);
-    }
+    // 용병 고용과 같은 풀(Supabase characters)에서 무작위로 1명씩 뽑아 바로 출전 명단에 넣는다 (1회 EMERGENCY_RECRUIT_COST).
+    // 쓰러진 대원을 되살리지 않는다. 전사한 캐릭터가 뽑히면 이름만 다른 사람(makeMercAlias)으로 합류한다.
     function getMinRecruitCost() {
-      const costs = getRecruitCatalog().map(c => c.cost);
-      return costs.length ? Math.min(...costs) : Infinity;
+      return EMERGENCY_RECRUIT_COST;
     }
     window.getMinRecruitCost = getMinRecruitCost;
 
-    function getRehireCost(unit) {
-      const cls = unit.classType || unit.unitClass;
-      const same = getRecruitCatalog().filter(c => c.classType === cls).map(c => c.cost);
-      return same.length ? Math.min(...same) : getMinRecruitCost();
+    // 이번 긴급 모집에서 이미 뽑아 살아 있는 캐릭터는 다시 뽑지 않는다 (같은 캐릭터 유닛이 둘이 되지 않게).
+    function getEmergencyRecruitPool() {
+      const aliveIds = new Set(getAliveRunUnits().map(getCharacterId));
+      return getCharacterGachaPool().filter(c => !aliveIds.has(String(c.id)));
     }
 
-    function createUnitFromCatalog(template) {
-      return {
-        id: `hired_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        catalogId: template.id,
-        characterId: template.id,
-        owner: 'PLAYER',
-        isPlayer: true,
-        name: template.name,
-        classType: template.classType,
-        unitClass: template.classType,
-        avatar: template.avatar || '🛡️',
-        level: 1,
-        exp: 0,
-        stats: { ...template.stats },
-        hp: template.stats.hp,
-        maxHp: template.stats.maxHp,
-        atk: template.stats.atk,
-        def: template.stats.def,
-        ap: template.stats.mobility || 2,
-        baseAP: template.stats.mobility || 2,
-        mobility: template.stats.mobility || 2,
-        range: (template.classType === 'ARCHER' || template.classType === 'FIREARM') ? 2 : 1,
-        affection: 80,
-        favorability: 80,
-        promotions: { combatRank: 0 },
-        skillTree: [],
-        customSkill: DEFAULT_CLASS_SKILLS[template.classType] ? JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS[template.classType])) : null,
-        customSkillCooldown: 0,
-        x: -1,
-        y: -1,
-        isDead: false,
-        isInactivated: false,
-        inactivatedUntil: null,
-        upkeep: template.upkeep || 10,
-        description: template.description
-      };
-    }
-
-    /** 긴급 모집 1건. offer = { kind:'catalog', template } | { kind:'rehire', unit } */
-    function emergencyRecruit(offer) {
+    /** 긴급 모집 1회: EMERGENCY_RECRUIT_COST를 내고 무작위 용병 1명이 합류한다. */
+    function emergencyRecruit() {
       const run = state.run;
       if (!run || !run.emergencyRecruit) return { ok: false, reason: '긴급 모집 중이 아닙니다.' };
-      const cost = offer.kind === 'rehire' ? getRehireCost(offer.unit) : offer.template.cost;
+      const cost = EMERGENCY_RECRUIT_COST;
       if (state.gold < cost) return { ok: false, reason: `골드가 부족합니다 (필요 ${cost}G)` };
+      const pool = getEmergencyRecruitPool();
+      if (!pool.length) return { ok: false, reason: '더 모집할 수 있는 용병이 없습니다.' };
+
+      const record = pool[Math.floor(Math.random() * pool.length)];
+      const alias = getHireAlias(record);
+      const unit = characterRecordToUnit(alias ? { ...record, name: alias } : record, {
+        id: `merc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        owner: 'PLAYER', x: 0, y: 0
+      });
       state.gold -= cost;
-      let unit;
-      if (offer.kind === 'rehire') {
-        unit = offer.unit;
-        unit.isDead = false;
-        unit.hp = Number(unit.maxHp) || 100;
-        if (unit.stats) unit.stats.hp = unit.hp;
-        unit.isInactivated = false;
-        unit.inactivatedUntil = null;
-        if (!state.playerUnits.includes(unit)) state.playerUnits.push(unit);
-      } else {
-        unit = createUnitFromCatalog(offer.template);
-        state.playerUnits.push(unit);
-      }
+      state.playerUnits.push(unit);
       normalizeAllUnitsHP(state);
       run.emergencyRecruitCount = (run.emergencyRecruitCount || 0) + 1;
       const bonus = getCommandBonusDef(unit);
       addLog(`🆘 [긴급 모집] ${unit.name} 합류 (-${cost}G, 잔여 ${state.gold}G)${bonus ? ` · 지휘력 보정 방어 +${bonus} 적용` : ''}`, 'gold');
       saveGameState(true);
-      return { ok: true, unit, cost };
+      return { ok: true, unit, cost, alias };
     }
     window.emergencyRecruit = emergencyRecruit;
 
@@ -8782,7 +8794,8 @@
 
     /**
      * 전멸했지만 골드가 남아 있을 때의 모집 화면. 1명 이상 모집해야 닫힌다(전략맵 이동 불가).
-     * 아무도 모집할 수 없으면(0 < 골드 < 최소 모집비) 안내 후 골드를 0으로 만들고 사망회귀한다.
+     * 1회 EMERGENCY_RECRUIT_COST로 무작위 용병 1명을 뽑는다.
+     * 아무도 모집할 수 없으면(0 < 골드 < 모집비) 안내 후 골드를 0으로 만들고 사망회귀한다.
      */
     async function openEmergencyRecruit() {
       const run = state.run;
@@ -8790,12 +8803,12 @@
       run.emergencyRecruit = true;
       saveGameState(true);
 
-      const minCost = getMinRecruitCost();
+      const cost = getMinRecruitCost();
       const recruitedSoFar = () => getAliveRunUnits().length > 0;
 
-      if (state.gold < minCost && !recruitedSoFar()) {
+      if (state.gold < cost && !recruitedSoFar()) {
         // 회귀 판정 지점 (긴급 모집 화면)
-        await showCannotFightNotice(state.gold, minCost);
+        await showCannotFightNotice(state.gold, cost);
         state.gold = 0;
         run.emergencyRecruit = false;
         saveGameState(true);
@@ -8803,36 +8816,64 @@
       }
 
       const { card } = rbdModal('modal-emergency-recruit', '#f59e0b');
+      const esc = escapeGachaHtml;
+      const CLASS_LABEL = { KNIGHT: '기사', MAGE: '마법사', ARCHER: '궁수', MELEE: '보병', FIREARM: '총병' };
+      const clsLabel = (u) => { const c = u.classType || u.unitClass; return CLASS_LABEL[c] || c || ''; };
+      let poolError = '';
+      let lastDraw = null; // { unit, alias, originalName }
+
+      const loadPool = async () => {
+        card.innerHTML = `<div class="rbd-icon">🆘</div><h2 class="rbd-title" style="color:#fbbf24;">긴급 모집</h2><p class="rbd-text">용병 명단을 불러오는 중...</p>`;
+        try {
+          poolError = (await ensureCharacterGachaPool()).length ? '' : '모집할 수 있는 용병이 없습니다. DEV에서 캐릭터를 먼저 등록해주세요.';
+        } catch (err) {
+          console.error('Emergency recruit pool load error:', err);
+          poolError = '용병 명단을 불러오지 못했습니다.';
+        }
+        render();
+      };
+
       const render = () => {
-        const fallen = (state.playerUnits || []).filter(u => !isUnitAlive(u));
-        const offers = [
-          ...fallen.map(u => ({ kind: 'rehire', unit: u, cost: getRehireCost(u), name: u.name, avatar: u.avatar || '👤', cls: u.classType || u.unitClass, defUnit: u, note: `Lv.${u.level || 1} 재모집` })),
-          ...getRecruitCatalog().map(t => ({ kind: 'catalog', template: t, cost: t.cost, name: t.name, avatar: t.avatar || '🛡️', cls: t.classType, defUnit: { owner: 'PLAYER', characterId: t.id, def: t.stats.def }, note: '신규 용병' }))
-        ];
         const hasRecruited = recruitedSoFar();
+        const recruits = getAliveRunUnits();
+        const canDraw = !poolError && state.gold >= cost && getEmergencyRecruitPool().length > 0;
+        const drawHtml = lastDraw ? `
+          <div class="rbd-row rbd-draw-result">
+            <span class="rbd-row-avatar">${getGachaAvatarHtml(lastDraw.unit)}</span>
+            <span class="rbd-row-main"><b>${esc(lastDraw.unit.name)}</b><small>${esc(clsLabel(lastDraw.unit))} · 방어 ${formatDefense(lastDraw.unit)}${lastDraw.alias ? ` · 전사한 ${esc(lastDraw.originalName)}와(과) 닮은 다른 용병` : ''}</small></span>
+          </div>` : '';
         card.innerHTML = `
           <div class="rbd-icon">🆘</div>
           <h2 class="rbd-title" style="color:#fbbf24;">긴급 모집</h2>
-          <p class="rbd-text">부대가 전멸했습니다. 남은 골드로 1명 이상 모집해야 작전을 이어갈 수 있습니다.</p>
+          <p class="rbd-text">부대가 전멸했습니다. 남은 골드로 1명 이상 모집해야 작전을 이어갈 수 있습니다.<br/>1회 ${cost}G · 무작위 용병 1명이 바로 출전 명단에 합류합니다.</p>
           <div class="rbd-gold">보유 골드 <b>${state.gold}G</b> · 모집 <b>${run.emergencyRecruitCount || 0}</b>명</div>
-          <div class="rbd-list">${offers.map((o, i) => `
+          ${poolError ? `<p class="rbd-text" style="color:#f87171;">${esc(poolError)}</p>` : ''}
+          ${drawHtml}
+          ${recruits.length ? `<div class="rbd-list">${recruits.map(u => `
             <div class="rbd-row">
-              <span class="rbd-row-avatar">${o.avatar}</span>
-              <span class="rbd-row-main"><b>${o.name}</b><small>${o.cls} · ${o.note} · 방어 ${formatDefense(o.defUnit)}</small></span>
-              <button type="button" class="rbd-btn rbd-btn-small" data-offer="${i}" ${state.gold < o.cost ? 'disabled' : ''}>${o.cost}G</button>
+              <span class="rbd-row-avatar">${getGachaAvatarHtml(u)}</span>
+              <span class="rbd-row-main"><b>${esc(u.name)}</b><small>${esc(clsLabel(u))} · Lv.${u.level || 1} · 방어 ${formatDefense(u)}</small></span>
             </div>`).join('')}
-          </div>
+          </div>` : ''}
+          ${poolError
+            ? `<button type="button" class="rbd-btn" id="btn-emergency-retry">다시 불러오기</button>`
+            : `<button type="button" class="rbd-btn" id="btn-emergency-draw" ${canDraw ? '' : 'disabled'}>🎲 무작위 모집 (${cost}G)</button>`}
           <button type="button" class="rbd-btn" id="btn-emergency-done" ${hasRecruited ? '' : 'disabled'}>${hasRecruited ? '모집 완료 — 전략맵으로' : '1명 이상 모집해야 합니다'}</button>`;
-        card.querySelectorAll('[data-offer]').forEach(btn => {
-          btn.onclick = () => {
-            const res = emergencyRecruit(offers[Number(btn.dataset.offer)]);
-            if (!res.ok && typeof window.UI?.showToast === 'function') window.UI.showToast(res.reason, 'warning');
-            render();
-          };
-        });
+        const drawBtn = card.querySelector('#btn-emergency-draw');
+        if (drawBtn) drawBtn.onclick = () => {
+          const res = emergencyRecruit();
+          if (res.ok) {
+            lastDraw = { unit: res.unit, alias: res.alias, originalName: (getCharacterGachaPool().find(c => String(c.id) === getCharacterId(res.unit)) || {}).name || '' };
+          } else if (typeof window.UI?.showToast === 'function') {
+            window.UI.showToast(res.reason, 'warning');
+          }
+          render();
+        };
+        const retryBtn = card.querySelector('#btn-emergency-retry');
+        if (retryBtn) retryBtn.onclick = () => loadPool();
         card.querySelector('#btn-emergency-done').onclick = () => closeEmergencyRecruit();
       };
-      render();
+      await loadPool();
     }
     window.openEmergencyRecruit = openEmergencyRecruit;
 
