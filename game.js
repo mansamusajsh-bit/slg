@@ -415,7 +415,8 @@
             StrategicDominance: false
           }
         },
-        characterCollection: [], // 캐릭터 가챠 획득 기록 (Supabase characters를 원본으로 사용)
+        characterCollection: [], // 용병 고용 획득 기록 (Supabase characters를 원본으로 사용). 출전 명단 편입 전 사본
+        reserveUnits: [], // 용병 명부에서 출전 명단 밖으로 뺀 유닛 (레벨/스킬 보존)
         playerUnits: [
           {
             id: 'u1',
@@ -767,6 +768,7 @@
           player: {
             characters: sanitizedPlayerUnits,
             characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : [],
+            reserveUnits: Array.isArray(state.reserveUnits) ? state.reserveUnits : [],
             inventory: Array.isArray(state.inventory) ? state.inventory : [],
             gold: state.gold,
             rewinders: state.rewinders,
@@ -826,6 +828,7 @@
           commander: prog.commander,
           playerUnits: p.characters,
           characterCollection: p.characterCollection,
+          reserveUnits: p.reserveUnits,
           inventory: p.inventory,
           selectedUnitId: prog.selectedUnitId,
           roguelikeRun: p.roguelikeRun || null,
@@ -928,6 +931,7 @@
         } else {
           state.characterCollection = Array.isArray(state.characterCollection) ? state.characterCollection : [];
         }
+        state.reserveUnits = Array.isArray(parsed.reserveUnits) ? parsed.reserveUnits : [];
 
         if (Array.isArray(parsed.playerUnits)) {
           state.playerUnits = parsed.playerUnits;
@@ -1335,7 +1339,7 @@
 
       // 2. 방어력 산출 (디버그 패널 타일 방어 배율 적용, Effective Strength = Base Strength * (HP / 100))
       let defBonus = 1.0;
-      let rawTileDef = targetTile ? targetTile.defBonus : 0;
+      let rawTileDef = MapSchema.getTileDefBonus(targetTile);
       let tileDefBonus = rawTileDef * (debugParams.tileDefBonusMultiplier ?? 1.0);
       if (isPlayerAttacker && skills.Precision) {
         tileDefBonus = 0; // Precision: 적 지형 방어 보너스 무시
@@ -2485,7 +2489,7 @@
         if (canAttack) tileDiv.classList.add('attack-target');
 
         // 지형 방어 보너스 뱃지 & 스마트 액션 인디케이터
-        const defPct = Math.round(t.defBonus * 100);
+        const defPct = Math.round(MapSchema.getTileDefBonus(t) * 100);
         let actionIcon = '';
         if (canAttack) {
           actionIcon = '<span class="tile-action-indicator attack" title="클릭 시 즉시 자동 전투 개시!">⚔️</span>';
@@ -2502,7 +2506,7 @@
         const roadBadge = t.hasRoad ? '<span class="tile-road-dot" title="도로 (AP 할인)">🛣️</span>' : '';
 
         tileDiv.innerHTML = `
-          <span class="tile-def-badge">${defPct > 0 ? '+' + defPct + '%' : ''}</span>
+          <span class="tile-def-badge">${defPct !== 0 ? (defPct > 0 ? '+' : '') + defPct + '%' : ''}</span>
           ${roadBadge}
           <span class="tile-terrain-icon">${structureIcon || terrainIcon}</span>
           ${actionIcon}
@@ -3505,7 +3509,7 @@
         if (viewStrat) viewStrat.classList.remove('active');
         if (viewSector) viewSector.classList.remove('active');
         renderCharacterGacha();
-        addLog(`🎲 [캐릭터 가챠] 캐릭터 소환소를 열었습니다.`, 'system');
+        addLog(`💰 [용병 고용] 용병 고용소를 열었습니다.`, 'system');
       } else if (targetView === 'STRATEGY') {
         if (viewStrat) viewStrat.classList.add('active');
         if (viewSector) viewSector.classList.remove('active');
@@ -3633,40 +3637,15 @@
       const poolCount = document.getElementById('gacha-pool-count');
       const ownedCount = document.getElementById('gacha-owned-count');
       const resultGrid = document.getElementById('gacha-result-grid');
-      const ownedGrid = document.getElementById('gacha-owned-grid');
       const status = document.getElementById('gacha-status');
       if (poolCount) poolCount.textContent = `DB ${pool.length}명`;
-      if (ownedCount) ownedCount.textContent = `보유 ${collection.length}명`;
-      if (status && pool.length > 0 && !status.dataset.busy) status.textContent = `소환 가능 캐릭터 ${pool.length}명`;
+      if (ownedCount) ownedCount.textContent = `미편입 사본 ${collection.length}장`;
+      if (status && pool.length > 0 && !status.dataset.busy) status.textContent = `고용 가능 용병 ${pool.length}명`;
 
       if (resultGrid) {
         resultGrid.innerHTML = gachaLastResults.length
           ? gachaLastResults.map(c => renderGachaCharacterCard(c, 'result')).join('')
-          : `<div class="gacha-empty">소환 결과가 여기에 표시됩니다.</div>`;
-      }
-
-      if (ownedGrid) {
-        if (!collection.length) {
-          ownedGrid.innerHTML = `<div class="gacha-empty">아직 소환한 캐릭터가 없습니다.</div>`;
-        } else {
-          const counts = new Map();
-          collection.forEach(entry => counts.set(entry.characterId, (counts.get(entry.characterId) || 0) + 1));
-          const ownedChars = [];
-          for (const [characterId, count] of counts.entries()) {
-            const base = pool.find(c => String(c.id) === String(characterId)) || collection.find(e => String(e.characterId) === String(characterId));
-            if (!base) continue;
-            const card = renderGachaCharacterCard(base);
-            ownedChars.push(card.replace('<div class="gacha-card ', `<div data-owned-count="${count}" class="gacha-card `));
-          }
-          ownedGrid.innerHTML = ownedChars.length ? ownedChars.join('') : `<div class="gacha-empty">현재 DB에서 확인할 수 없는 캐릭터만 보유하고 있습니다.</div>`;
-          ownedGrid.querySelectorAll('[data-owned-count]').forEach((el, idx) => {
-            const count = el.getAttribute('data-owned-count');
-            const badge = document.createElement('span');
-            badge.className = 'gacha-card-count';
-            badge.textContent = `×${count}`;
-            el.appendChild(badge);
-          });
-        }
+          : `<div class="gacha-empty">고용 결과가 여기에 표시됩니다.</div>`;
       }
     }
 
@@ -3682,7 +3661,7 @@
           if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
         }
         const loaded = getCharacterGachaPool();
-        if (status) status.textContent = loaded.length ? `소환 가능 캐릭터 ${loaded.length}명` : '소환 가능한 캐릭터가 없습니다. DEV에서 캐릭터를 먼저 등록해주세요.';
+        if (status) status.textContent = loaded.length ? `고용 가능 용병 ${loaded.length}명` : '고용 가능한 용병이 없습니다. DEV에서 캐릭터를 먼저 등록해주세요.';
       } catch (err) {
         console.error('Character gacha pool load error:', err);
         if (status) status.textContent = '캐릭터 DB를 불러오지 못했습니다.';
@@ -3708,7 +3687,7 @@
       const buttons = document.querySelectorAll('.gacha-summon-btn');
       buttons.forEach(b => b.disabled = true);
       const status = document.getElementById('gacha-status');
-      if (status) { status.textContent = '소환 중...'; status.dataset.busy = '1'; }
+      if (status) { status.textContent = '고용 중...'; status.dataset.busy = '1'; }
       try {
         let pool = getCharacterGachaPool();
         if (!pool.length && typeof window.getCharactersFromCloud === 'function') {
@@ -3716,7 +3695,7 @@
           if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
           pool = getCharacterGachaPool();
         }
-        if (!pool.length) throw new Error('소환 가능한 캐릭터가 없습니다.');
+        if (!pool.length) throw new Error('고용 가능한 용병이 없습니다.');
 
         const results = [];
         for (let i = 0; i < amount; i++) {
@@ -3736,11 +3715,11 @@
         saveGameState(true);
         renderCharacterGacha();
         const names = results.map(c => c.name || '영웅').join(', ');
-        if (status) status.textContent = `${amount}회 소환 완료: ${names}`;
-        addLog(`🎲 [캐릭터 가챠] ${amount}회 소환 완료 — ${names}`, 'gold');
+        if (status) status.textContent = `${amount}회 고용 완료: ${names} — 용병 명부에서 출전 명단에 편입하세요.`;
+        addLog(`💰 [용병 고용] ${amount}회 고용 완료 — ${names} (용병 명부에서 편입)`, 'gold');
       } catch (err) {
         console.error('Character gacha error:', err);
-        if (status) status.textContent = err.message || '소환에 실패했습니다.';
+        if (status) status.textContent = err.message || '고용에 실패했습니다.';
       } finally {
         delete status?.dataset.busy;
         buttons.forEach(b => b.disabled = false);
@@ -5364,6 +5343,7 @@
         skillTreeCustomized: true,
         skillPoints: initialSkillPoints,
         initialSkillPoints: initialSkillPoints,
+        skillUnlockMode: 'absorb',
         skillCooldowns: {},
         statuses: []
       };
@@ -5545,11 +5525,235 @@
         customSkillCooldown: 0,
         skillTree: target.skillTree ? clone(target.skillTree) : (window.DEFAULT_SKILL_TREE_TEMPLATE ? clone(window.DEFAULT_SKILL_TREE_TEMPLATE) : []),
         skillTreeCustomized: !!target.skillTreeCustomized,
-        skillPoints: (o.owner || 'PLAYER') === 'ENEMY' ? 0 : (Number(target.initialSkillPoints) >= 0 ? Number(target.initialSkillPoints) : 2),
+        skillPoints: (o.owner || 'PLAYER') === 'ENEMY' ? 0 : (Number(target.initialSkillPoints) >= 0 ? Number(target.initialSkillPoints) : 0),
+        skillUnlockMode: 'absorb',
         skillCooldowns: {},
         statuses: []
       };
     }
+
+    // ------------------------------------------------------------------------
+    // 동일 캐릭터 흡수 레벨업: 가챠로 얻은 같은 캐릭터 1장(characterCollection)을 소모해
+    // 레벨 +1, 스킬 해금권 +1. 스킬트리 노드는 해금권 1장당 1개씩 열 수 있다.
+    // ------------------------------------------------------------------------
+    function getAbsorbMaterials(unit) {
+      const charId = unit && (unit.sourceCharacterId || unit.id);
+      if (!charId || !Array.isArray(state.characterCollection)) return [];
+      return state.characterCollection.filter(e => e && String(e.characterId) === String(charId));
+    }
+    window.getAbsorbMaterials = getAbsorbMaterials;
+
+    function absorbDuplicateCharacter(unitId) {
+      const unit = (state.playerUnits || []).find(u => u.id === unitId && !u.isDead)
+        || (state.reserveUnits || []).find(u => u.id === unitId);
+      if (!unit) return { ok: false, reason: '유닛을 찾을 수 없습니다.' };
+      const materials = getAbsorbMaterials(unit);
+      if (!materials.length) return { ok: false, reason: '흡수할 동일 캐릭터가 없습니다.' };
+
+      const material = materials[materials.length - 1];
+      state.characterCollection.splice(state.characterCollection.indexOf(material), 1);
+      if (window.SkillEngine) SkillEngine.ensureUnitSkillState(unit);
+      unit.level = (Number(unit.level) || 1) + 1;
+      unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
+
+      addLog(`🧬 [흡수 레벨업] ${unit.name} Lv.${unit.level} — 스킬 해금권 +1 (잔여 동일 캐릭터 ${materials.length - 1}장)`, 'gold');
+      saveGameState(true);
+      return { ok: true, level: unit.level };
+    }
+    window.absorbDuplicateCharacter = absorbDuplicateCharacter;
+
+    // ------------------------------------------------------------------------
+    // 용병 명부 (캐릭터 풀): 용병 고용으로 얻은 캐릭터는 바로 출전 명단(playerUnits)에 들어가지 않고
+    // 여기서 골라 편입한다.
+    //   state.characterCollection — 아직 쓰지 않은 사본 (편입 1장 / 흡수 레벨업 재료)
+    //   state.playerUnits         — 출전 명단 (sourceCharacterId로 원본 캐릭터와 연결)
+    //   state.reserveUnits        — 명단에서 뺀 유닛. 레벨/스킬을 그대로 보관했다가 다시 편입할 때 복귀한다.
+    // ------------------------------------------------------------------------
+    let poolFilter = { query: '', cls: 'ALL', status: 'ALL', sort: 'LEVEL' };
+
+    function isCharacterPoolLocked() {
+      return !!(state.isCombatActive || (state.currentBattle && state.currentBattle.status !== 'won'));
+    }
+
+    function getCharacterPoolEntries() {
+      const records = getCharacterGachaPool();
+      const reserve = Array.isArray(state.reserveUnits) ? state.reserveUnits : [];
+      const map = new Map();
+      const entryOf = (charId) => {
+        const key = String(charId);
+        if (!map.has(key)) {
+          map.set(key, { id: key, record: records.find(c => String(c.id) === key) || null, copies: 0, unit: null, reserve: null });
+        }
+        return map.get(key);
+      };
+      (state.characterCollection || []).forEach(e => { if (e && e.characterId != null) entryOf(e.characterId).copies++; });
+      (state.playerUnits || []).forEach(u => { if (u && !u.isDead && u.sourceCharacterId) entryOf(u.sourceCharacterId).unit = u; });
+      reserve.forEach(u => { if (u && u.sourceCharacterId) entryOf(u.sourceCharacterId).reserve = u; });
+      return [...map.values()].filter(e => e.record || e.unit || e.reserve);
+    }
+
+    function enlistCharacterFromPool(charId) {
+      if (isCharacterPoolLocked()) return { ok: false, reason: '전투 중에는 출전 명단을 바꿀 수 없습니다.' };
+      const entry = getCharacterPoolEntries().find(e => e.id === String(charId));
+      if (!entry) return { ok: false, reason: '캐릭터를 찾을 수 없습니다.' };
+      if (entry.unit) return { ok: false, reason: '이미 출전 명단에 있습니다.' };
+
+      let unit = entry.reserve;
+      if (unit) {
+        state.reserveUnits.splice(state.reserveUnits.indexOf(unit), 1);
+      } else {
+        if (!entry.record) return { ok: false, reason: '캐릭터 DB에서 원본을 찾을 수 없습니다.' };
+        const copyIdx = state.characterCollection.findIndex(e => e && String(e.characterId) === entry.id);
+        if (copyIdx < 0) return { ok: false, reason: '편입할 사본이 없습니다.' };
+        state.characterCollection.splice(copyIdx, 1);
+        unit = characterRecordToUnit(entry.record, {
+          id: `merc_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          owner: 'PLAYER', x: 0, y: 0
+        });
+      }
+      state.playerUnits.push(unit);
+      addLog(`📜 [용병 명부] ${unit.name}이(가) 출전 명단에 편입되었습니다.`, 'gold');
+      saveGameState(true);
+      return { ok: true, unit };
+    }
+    window.enlistCharacterFromPool = enlistCharacterFromPool;
+
+    function dismissCharacterToPool(charId) {
+      if (isCharacterPoolLocked()) return { ok: false, reason: '전투 중에는 출전 명단을 바꿀 수 없습니다.' };
+      const entry = getCharacterPoolEntries().find(e => e.id === String(charId));
+      if (!entry || !entry.unit) return { ok: false, reason: '출전 명단에 없는 캐릭터입니다.' };
+      const unit = entry.unit;
+      state.playerUnits.splice(state.playerUnits.indexOf(unit), 1);
+      if (!Array.isArray(state.reserveUnits)) state.reserveUnits = [];
+      state.reserveUnits.push(unit);
+      if (state.strategy && Array.isArray(state.strategy.deploySelectedIds)) {
+        state.strategy.deploySelectedIds = state.strategy.deploySelectedIds.filter(id => id !== unit.id);
+      }
+      if (selectedUnitId === unit.id) selectedUnitId = null;
+      addLog(`📜 [용병 명부] ${unit.name}을(를) 출전 명단에서 제외했습니다. (레벨·스킬 보존)`, 'system');
+      saveGameState(true);
+      return { ok: true, unit };
+    }
+    window.dismissCharacterToPool = dismissCharacterToPool;
+
+    function renderCharacterPool() {
+      const listEl = document.getElementById('pool-list');
+      if (!listEl) return;
+      const all = getCharacterPoolEntries();
+      const locked = isCharacterPoolLocked();
+      const q = poolFilter.query.trim().toLowerCase();
+      const clsOf = (e) => {
+        const src = e.unit || e.reserve || e.record || {};
+        return src.unitClass || src.classType || 'KNIGHT';
+      };
+      const levelOf = (e) => Number((e.unit || e.reserve || {}).level) || 0;
+      const nameOf = (e) => String((e.unit || e.reserve || e.record || {}).name || '');
+
+      let rows = all.filter(e => {
+        if (q && !nameOf(e).toLowerCase().includes(q)) return false;
+        if (poolFilter.cls !== 'ALL' && clsOf(e) !== poolFilter.cls) return false;
+        if (poolFilter.status === 'ROSTER' && !e.unit) return false;
+        if (poolFilter.status === 'BENCH' && e.unit) return false;
+        return true;
+      });
+      const sorters = {
+        LEVEL: (a, b) => levelOf(b) - levelOf(a) || b.copies - a.copies || nameOf(a).localeCompare(nameOf(b)),
+        COPIES: (a, b) => b.copies - a.copies || nameOf(a).localeCompare(nameOf(b)),
+        NAME: (a, b) => nameOf(a).localeCompare(nameOf(b))
+      };
+      rows.sort(sorters[poolFilter.sort] || sorters.LEVEL);
+
+      const summary = document.getElementById('pool-summary');
+      if (summary) {
+        const inRoster = all.filter(e => e.unit).length;
+        summary.textContent = `보유 ${all.length}명 · 출전 명단 ${inRoster}명 · 대기 ${all.length - inRoster}명`;
+      }
+      const lockNote = document.getElementById('pool-lock-note');
+      if (lockNote) lockNote.style.display = locked ? '' : 'none';
+
+      if (!rows.length) {
+        listEl.innerHTML = `<div class="gacha-empty">${all.length ? '조건에 맞는 용병이 없습니다.' : '아직 고용한 용병이 없습니다. 용병 고용에서 영입하세요.'}</div>`;
+        return;
+      }
+
+      const esc = escapeGachaHtml;
+      listEl.innerHTML = rows.map(e => {
+        const owned = e.unit || e.reserve;
+        const src = owned || e.record;
+        const stats = owned ? { hp: owned.maxHp, atk: owned.atk, def: owned.def } : (e.record.stats || {});
+        const status = e.unit ? '<span class="pool-tag roster">출전 명단</span>'
+          : e.reserve ? '<span class="pool-tag bench">대기</span>'
+          : '<span class="pool-tag new">미편입</span>';
+        const canEnlist = !e.unit && (e.reserve || (e.copies > 0 && e.record));
+        const actions = [];
+        if (e.unit) actions.push(`<button type="button" class="pool-btn ghost" data-pool-dismiss="${esc(e.id)}" ${locked ? 'disabled' : ''}>명단 제외</button>`);
+        else actions.push(`<button type="button" class="pool-btn primary" data-pool-enlist="${esc(e.id)}" ${canEnlist && !locked ? '' : 'disabled'}>${e.reserve ? '복귀' : '편입 (사본 1)'}</button>`);
+        if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 흡수</button>`);
+        return `
+          <div class="pool-card ${e.unit ? 'in-roster' : ''}">
+            <div class="gacha-card-image">${getGachaAvatarHtml(src)}</div>
+            <div class="pool-card-info">
+              <div class="pool-card-name">${esc(src.name || '이름 없는 용병')} ${owned ? `<span class="pool-lv">Lv.${Number(owned.level) || 1}</span>` : ''}</div>
+              <div class="gacha-card-class">${esc(getGachaClassName(src))} ${status}</div>
+              <div class="gacha-card-stats">HP ${stats.hp || 100} · ATK ${stats.atk || 40} · DEF ${stats.def || 30} · 사본 ${e.copies}장</div>
+            </div>
+            <div class="pool-card-actions">${actions.join('')}</div>
+          </div>`;
+      }).join('');
+
+      const after = (res) => {
+        if (!res.ok) {
+          addLog(`⚠️ ${res.reason}`, 'warning');
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast(res.reason, 'warning');
+        }
+        renderCharacterPool();
+        renderStrategyView();
+      };
+      listEl.querySelectorAll('[data-pool-enlist]').forEach(b => { b.onclick = () => after(enlistCharacterFromPool(b.dataset.poolEnlist)); });
+      listEl.querySelectorAll('[data-pool-dismiss]').forEach(b => { b.onclick = () => after(dismissCharacterToPool(b.dataset.poolDismiss)); });
+      listEl.querySelectorAll('[data-pool-absorb]').forEach(b => {
+        b.onclick = () => {
+          const entry = getCharacterPoolEntries().find(x => x.id === b.dataset.poolAbsorb);
+          const owned = entry && (entry.unit || entry.reserve);
+          after(owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 흡수할 수 없습니다.' });
+        };
+      });
+    }
+
+    async function openCharacterPool() {
+      const modal = document.getElementById('modal-character-pool');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      const search = document.getElementById('pool-search');
+      if (search) search.value = poolFilter.query;
+      if (!getCharacterGachaPool().length && typeof window.getCharactersFromCloud === 'function') {
+        const listEl = document.getElementById('pool-list');
+        if (listEl) listEl.innerHTML = '<div class="gacha-empty">캐릭터 DB를 불러오는 중...</div>';
+        try {
+          const chars = await window.getCharactersFromCloud();
+          if (Array.isArray(chars)) syncGlobalCharactersFromSupabase(chars);
+        } catch (err) {
+          console.error('Character pool load error:', err);
+        }
+      }
+      renderCharacterPool();
+    }
+    window.openCharacterPool = openCharacterPool;
+
+    function closeCharacterPool() {
+      const modal = document.getElementById('modal-character-pool');
+      if (modal) modal.style.display = 'none';
+    }
+    window.closeCharacterPool = closeCharacterPool;
+
+    function setCharacterPoolFilter(key, value) {
+      poolFilter[key] = value;
+      document.querySelectorAll(`[data-pool-filter="${key}"]`).forEach(el => {
+        el.classList.toggle('active', el.dataset.value === value);
+      });
+      renderCharacterPool();
+    }
+    window.setCharacterPoolFilter = setCharacterPoolFilter;
 
     function spawnSavedCustomCharacter(charId) {
       const list = getStoredCustomCharacters();
@@ -5802,7 +6006,7 @@
       box.className = 'fullshot-skill-card-container has-skill';
       box.innerHTML = `
         <div class="fs-skill-head">
-          <span>⚡ 스킬 ${skills.length}개${isPlayer ? ` · <span style="color:#d97706;">SP ${Number(unit.skillPoints) || 0}</span>` : ''}</span>
+          <span>⚡ 스킬 ${skills.length}개${isPlayer ? ` · <span style="color:#d97706;">해금권 ${Number(unit.skillPoints) || 0}</span>` : ''}</span>
           ${isPlayer ? '<button class="btn-cheat purple" style="font-size: 8.5px; padding: 2px 6px;" data-skill-tree-open="1">🌳 스킬트리</button>' : ''}
         </div>
         ${statusChips ? `<div class="fs-status-row">${statusChips}</div>` : ''}
@@ -6958,10 +7162,11 @@
       const defenderPromos = getUnitPromotionIds(defender);
 
       const targetTile = defender ? getTile(defender.x, defender.y) : null;
-      const tileType = targetTile?.type || 'PLAIN';
-      const isCityTile = ['CITY', 'BASE', 'HEADQUARTERS', 'CASTLE'].includes(tileType);
-      const isHillTile = ['HILL', 'MOUNTAIN'].includes(tileType);
-      const isForestTile = ['FOREST', 'JUNGLE'].includes(tileType);
+      const tileType = String(targetTile?.terrain || targetTile?.type || 'plain').toLowerCase();
+      const tileStructure = String(targetTile?.structure || '').toLowerCase();
+      const isCityTile = ['city', 'village'].includes(tileStructure) || ['city', 'base', 'headquarters', 'castle'].includes(tileType);
+      const isHillTile = ['hill', 'mountain'].includes(tileType);
+      const isForestTile = ['forest', 'jungle'].includes(tileType) || tileStructure === 'tree';
 
       let attackerAtkMultiplier = 1.0;
       let attackerFirstStrikes = 0;
@@ -8160,13 +8365,11 @@
         .filter(u => deployed.includes(u.id) && (u.isDead || (typeof u.hp === 'number' && u.hp <= 0)))
         .map(u => ({ id: u.id, name: u.name }));
 
-      // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화, 승리 시 생존한 출전 영웅에게 SP +1
+      // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화 (스킬 해금권은 동일 캐릭터 흡수로만 얻는다)
       cancelSkillTargeting(true);
       (state.playerUnits || []).forEach(u => {
         if (window.SkillEngine) SkillEngine.resetBattleState(u);
-        if (victory && deployed.includes(u.id) && !u.isDead) u.skillPoints = (Number(u.skillPoints) || 0) + 1;
       });
-      if (victory && deployed.length) addLog('🌳 [스킬 포인트] 생존한 출전 영웅 전원 SP +1 — 풀샷 창의 🌳 스킬트리에서 새 스킬을 습득하세요.', 'gold');
 
       // 3) 보상 지급 (승리 시에만, 전투 진입 때 seed로 정해 둔 battle.rewards 그대로)
       const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];

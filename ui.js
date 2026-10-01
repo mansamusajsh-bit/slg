@@ -252,7 +252,7 @@
           ⭐ 병과 승급 (Promotions)
         </button>
         <button id="tab-btn-skills" class="promo-tab-btn" style="flex:1; padding:6px 0; background:transparent; border:none; border-bottom:2px solid transparent; color:#94a3b8; font-weight:800; font-size:12px; cursor:pointer;">
-          🌳 스킬트리 (SP ${Number(unit.skillPoints) || 0})
+          🌳 스킬트리 (해금권 ${Number(unit.skillPoints) || 0})
         </button>
       </div>
 
@@ -330,9 +330,14 @@
     if (skillsBody && global.SkillEditor) {
       global.SkillEditor.renderLearnTree(skillsBody, unit, {
         onLearn: (u, node) => {
-          if (typeof global.addLog === 'function') global.addLog(`🌳 [스킬 습득] ${u.name}이(가) [${node.name}]을(를) 익혔습니다! (잔여 SP ${u.skillPoints})`, 'gold');
-          if (tabSkillsBtn) tabSkillsBtn.textContent = `🌳 스킬트리 (SP ${u.skillPoints})`;
+          if (typeof global.addLog === 'function') global.addLog(`🌳 [스킬 해금] ${u.name}이(가) [${node.name}]을(를) 익혔습니다! (잔여 해금권 ${u.skillPoints}장)`, 'gold');
+          if (tabSkillsBtn) tabSkillsBtn.textContent = `🌳 스킬트리 (해금권 ${u.skillPoints})`;
           if (typeof global.saveGameState === 'function') global.saveGameState();
+          if (typeof global.updateFullShotOverlay === 'function') global.updateFullShotOverlay();
+          if (typeof global.renderAll === 'function') global.renderAll();
+        },
+        onAbsorb: (u) => {
+          if (tabSkillsBtn) tabSkillsBtn.textContent = `🌳 스킬트리 (해금권 ${u.skillPoints})`;
           if (typeof global.updateFullShotOverlay === 'function') global.updateFullShotOverlay();
           if (typeof global.renderAll === 'function') global.renderAll();
         }

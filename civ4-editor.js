@@ -157,12 +157,12 @@ const MapEditorController = {
   testBattle: null, // 마지막으로 만든 '독립 테스트' CurrentBattle. state.currentBattle과 완전히 분리된다.
 
   TERRAIN_SPECS: {
-    plain:    { name: '평야', apCost: 1, defBonus: 0.0, icon: '🌱', passable: true },
-    forest:   { name: '숲',   apCost: 2, defBonus: 0.20, icon: '🌲', passable: true },
-    hill:     { name: '산',   apCost: 3, defBonus: 0.40, icon: '⛰️', passable: true },
-    mountain: { name: '암벽', apCost: 99, defBonus: 0.50, icon: '🏔️', passable: false },
-    river:    { name: '강',   apCost: 3, defBonus: -0.10, icon: '〰️', passable: true },
-    sea:      { name: '바다', apCost: 99, defBonus: 0.0, icon: '🌊', passable: false }
+    plain:    { name: '평야', apCost: 1, defBonus: MapSchema.TILE_DEFENSE.terrain.plain, icon: '🌱', passable: true },
+    forest:   { name: '숲',   apCost: 2, defBonus: MapSchema.TILE_DEFENSE.terrain.forest, icon: '🌲', passable: true },
+    hill:     { name: '산',   apCost: 3, defBonus: MapSchema.TILE_DEFENSE.terrain.hill, icon: '⛰️', passable: true },
+    mountain: { name: '암벽', apCost: 99, defBonus: MapSchema.TILE_DEFENSE.terrain.mountain, icon: '🏔️', passable: false },
+    river:    { name: '강',   apCost: 3, defBonus: MapSchema.TILE_DEFENSE.terrain.river, icon: '〰️', passable: true },
+    sea:      { name: '바다', apCost: 99, defBonus: MapSchema.TILE_DEFENSE.terrain.sea, icon: '🌊', passable: false }
   },
 
   /**
@@ -221,6 +221,12 @@ const MapEditorController = {
       }
     }
     return mapTiles;
+  },
+
+  // 팔레트 버튼용 방어 보너스 표기 (0이면 표시하지 않음)
+  defBonusLabel(v) {
+    const pct = Math.round((Number(v) || 0) * 100);
+    return pct ? ` <span style="color:${pct > 0 ? '#10b981' : '#ef4444'}; font-size:10px;">🛡️${pct > 0 ? '+' : ''}${pct}%</span>` : '';
   },
 
   calculateMoveCost(fromTile, toTile) {
@@ -837,7 +843,7 @@ const MapEditorController = {
         const spec = MapEditorController.TERRAIN_SPECS[key];
         const btn = document.createElement('button');
         btn.className = `civ4-palette-btn ${MapEditorController.selectedPaletteItem === key ? 'active' : ''}`;
-        btn.innerHTML = `<span>${spec.icon}</span> <span>${spec.name}</span>`;
+        btn.innerHTML = `<span>${spec.icon}</span> <span>${spec.name}</span>${MapEditorController.defBonusLabel(spec.defBonus)}`;
         btn.onclick = () => {
           MapEditorController.selectedPaletteItem = key;
           MapEditorController.updatePaletteItemsUI();
@@ -861,7 +867,7 @@ const MapEditorController = {
       structures.forEach(st => {
         const btn = document.createElement('button');
         btn.className = `civ4-palette-btn ${MapEditorController.selectedPaletteItem === st.id ? 'active' : ''}`;
-        btn.innerHTML = `<span>${st.icon}</span> <span>${st.name}</span>`;
+        btn.innerHTML = `<span>${st.icon}</span> <span>${st.name}</span>${MapEditorController.defBonusLabel(MapSchema.TILE_DEFENSE.structure[st.id])}`;
         btn.onclick = () => {
           MapEditorController.selectedPaletteItem = st.id;
           MapEditorController.updatePaletteItemsUI();

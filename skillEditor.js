@@ -379,10 +379,13 @@
     const learnedCount = list.filter(n => unit.learnedSkills.includes(n.id)).length;
     const sig = unit.customSkill ? SE().normalizeSkill(unit.customSkill, unit.customSkill.id || 'signature') : null;
 
+    const absorbCount = typeof global.getAbsorbMaterials === 'function' ? global.getAbsorbMaterials(unit).length : 0;
     container.innerHTML = `
       <div class="skl-head">
-        <div>보유 스킬 포인트 <b class="skl-sp">${unit.skillPoints} SP</b></div>
-        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · 전투 승리 시 생존 영웅 +1 SP</div>
+        <div>Lv.${Number(unit.level) || 1} · 스킬 해금권 <b class="skl-sp">${unit.skillPoints}장</b></div>
+        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · 동일 캐릭터 흡수 레벨업 1회 = 스킬 1개 해금</div>
+        ${unit.owner !== 'ENEMY' && typeof global.absorbDuplicateCharacter === 'function' ? `
+          <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 동일 캐릭터 흡수 레벨업 (보유 ${absorbCount}장)</button>` : ''}
       </div>
       ${sig ? `
         <div class="skl-signature">
@@ -405,7 +408,7 @@
                 const s = SE().normalizeSkill(n);
                 const ls = SE().getLearnState(unit, n);
                 const btn = ls.state === 'learned' ? '<span class="skl-tag ok">✔ 습득</span>'
-                  : ls.state === 'learnable' ? `<button type="button" class="skl-learn" data-learn="${esc(s.id)}">습득 (SP ${ls.cost})</button>`
+                  : ls.state === 'learnable' ? `<button type="button" class="skl-learn" data-learn="${esc(s.id)}">해금 (해금권 ${ls.cost})</button>`
                   : `<span class="skl-tag">${ls.state === 'locked' ? '🔒 ' : ''}${esc(ls.reason)}</span>`;
                 return `
                   <div class="skl-node ${ls.state}">
@@ -421,6 +424,16 @@
             </div>
           </div>`).join('')}
       </div>`}`;
+
+    const absorbBtn = container.querySelector('[data-absorb]');
+    if (absorbBtn) {
+      absorbBtn.onclick = () => {
+        const res = global.absorbDuplicateCharacter(unit.id);
+        if (!res.ok) { if (global.addLog) global.addLog(`⚠️ ${res.reason}`, 'warning'); return; }
+        if (opts.onAbsorb) opts.onAbsorb(unit);
+        renderLearnTree(container, unit, opts);
+      };
+    }
 
     container.querySelectorAll('[data-learn]').forEach(btn => {
       btn.onclick = () => {

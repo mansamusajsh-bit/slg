@@ -69,9 +69,13 @@
 
           <!-- Resources Pillars -->
           <div class="strat-gacha-entry-wrap">
-            <button class="strat-gacha-entry-btn" onclick="openCharacterGacha()" title="캐릭터 데이터베이스에서 무작위 캐릭터를 소환합니다.">
-              <span class="strat-gacha-entry-icon">🎲</span>
-              <span>캐릭터 가챠</span>
+            <button class="strat-gacha-entry-btn" onclick="openCharacterGacha()" title="무작위 용병을 고용합니다.">
+              <span class="strat-gacha-entry-icon">💰</span>
+              <span>용병 고용</span>
+            </button>
+            <button class="strat-gacha-entry-btn" onclick="openCharacterPool()" title="고용한 용병을 출전 명단에 편입하거나 제외합니다.">
+              <span class="strat-gacha-entry-icon">📜</span>
+              <span>용병 명부</span>
             </button>
           </div>
 
@@ -210,16 +214,16 @@
     </div> <!-- /#view-strategy-main -->
 
     <!-- ======================================================================
-         [ 캐릭터 가챠 화면 ]
-         Supabase characters 컬렉션을 실제 가챠 풀로 사용
+         [ 용병 고용 화면 ]
+         Supabase characters 컬렉션을 실제 고용 풀로 사용
          ====================================================================== -->
     <div id="view-character-gacha" class="game-view-layer">
       <header class="gacha-header-zone">
         <div class="gacha-topbar">
           <button class="gacha-back-btn" onclick="closeCharacterGacha()">← 전략 창</button>
           <div class="gacha-title-wrap">
-            <div class="gacha-title">CHARACTER SUMMON</div>
-            <div class="gacha-subtitle">캐릭터 데이터베이스 소환소</div>
+            <div class="gacha-title">MERCENARY HIRE</div>
+            <div class="gacha-subtitle">용병 고용소</div>
           </div>
           <div class="gacha-pool-count" id="gacha-pool-count">DB 0명</div>
         </div>
@@ -229,9 +233,9 @@
         <section class="gacha-banner-card">
           <div class="gacha-banner-glow"></div>
           <div class="gacha-banner-copy">
-            <span class="gacha-kicker">RANDOM CHARACTER SUMMON</span>
-            <h2>새로운 영웅을 소환하세요</h2>
-            <p>현재 Supabase <code>characters</code> 컬렉션에 등록된 캐릭터 중 무작위로 등장합니다.</p>
+            <span class="gacha-kicker">MERCENARY CONTRACT</span>
+            <h2>새로운 용병을 고용하세요</h2>
+            <p>현재 Supabase <code>characters</code> 컬렉션에 등록된 캐릭터 중 무작위로 계약합니다. 고용한 용병은 용병 명부에서 출전 명단에 편입합니다.</p>
           </div>
           <div class="gacha-banner-icon">✦</div>
         </section>
@@ -239,17 +243,17 @@
         <section class="gacha-action-card">
           <div class="gacha-action-head">
             <div>
-              <div class="gacha-section-title">소환</div>
-              <div class="gacha-section-desc">현재는 테스트 단계로 무료 소환입니다.</div>
+              <div class="gacha-section-title">고용</div>
+              <div class="gacha-section-desc">현재는 테스트 단계로 무료 고용입니다.</div>
             </div>
-            <div class="gacha-owned-count" id="gacha-owned-count">보유 0명</div>
+            <div class="gacha-owned-count" id="gacha-owned-count">미편입 사본 0장</div>
           </div>
           <div class="gacha-buttons">
             <button class="gacha-summon-btn single" onclick="summonCharacters(1)">
-              <span>✦</span><strong>1회 소환</strong><small>RANDOM × 1</small>
+              <span>✦</span><strong>1회 고용</strong><small>RANDOM × 1</small>
             </button>
             <button class="gacha-summon-btn multi" onclick="summonCharacters(10)">
-              <span>✦✦</span><strong>10회 소환</strong><small>RANDOM × 10</small>
+              <span>✦✦</span><strong>10회 고용</strong><small>RANDOM × 10</small>
             </button>
           </div>
           <div class="gacha-status" id="gacha-status">캐릭터 DB를 불러오는 중...</div>
@@ -257,24 +261,63 @@
 
         <section class="gacha-result-section">
           <div class="gacha-section-heading">
-            <span>최근 소환 결과</span>
+            <span>최근 고용 결과</span>
             <button class="gacha-clear-btn" onclick="clearGachaResults()">결과 지우기</button>
           </div>
           <div class="gacha-result-grid" id="gacha-result-grid">
-            <div class="gacha-empty">소환 결과가 여기에 표시됩니다.</div>
+            <div class="gacha-empty">고용 결과가 여기에 표시됩니다.</div>
           </div>
         </section>
 
         <section class="gacha-owned-section">
           <div class="gacha-section-heading">
-            <span>보유 캐릭터</span>
-            <span class="gacha-section-note">중복 획득 가능</span>
+            <span>보유 용병</span>
+            <span class="gacha-section-note">중복 사본은 흡수 레벨업 재료</span>
           </div>
-          <div class="gacha-owned-grid" id="gacha-owned-grid">
-            <div class="gacha-empty">아직 소환한 캐릭터가 없습니다.</div>
-          </div>
+          <button type="button" class="pool-btn primary pool-open-wide" onclick="openCharacterPool()">📜 용병 명부 열기 (편입 · 제외 · 흡수)</button>
         </section>
       </main>
+    </div>
+
+    <!-- ======================================================================
+         [ 용병 명부 (캐릭터 풀) ]
+         용병 고용으로 얻은 캐릭터를 출전 명단에 편입/제외하고 중복 사본을 흡수한다.
+         ====================================================================== -->
+    <div class="pool-overlay" id="modal-character-pool" style="display: none;" onclick="if(event.target===this) closeCharacterPool()">
+      <div class="pool-window" role="dialog" aria-label="용병 명부">
+        <header class="pool-header">
+          <div>
+            <div class="gacha-title">MERCENARY ROSTER</div>
+            <div class="pool-title">📜 용병 명부</div>
+            <div class="gacha-subtitle" id="pool-summary">보유 0명</div>
+          </div>
+          <button type="button" class="gacha-back-btn" onclick="closeCharacterPool()">닫기 ✕</button>
+        </header>
+        <div class="pool-toolbar">
+          <input type="search" id="pool-search" class="pool-search" placeholder="이름 검색" oninput="setCharacterPoolFilter('query', this.value)" />
+          <div class="pool-chips">
+            <button type="button" class="pool-chip active" data-pool-filter="status" data-value="ALL" onclick="setCharacterPoolFilter('status','ALL')">전체</button>
+            <button type="button" class="pool-chip" data-pool-filter="status" data-value="ROSTER" onclick="setCharacterPoolFilter('status','ROSTER')">출전 명단</button>
+            <button type="button" class="pool-chip" data-pool-filter="status" data-value="BENCH" onclick="setCharacterPoolFilter('status','BENCH')">대기/미편입</button>
+          </div>
+          <div class="pool-chips">
+            <button type="button" class="pool-chip active" data-pool-filter="cls" data-value="ALL" onclick="setCharacterPoolFilter('cls','ALL')">모든 병과</button>
+            <button type="button" class="pool-chip" data-pool-filter="cls" data-value="KNIGHT" onclick="setCharacterPoolFilter('cls','KNIGHT')">기사</button>
+            <button type="button" class="pool-chip" data-pool-filter="cls" data-value="MAGE" onclick="setCharacterPoolFilter('cls','MAGE')">마법</button>
+            <button type="button" class="pool-chip" data-pool-filter="cls" data-value="ARCHER" onclick="setCharacterPoolFilter('cls','ARCHER')">궁수</button>
+            <button type="button" class="pool-chip" data-pool-filter="cls" data-value="MELEE" onclick="setCharacterPoolFilter('cls','MELEE')">근접</button>
+            <button type="button" class="pool-chip" data-pool-filter="cls" data-value="FIREARM" onclick="setCharacterPoolFilter('cls','FIREARM')">화기</button>
+          </div>
+          <div class="pool-chips">
+            <span class="pool-chip-label">정렬</span>
+            <button type="button" class="pool-chip active" data-pool-filter="sort" data-value="LEVEL" onclick="setCharacterPoolFilter('sort','LEVEL')">레벨</button>
+            <button type="button" class="pool-chip" data-pool-filter="sort" data-value="COPIES" onclick="setCharacterPoolFilter('sort','COPIES')">사본 수</button>
+            <button type="button" class="pool-chip" data-pool-filter="sort" data-value="NAME" onclick="setCharacterPoolFilter('sort','NAME')">이름</button>
+          </div>
+          <div class="pool-lock-note" id="pool-lock-note" style="display: none;">⚠️ 전투 진행 중에는 편입/제외할 수 없습니다.</div>
+        </div>
+        <div class="pool-list" id="pool-list"></div>
+      </div>
     </div>
 
     <!-- ======================================================================
@@ -997,11 +1040,11 @@
               <div class="dbg-card-section-title" style="color: #6b21a8; border-bottom-color: #ede9fe; display: flex; justify-content: space-between; align-items: center; gap: 6px;">
                 <span>⚡ 3. 스킬 &amp; 스킬트리 (공격 · 회복 · 제어 · 기동 · 유틸)</span>
                 <label style="font-size: 10px; font-weight: 800; color: #475569; display: flex; align-items: center; gap: 4px;">
-                  초기 SP <input type="number" id="create-char-sp" class="dbg-form-control" value="2" min="0" max="20" style="width: 56px; padding: 2px 4px;" />
+                  초기 해금권 <input type="number" id="create-char-sp" class="dbg-form-control" value="0" min="0" max="20" style="width: 56px; padding: 2px 4px;" />
                 </label>
               </div>
               <div style="font-size: 10px; color: #64748b; margin-bottom: 6px; line-height: 1.4;">
-                ★ 표시한 노드는 생성 즉시 습득합니다. 나머지는 전투 승리로 얻는 SP로 스킬트리에서 습득합니다.
+                ★ 표시한 노드는 생성 즉시 습득합니다. 나머지는 동일 캐릭터 흡수 레벨업으로 얻는 해금권(1장 = 1개)으로 스킬트리에서 해금합니다.
                 효과는 여러 개를 조합할 수 있습니다 (예: 피해 + 기절, 순간이동 + 보호막).
               </div>
               <div id="dev-skill-tree-builder-container"></div>

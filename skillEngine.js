@@ -296,7 +296,13 @@
     if (!Array.isArray(unit.learnedSkills)) {
       unit.learnedSkills = unit.skillTree.filter(n => n && n.startsLearned).map(n => n.id);
     }
-    if (typeof unit.skillPoints !== 'number') unit.skillPoints = unit.owner === 'ENEMY' ? 0 : 2;
+    if (typeof unit.skillPoints !== 'number') unit.skillPoints = 0;
+    // 스킬 해금 방식 변경(전투 승리 SP → 동일 캐릭터 흡수 레벨업 1회 = 해금 1개).
+    // 구버전 세이브에 쌓인 SP는 회수한다. 이미 익힌 스킬은 그대로 유지된다.
+    if (unit.skillUnlockMode !== 'absorb') {
+      unit.skillPoints = 0;
+      unit.skillUnlockMode = 'absorb';
+    }
     if (!unit.skillCooldowns || typeof unit.skillCooldowns !== 'object') unit.skillCooldowns = {};
     if (!Array.isArray(unit.statuses)) unit.statuses = [];
     // 구버전 고유 스킬 쿨다운 이관
@@ -335,10 +341,13 @@
       const names = missing.map(id => (unit.skillTree.find(n => n.id === id) || {}).name || id);
       return { state: 'locked', reason: `선행: ${names.join(', ')}` };
     }
-    const cost = normalizeSkill(node).spCost;
-    if (unit.skillPoints < cost) return { state: 'poor', reason: `SP ${cost} 필요`, cost };
+    // 해금권(skillPoints) 1장 = 스킬 1개. 노드의 spCost와 무관하게 항상 1장을 쓴다.
+    const cost = SKILL_UNLOCK_COST;
+    if (unit.skillPoints < cost) return { state: 'poor', reason: '레벨업 필요 (동일 캐릭터 흡수)', cost };
     return { state: 'learnable', cost };
   }
+
+  const SKILL_UNLOCK_COST = 1;
 
   function learnSkill(unit, nodeId) {
     const node = (unit.skillTree || []).find(n => n.id === nodeId);

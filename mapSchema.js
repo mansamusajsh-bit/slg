@@ -275,6 +275,24 @@
     return out;
   }
 
+  // 타일 방어 보너스의 단일 기준표. 에디터/DB 타일에는 defBonus가 저장되지 않으므로
+  // 전투 계산과 타일 뱃지는 항상 terrain + structure로 여기서 계산한다. (값은 합산)
+  const TILE_DEFENSE = {
+    terrain: { plain: 0, forest: 0.20, hill: 0.40, mountain: 0.50, river: -0.10, sea: 0 },
+    structure: { city: 0.50, village: 0.25, tree: 0.10, resource: 0 }
+  };
+
+  /**
+   * @param {{terrain?:string, type?:string, structure?:string|null}} tile
+   * @returns {number} 방어 보너스 비율 (0.4 = +40%). 타일이 없으면 0.
+   */
+  function getTileDefBonus(tile) {
+    if (!tile) return 0;
+    const terrain = String(tile.terrain || tile.type || 'plain').toLowerCase();
+    const structure = tile.structure ? String(tile.structure).toLowerCase() : null;
+    return (TILE_DEFENSE.terrain[terrain] || 0) + ((structure && TILE_DEFENSE.structure[structure]) || 0);
+  }
+
   // ==========================================================================
   // 3. Seed 기반 결정론적 난수 생성기 (8단계)
   // ==========================================================================
@@ -617,6 +635,8 @@
     deriveSpawnPointsFromTiles,
     applySpawnPointsToTiles,
     computeTerrainComposition,
+    TILE_DEFENSE,
+    getTileDefBonus,
 
     // CurrentBattle
     createCurrentBattle,
