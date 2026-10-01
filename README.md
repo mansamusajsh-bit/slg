@@ -77,20 +77,41 @@ Encounter               ── state.currentBattle = { id:"enc-00001", nodeId, s
 - 후퇴/패배는 노드를 완료하지 않는다. 같은 노드에 새 seed로 다시 도전할 수 있다.
 - 노드를 완료하면 지휘 AP가 최대치로 회복된다 (AP는 전투 사이에 채워져야 런이 이어진다).
 
-### 세이브 구조 (v2)
+### 세이브 구조 (v3)
 
 ```text
-{ version: "2.0.0", currentView, guest,
-  player: { characters, characterCollection, inventory, gold, rewinders,
-            progression: { commander, turn, stackMoveEnabled, strategy, selectedUnitId },
-            roguelikeRun: { id, seed, status, currentNodeId, completedNodes,
-                            mapState: { layers, nodes }, encounters, encounterSeq } },
+{ version: "3.0.0", currentView, guest,
+  player: { loopCount, memories: { visitedNodesBySeed }, unlockedCharacters, settings: { muted },   ← 영구 (회귀해도 유지)
+            characterCollection, inventory, rewinders,
+            progression: { commander, turn, stackMoveEnabled, strategy, selectedUnitId } },
+  run:    { id, seed, status, currentNodeId, completedNodes, mapState: { layers, nodes },            ← 이번 런 (회귀 시 초기화)
+            encounters, encounterSeq, party, reserve, gold, commandBonus,
+            returnPending?, emergencyRecruit? },
   currentBattle: null | { ...Encounter, live: { enemyUnits, deployedUnitIds, defeatedEnemyCount } } }
 ```
 
+- 코드의 `state.gold` / `state.playerUnits` / `state.reserveUnits`는 `state.run.gold / party / reserve`를 가리키는 접근자다 (JSON에는 run 쪽에만 저장된다).
+- 런 초기값은 `createInitialRun(seed, commandBonus)` 한 곳에서만 만든다.
 - `currentBattle`은 전투 중일 때만 저장된다. 전투 중 새로고침하면 **일시정지 상태로 복원**되고, 승리 직후라면 승리 모달이 다시 뜬다.
-- 이전 버전(v1, 평평한 구조) 세이브도 그대로 불러온다. 이때 런은 새로 만들어진다.
+- v2(`player.characters / gold / roguelikeRun`)와 v1(평평한 구조) 세이브도 그대로 불러와 run으로 옮긴다. v1은 런이 새로 만들어진다.
 - 손상된 런 데이터는 새 런으로 대체되고 캐릭터/골드는 유지된다.
+
+## 사망회귀 (Return by Death)
+
+전투가 끝날 때(`finishEncounter`)만 판정한다. 상점 구매 등으로 골드가 0이 되는 것은 회귀를 일으키지 않는다.
+
+| 상황 | 결과 |
+| --- | --- |
+| 출전 부대 전멸, 미출전/예비 대원 생존 | 일반 패배 (노드 미완료) |
+| 전원 사망 + 골드 0 | 회귀 연출 → 지휘력 보정 선택 → 같은 seed로 런 처음부터 |
+| 전원 사망 + 골드 ≥ 최소 모집비 | 긴급 모집 화면 (1명 이상 모집해야 닫힘, 그 전엔 이동 불가) |
+| 전원 사망 + 0 < 골드 < 최소 모집비 | "더 이상 싸울 수 없다" 안내 → 골드 0 → 회귀 |
+
+- 최소 모집비는 `TOWN_UNIT_SHOP_CATALOG`의 최저 `cost`. 긴급 모집에서는 쓰러진 대원을 같은 병과 용병 비용으로 재모집할 수도 있다.
+- **지휘력 보정**: 회귀할 때마다 시작 파티 중 1명을 골라 이번 런 동안 방어 +1. 다시 회귀하면 사라지고 새로 고른다(누적 없음). 방어력 가산은 `calculateEffectiveStrength(unit,'def')` 한 곳뿐이라 이중 적용이 없고, 같은 캐릭터를 다시 얻어도 자동 적용된다. 표시는 `방어 31 (+1 지휘)`.
+- 회귀 횟수(`player.loopCount`)는 화면 왼쪽 아래에, 이전 런에서 방문한 노드는 전략맵에 💭 "기억나는 장소"로 표시된다 (같은 seed 기준).
+- 연출: `audio/returnByDeath.js` — 외부 음원 없이 Web Audio API로 합성 (시계 틱 가속 → 심장 박동 2회 → 정적 → 급상승 드론 → 무음), 화면은 채도 감소 → 흰색 플래시 → 페이드 인. 약 3초. 사용자 입력 전에는 소리를 내지 않고, `player.settings.muted`가 true면 무음.
+- 연출/선택 도중 새로고침해도 `run.returnPending`이 남아 있어 회귀 횟수가 두 번 오르지 않고 선택 화면부터 이어진다. 긴급 모집도 `run.emergencyRecruit`로 이어진다.
 
 ## 테스트
 

@@ -288,6 +288,8 @@
                        (unit.stats && typeof unit.stats.def === 'number') ? unit.stats.def :
                        (typeof unit.defensePower === 'number') ? unit.defensePower :
                        (typeof unit.atk === 'number') ? unit.atk : 10;
+        // 지휘력 보정(사망회귀 보상)은 방어력 계산의 이 한 곳에서만 더한다.
+        baseStrength += getCommandBonusDef(unit);
       } else if (statType === 'strength') {
         baseStrength = typeof unit.strength === 'number' ? unit.strength :
                        typeof unit.atk === 'number' ? unit.atk :
@@ -353,10 +355,159 @@
       saveGameState(true);
     }
 
+    // ========================================================================
+    // 2차: player(영구) / run(회귀 시 초기화) 분리
+    // ========================================================================
+    const START_GOLD = 450;
+
+    // 런 시작 파티. 런 초기값은 createInitialRun() 한 곳에서만 만들고, 파티는 항상 이 함수로 새로 만든다.
+    function createStartingParty() {
+      return [
+        {
+          id: 'u1',
+          owner: 'PLAYER',
+          name: '성기사 롤랑',
+          unitClass: 'KNIGHT',
+          classType: 'KNIGHT',
+          avatar: '🐴',
+          level: 2,
+          stats: { hp: 100, maxHp: 100, atk: 48, def: 38, mobility: 3 },
+          hp: 100,
+          maxHp: 100,
+          atk: 48,
+          def: 38,
+          baseAP: 3,
+          ap: 3,
+          favorability: 85,
+          affection: 85,
+          upkeep: 12,
+          x: 3,
+          y: 4, // 왕도 에테르니아 내 배치
+          imageUrl: '',
+          isInactivated: false,
+          isDead: false,
+          promotions: { combatRank: 1 },
+          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.KNIGHT)),
+          customSkillCooldown: 0
+        },
+        {
+          id: 'u2',
+          owner: 'PLAYER',
+          name: '용병대장 발터',
+          unitClass: 'MELEE',
+          classType: 'MELEE',
+          avatar: '⚔️',
+          level: 1,
+          stats: { hp: 85, maxHp: 85, atk: 35, def: 30, mobility: 2 },
+          hp: 85,
+          maxHp: 85,
+          atk: 35,
+          def: 30,
+          baseAP: 2,
+          ap: 2,
+          favorability: 40,
+          affection: 40,
+          upkeep: 8,
+          x: 2,
+          y: 3, // 평지
+          imageUrl: '',
+          isInactivated: false,
+          isDead: false,
+          promotions: { combatRank: 0 },
+          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.MELEE)),
+          customSkillCooldown: 0
+        },
+        {
+          id: 'u3',
+          owner: 'PLAYER',
+          name: '명사수 리리아',
+          unitClass: 'ARCHER',
+          classType: 'ARCHER',
+          avatar: '🏹',
+          level: 1,
+          stats: { hp: 70, maxHp: 70, atk: 42, def: 20, mobility: 2 },
+          hp: 70,
+          maxHp: 70,
+          atk: 42,
+          def: 20,
+          baseAP: 2,
+          ap: 2,
+          favorability: 28,
+          affection: 28, // 호감도 30 이하 (전투 거부 테스트용)
+          upkeep: 8,
+          x: 1,
+          y: 3, // 숲 속
+          imageUrl: '',
+          isInactivated: false,
+          isDead: false,
+          promotions: { combatRank: 0 },
+          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.ARCHER)),
+          customSkillCooldown: 0
+        }
+      ];
+    }
+
+    // 영구 플레이어 데이터 (Supabase gameState의 player). 사망회귀해도 유지된다.
+    function createInitialPlayer() {
+      return {
+        loopCount: 0,                          // 사망회귀 횟수
+        memories: { visitedNodesBySeed: {} },  // 회귀해도 남는 기억: seed별 방문 노드
+        unlockedCharacters: [],                // 한 번이라도 손에 넣은 캐릭터 id
+        settings: { muted: false }             // 음소거 (true면 회귀 효과음을 내지 않는다)
+      };
+    }
+
+    /**
+     * 런 초기값을 만드는 유일한 함수. 노드 그래프(RunEngine) + 파티 + 골드 + 지휘력 보정.
+     * 지휘력 보정 { characterId, def } 은 여기서 run에 기록만 하고, 실제 방어력 가산은
+     * getCommandBonusDef()(→ calculateEffectiveStrength 'def') 한 곳에서만 한다 (이중 적용 방지,
+     * 같은 캐릭터를 같은 런에서 다시 얻어도 자동 적용).
+     */
+    function createInitialRun(seed = null, commandBonus = null) {
+      const run = RunEngine.createRun(WORLD_SECTORS, seed);
+      run.party = createStartingParty();
+      run.reserve = [];
+      run.gold = START_GOLD;
+      run.commandBonus = (commandBonus && commandBonus.characterId != null)
+        ? { characterId: String(commandBonus.characterId), def: Number(commandBonus.def) || 1 }
+        : null;
+      run.encounterSeq = 0;
+      return run;
+    }
+    window.createInitialRun = createInitialRun;
+
+    // 기존 코드의 state.gold / state.playerUnits / state.reserveUnits 는 state.run의 필드를 가리킨다.
+    // (열거 불가: JSON 직렬화 시 중복 저장되지 않는다.)
+    const RUN_FIELD_ALIASES = { gold: 'gold', playerUnits: 'party', reserveUnits: 'reserve' };
+    function bindRunAccessors(s) {
+      Object.entries(RUN_FIELD_ALIASES).forEach(([key, runKey]) => {
+        Object.defineProperty(s, key, {
+          get() { return s.run ? s.run[runKey] : undefined; },
+          set(v) { if (s.run) s.run[runKey] = v; },
+          configurable: true,
+          enumerable: false
+        });
+      });
+      return s;
+    }
+
+    // 새 run 객체로 교체할 때 파티/골드가 없는 런(구버전 세이브 등)이면 이전 런의 값을 이어받는다.
+    function adoptRun(nextRun) {
+      const prev = state && state.run;
+      if (prev && nextRun !== prev) {
+        if (!Array.isArray(nextRun.party)) nextRun.party = Array.isArray(prev.party) ? prev.party : createStartingParty();
+        if (!Array.isArray(nextRun.reserve)) nextRun.reserve = Array.isArray(prev.reserve) ? prev.reserve : [];
+        if (typeof nextRun.gold !== 'number') nextRun.gold = typeof prev.gold === 'number' ? prev.gold : START_GOLD;
+        if (!('commandBonus' in nextRun)) nextRun.commandBonus = prev.commandBonus || null;
+      }
+      state.run = nextRun;
+      return nextRun;
+    }
+
     // 기본 지휘관 & 유닛 상태 생성
     function createInitialState(customGuestId) {
       const guestId = customGuestId || generateGuestId();
-      return {
+      return bindRunAccessors({
         guest: {
           id: guestId,
           createdAt: new Date().toISOString(),
@@ -369,7 +520,9 @@
         // 1차 맵 파이프라인의 단일 전술 전투 데이터. 랜덤/Seed는 후속 단계에서 추가한다.
         currentBattle: null,
         // 11~13단계: 로그라이크 런(노드 그래프 + 진행도). 전술 타일/적 데이터는 절대 여기에 넣지 않는다.
-        run: RunEngine.createRun(WORLD_SECTORS),
+        // 2차: player(영구, 회귀해도 유지) / run(회귀 시 초기화) 분리.
+        player: createInitialPlayer(),
+        run: createInitialRun(null, null),
         encounterSeq: 0,      // Encounter id(enc-00001) 순번. 세이브의 roguelikeRun.encounterSeq로 영속화된다.
         selectedNodeId: null, // 전략맵에서 고른 노드 (UI 상태, 저장하지 않음)
         isCombatActive: false,
@@ -396,7 +549,6 @@
           }
         },
         turn: 1,
-        gold: 450,
         rewinders: 3,
         stackMoveEnabled: true, // 중첩 유닛 함께 이동 기본 활성화
         commander: {
@@ -417,90 +569,7 @@
           }
         },
         characterCollection: [], // 용병 고용 획득 기록 (Supabase characters를 원본으로 사용). 출전 명단 편입 전 사본
-        reserveUnits: [], // 용병 명부에서 출전 명단 밖으로 뺀 유닛 (레벨/스킬 보존)
-        playerUnits: [
-          {
-            id: 'u1',
-            owner: 'PLAYER',
-            name: '성기사 롤랑',
-            unitClass: 'KNIGHT',
-            classType: 'KNIGHT',
-            avatar: '🐴',
-            level: 2,
-            stats: { hp: 100, maxHp: 100, atk: 48, def: 38, mobility: 3 },
-            hp: 100,
-            maxHp: 100,
-            atk: 48,
-            def: 38,
-            baseAP: 3,
-            ap: 3,
-            favorability: 85,
-            affection: 85,
-            upkeep: 12,
-            x: 3,
-            y: 4, // 왕도 에테르니아 내 배치
-            imageUrl: '',
-            isInactivated: false,
-            isDead: false,
-            promotions: { combatRank: 1 },
-            customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.KNIGHT)),
-            customSkillCooldown: 0
-          },
-          {
-            id: 'u2',
-            owner: 'PLAYER',
-            name: '용병대장 발터',
-            unitClass: 'MELEE',
-            classType: 'MELEE',
-            avatar: '⚔️',
-            level: 1,
-            stats: { hp: 85, maxHp: 85, atk: 35, def: 30, mobility: 2 },
-            hp: 85,
-            maxHp: 85,
-            atk: 35,
-            def: 30,
-            baseAP: 2,
-            ap: 2,
-            favorability: 40,
-            affection: 40,
-            upkeep: 8,
-            x: 2,
-            y: 3, // 평지
-            imageUrl: '',
-            isInactivated: false,
-            isDead: false,
-            promotions: { combatRank: 0 },
-            customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.MELEE)),
-            customSkillCooldown: 0
-          },
-          {
-            id: 'u3',
-            owner: 'PLAYER',
-            name: '명사수 리리아',
-            unitClass: 'ARCHER',
-            classType: 'ARCHER',
-            avatar: '🏹',
-            level: 1,
-            stats: { hp: 70, maxHp: 70, atk: 42, def: 20, mobility: 2 },
-            hp: 70,
-            maxHp: 70,
-            atk: 42,
-            def: 20,
-            baseAP: 2,
-            ap: 2,
-            favorability: 28,
-            affection: 28, // 호감도 30 이하 (전투 거부 테스트용)
-            upkeep: 8,
-            x: 1,
-            y: 3, // 숲 속
-            imageUrl: '',
-            isInactivated: false,
-            isDead: false,
-            promotions: { combatRank: 0 },
-            customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.ARCHER)),
-            customSkillCooldown: 0
-          }
-        ],
+        // 출전 명단(playerUnits) · 예비(reserveUnits) · 골드(gold)는 state.run(party/reserve/gold)에 있다 — bindRunAccessors 참고.
         enemyUnits: [
           {
             id: 'e1',
@@ -588,8 +657,9 @@
             isDead: false
           }
         ]
-      };
+      });
 
+      // LEGACY: 아래는 return 뒤라 실행되지 않는 코드다 (원래부터 도달 불가).
       // 초기 상태 유닛 체력 100-Point 정규화 자동 실행
       normalizeAllUnitsHP(initialState);
       return initialState;
@@ -748,11 +818,12 @@
           };
         });
 
-        // 13단계: 저장 구조 분리.
-        //   player        — 전투/런과 무관하게 이어지는 플레이어 진행 (캐릭터, 골드, 진행도, 그리고 현재 런)
-        //   roguelikeRun  — 노드 그래프/진행도. 전술 타일은 들어 있지 않다.
+        // v3 저장 구조 (2차: 사망회귀).
+        //   player        — 영구 데이터. 회귀해도 유지 (loopCount, memories, unlockedCharacters, 지휘관 등)
+        //   run           — 이번 런. 회귀 시 초기화 (노드 그래프 + party/reserve/gold/commandBonus)
         //   currentBattle — 전투 중일 때만 별도로 저장 (map + 실시간 전투 상태 live). 전투가 없으면 null.
         if (state.run) state.run.encounterSeq = state.encounterSeq;
+        syncUnlockedCharacters();
         const battleToSave = state.currentBattle ? {
           ...state.currentBattle,
           live: {
@@ -762,16 +833,17 @@
           }
         } : null;
         const payload = {
-          version: '2.0.0',
+          version: '3.0.0',
           savedAt: state.guest.lastSavedAt,
           guest: state.guest,
           currentView: state.currentView || 'STRATEGY',
           player: {
-            characters: sanitizedPlayerUnits,
+            loopCount: Number(state.player?.loopCount) || 0,
+            memories: state.player?.memories || { visitedNodesBySeed: {} },
+            unlockedCharacters: Array.isArray(state.player?.unlockedCharacters) ? state.player.unlockedCharacters : [],
+            settings: state.player?.settings || { muted: false },
             characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : [],
-            reserveUnits: Array.isArray(state.reserveUnits) ? state.reserveUnits : [],
             inventory: Array.isArray(state.inventory) ? state.inventory : [],
-            gold: state.gold,
             rewinders: state.rewinders,
             progression: {
               commander: state.commander,
@@ -785,9 +857,14 @@
                 activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
               },
               selectedUnitId: selectedUnitId
-            },
-            roguelikeRun: state.run || null
+            }
           },
+          run: state.run ? {
+            ...state.run,
+            party: sanitizedPlayerUnits,
+            reserve: Array.isArray(state.reserveUnits) ? state.reserveUnits : [],
+            gold: state.gold
+          } : null,
           currentBattle: battleToSave
         };
 
@@ -813,7 +890,35 @@
     // v1 세이브에는 런이 없으므로 새 런이 만들어지고, 전투 중 상태는 원래 저장되지 않았으므로 전략맵에서 이어진다.
     function normalizeSavePayload(raw) {
       if (!raw || typeof raw !== 'object') return null;
+      if (raw.player && typeof raw.player === 'object' && raw.run && typeof raw.run === 'object') {
+        // v3: 캐릭터/골드는 run에 있다.
+        const p = raw.player;
+        const r = raw.run;
+        const prog = p.progression || {};
+        return {
+          version: raw.version,
+          savedAt: raw.savedAt,
+          guest: raw.guest,
+          currentView: raw.currentView,
+          strategy: prog.strategy,
+          turn: prog.turn,
+          gold: r.gold,
+          rewinders: p.rewinders,
+          stackMoveEnabled: prog.stackMoveEnabled,
+          commander: prog.commander,
+          playerUnits: r.party,
+          characterCollection: p.characterCollection,
+          reserveUnits: r.reserve,
+          inventory: p.inventory,
+          selectedUnitId: prog.selectedUnitId,
+          playerMeta: { loopCount: p.loopCount, memories: p.memories, unlockedCharacters: p.unlockedCharacters, settings: p.settings },
+          roguelikeRun: r,
+          currentBattle: raw.currentBattle || null,
+          enemyUnits: (raw.currentBattle && raw.currentBattle.live && Array.isArray(raw.currentBattle.live.enemyUnits)) ? raw.currentBattle.live.enemyUnits : []
+        };
+      }
       if (raw.player && typeof raw.player === 'object') {
+        // v2: player 아래에 characters/gold/roguelikeRun이 있었다. 읽어서 run으로 옮긴다.
         const p = raw.player;
         const prog = p.progression || {};
         return {
@@ -840,15 +945,16 @@
       return { ...raw, roguelikeRun: null, currentBattle: null, enemyUnits: [] };
     }
 
-    // 저장된 런을 복원한다. 손상됐거나 없으면 새 런을 만든다 (캐릭터/골드는 그대로).
+    // 저장된 런을 복원한다. 손상됐거나 없으면 새 런을 만든다 (캐릭터/골드는 loadGameState가 이어서 채운다).
     function restoreSavedRun(savedRun) {
       const check = savedRun ? RunEngine.validateRun(savedRun) : { valid: false, errors: [] };
       if (check.valid) {
-        state.run = savedRun;
+        adoptRun(savedRun);
         state.encounterSeq = Number(savedRun.encounterSeq) || savedRun.encounters.length;
       } else {
         if (savedRun) console.warn('[Save] 저장된 런이 손상되어 새 런으로 대체합니다:', check.errors);
-        state.run = RunEngine.createRun(WORLD_SECTORS);
+        const fresh = createInitialRun(null, savedRun && savedRun.commandBonus ? savedRun.commandBonus : null);
+        state.run = fresh;
         state.encounterSeq = 0;
       }
       state.selectedNodeId = null;
@@ -918,8 +1024,20 @@
           };
         }
 
+        // 영구 플레이어 데이터 (v2 이하 세이브에는 없으므로 기본값)
+        const meta = parsed.playerMeta || {};
+        const basePlayer = createInitialPlayer();
+        state.player = {
+          loopCount: Number(meta.loopCount) || 0,
+          memories: (meta.memories && typeof meta.memories === 'object')
+            ? { visitedNodesBySeed: { ...(meta.memories.visitedNodesBySeed || {}) } }
+            : basePlayer.memories,
+          unlockedCharacters: Array.isArray(meta.unlockedCharacters) ? meta.unlockedCharacters.map(String) : [],
+          settings: { ...basePlayer.settings, ...(meta.settings || {}) }
+        };
+
         state.turn = (typeof parsed.turn === 'number') ? parsed.turn : 1;
-        state.gold = (typeof parsed.gold === 'number') ? parsed.gold : 450;
+        state.gold = (typeof parsed.gold === 'number') ? parsed.gold : START_GOLD;
         state.rewinders = (typeof parsed.rewinders === 'number') ? parsed.rewinders : 3;
         state.stackMoveEnabled = (parsed.stackMoveEnabled !== undefined) ? parsed.stackMoveEnabled : true;
 
@@ -997,6 +1115,8 @@
           addLog(`🏆 [전투 복원] ${state.currentBattle.nodeId} 전투는 이미 승리한 상태입니다. 보상을 수령하고 전략맵으로 돌아가세요.`, 'system');
           const rd = state.currentBattle.result || { gold: 0, rewinderGranted: false, defeatedCount: 0 };
           if (window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(rd);
+        } else {
+          resumePendingRunFlow();
         }
         return true;
       } catch (err) {
@@ -2125,6 +2245,7 @@
       // 각 적 유닛 순차적으로 행동 실행 (async/await 딜레이 350ms~500ms)
       for (const enemy of aliveEnemies) {
         if (enemy.isDead) continue;
+        if (isDeployedForceWiped()) break;
 
         while (enemy.ap > 0 && !enemy.isDead) {
           const acted = await executeEnemyDecision(enemy);
@@ -2940,7 +3061,7 @@
       document.getElementById('card-level').textContent = `Lv.${unit.level}`;
       document.getElementById('card-stats').innerHTML = `
         <span>⚔️ ATK <b>${unit.atk}</b></span>
-        <span>🛡️ DEF <b>${unit.def}${unit.isGuarding ? '<span style="color:#10b981; font-size:10px; font-weight:800; margin-left:2px;">(+30% 방어)</span>' : ''}</b></span>
+        <span>🛡️ DEF <b>${formatDefense(unit)}${unit.isGuarding ? '<span style="color:#10b981; font-size:10px; font-weight:800; margin-left:2px;">(+30% 방어)</span>' : ''}</b></span>
         <span>⚡ AP <b style="color: ${unit.ap > 0 ? '#0284c7' : '#ef4444'}">${unit.ap}/${unit.baseAP}</b></span>
         ${unit.isGuarding ? '<span style="background:#0284c7; color:#fff; border-radius:4px; padding:1px 4px; font-size:9px; font-weight:800;">🛡️방어태세</span>' : ''}
       `;
@@ -3132,7 +3253,14 @@
       if (!opts.force && cur && cur.status === 'active' && cur.completedNodes.length > 0) {
         if (!window.confirm('진행 중인 런을 포기하고 새 런을 시작할까요? (캐릭터/골드는 유지됩니다)')) return false;
       }
-      state.run = RunEngine.createRun(WORLD_SECTORS, customSeed);
+      // 수동 새 런(디버그/재도전): 노드 그래프만 새로 만들고 파티·골드·지휘력 보정은 그대로 이어간다.
+      // 사망회귀(returnByDeath)는 이 함수를 쓰지 않는다 — 그쪽은 createInitialRun()으로 전부 초기화한다.
+      const prevRun = state.run;
+      const nextRun = createInitialRun(customSeed, prevRun && prevRun.commandBonus);
+      nextRun.party = prevRun ? prevRun.party : nextRun.party;
+      nextRun.reserve = prevRun ? prevRun.reserve : nextRun.reserve;
+      nextRun.gold = prevRun ? prevRun.gold : nextRun.gold;
+      state.run = nextRun;
       state.encounterSeq = 0;
       state.selectedNodeId = null;
       state.currentBattle = null;
@@ -3190,6 +3318,7 @@
     }
 
     function openRunNodeModal(node) {
+      if (isRunBlocked()) return reportRunBlocked();
       closeRunNodeModal();
       const run = state.run;
       const overlay = document.createElement('div');
@@ -3343,6 +3472,7 @@
       };
 
       // 11단계: 전투는 전략맵의 "노드"를 통해서만 들어갈 수 있다. sectorId만으로 전술맵에 들어가는 길은 없다.
+      if (isRunBlocked()) return reportRunBlocked();
       const requestedNodeId = String(nodeId || state?.selectedNodeId || '');
       const node = getCurrentNode(requestedNodeId);
       if (!node) return reportError(`노드 '${requestedNodeId}'를 찾을 수 없습니다. 전투는 전략맵의 노드를 통해서만 시작할 수 있습니다.`);
@@ -3866,9 +3996,10 @@
         const status = RunEngine.getNodeStatus(run, node.id);
         const meta = RunEngine.NODE_META[node.type] || { icon: '❔', label: node.type };
         const sec = WORLD_SECTORS[node.sectorId] || { name: node.sectorId };
-        const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})`;
+        const remembered = isRememberedNode(run, node.id);
+        const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})${remembered ? ' · 💭 기억나는 장소' : ''}`;
         const pin = document.createElement('div');
-        pin.className = `strat-node-pin run-node node-${node.type} is-${status}${state.selectedNodeId === node.id ? ' active' : ''}`;
+        pin.className = `strat-node-pin run-node node-${node.type} is-${status}${remembered ? ' is-remembered' : ''}${state.selectedNodeId === node.id ? ' active' : ''}`;
         pin.id = `node-pin-${node.id}`;
         pin.style.left = `${p.x}%`;
         pin.style.top = `${p.y}%`;
@@ -3876,7 +4007,7 @@
         pin.setAttribute('tabindex', '0');
         pin.setAttribute('aria-label', label);
         pin.title = label;
-        pin.innerHTML = `<div class="strat-node-circle"><div class="strat-node-pulse"></div><span>${meta.icon}</span></div><span class="strat-node-tag">${meta.label}</span>`;
+        pin.innerHTML = `<div class="strat-node-circle"><div class="strat-node-pulse"></div><span>${meta.icon}</span>${remembered ? '<span class="strat-node-memory" aria-hidden="true">💭</span>' : ''}</div><span class="strat-node-tag">${meta.label}</span>`;
         pin.addEventListener('click', () => selectNode(node.id));
         pin.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(node.id); } });
         canvas.appendChild(pin);
@@ -4029,7 +4160,7 @@
                   </div>
                   <div class="strat-char-roster-stats">
                     <span>⚔️ ${u.atk || 40}</span>
-                    <span>🛡️ ${u.def || 30}</span>
+                    <span>🛡️ ${formatDefense(u)}</span>
                     <span>❤️ ${u.hp || 100}/${u.maxHp || 100}</span>
                     <span style="color: #0284c7; font-weight: 800;">⚡ ${uPower} PWR</span>
                   </div>
@@ -4203,6 +4334,7 @@
 
     // 7. 섹터 강습 출격 시뮬레이션 모달 오픈
     function openSectorDeployModal() {
+      if (isRunBlocked()) return reportRunBlocked();
       const modal = document.getElementById('modal-sector-deploy');
       if (!modal) return;
 
@@ -4358,6 +4490,7 @@
     window.launchSectorOperation = launchSectorOperation;
 
     function renderAll() {
+      renderLoopCounter();
       if (state && state.currentView === 'STRATEGY') {
         const viewStrat = document.getElementById('view-strategy-main');
         const viewSector = document.getElementById('view-sector-field');
@@ -4453,7 +4586,7 @@
               </div>
               <div style="font-size: 11px; font-weight: 700; color: #64748b; margin-top: 4px; display: flex; gap: 8px;">
                 <span>⚔️ ATK <b style="color:#0f172a;">${unit.atk}</b></span>
-                <span>🛡️ DEF <b style="color:#0f172a;">${unit.def}</b></span>
+                <span>🛡️ DEF <b style="color:#0f172a;">${formatDefense(unit)}</b></span>
                 <span>⚡ AP <b style="color:${unit.ap > 0 ? '#0284c7' : '#ef4444'};">${unit.ap}/${unit.baseAP}</b></span>
               </div>
             </div>
@@ -5959,7 +6092,7 @@
       const coordEl = document.getElementById('fullshot-stat-coord');
 
       if (atkEl) atkEl.textContent = unit.atk;
-      if (defEl) defEl.textContent = unit.def;
+      if (defEl) defEl.innerHTML = formatDefense(unit);
       if (apEl) {
         apEl.innerHTML = `<span style="color: ${unit.ap > 0 ? '#0284c7' : '#ef4444'}; font-weight: 900;">${unit.ap}</span> / ${unit.baseAP}`;
       }
@@ -7459,7 +7592,36 @@
      *
      * @returns {boolean} True if party wipeout occurred, false otherwise.
      */
+    let wipeoutTimer = null;
+    function isDeployedForceWiped() {
+      if (!state || !state.currentBattle || state.currentBattle.status !== 'active') return false;
+      const deployedIds = Array.isArray(state.currentDeployedUnitIds) && state.currentDeployedUnitIds.length
+        ? state.currentDeployedUnitIds : (state.playerUnits || []).map(u => u.id);
+      const onField = (state.playerUnits || []).filter(u => deployedIds.includes(u.id) && u.x >= 0 && u.y >= 0);
+      return onField.filter(isUnitAlive).length === 0;
+    }
+
+    /**
+     * 2차: 출전 부대가 전멸하면 전투를 패배로 끝낸다. 실제 처리는 다음 틱에 finishEncounter()가 한다
+     * (적 턴 루프나 스킬 처리 도중에 전투 상태를 지우지 않도록). 생존 유닛/골드에 따른
+     * 사망회귀·긴급 모집 판정은 finishEncounter() → resolveRunSurvival()이 맡는다.
+     */
     function checkPartyWipeout() {
+      if (!isDeployedForceWiped()) return false;
+      if (wipeoutTimer) return true;
+      const tryFinish = () => {
+        wipeoutTimer = null;
+        if (!isDeployedForceWiped()) return;
+        if (isEnemyTurnProcessing) { wipeoutTimer = setTimeout(tryFinish, 200); return; }
+        addLog('💀 [부대 전멸] 출전한 아군이 모두 쓰러졌습니다.', 'danger');
+        finishEncounter({ victory: false, reason: 'wipeout' });
+      };
+      wipeoutTimer = setTimeout(tryFinish, 0);
+      return true;
+    }
+
+    // LEGACY: 1시간 정비 상태로 묶던 예전 전멸 처리. 사망회귀 도입으로 호출하지 않는다 (1차 검증 후 삭제 예정).
+    function legacyCheckPartyWipeoutHourLockout() {
       if (!state || !Array.isArray(state.playerUnits)) return false;
 
       const livingUnits = state.playerUnits.filter(u => !u.isDead && (typeof u.hp === 'number' ? u.hp > 0 : true));
@@ -8342,6 +8504,412 @@
       addLog(`▶️ [전투 재개] 전술 전장(8x14 그리드) 상호작용이 재개되었습니다.`, 'combat');
     }
 
+    // ========================================================================
+    // 2차: 사망회귀 (Return by Death) · 긴급 모집 · 지휘력 보정
+    // ========================================================================
+    //   finishEncounter() 끝에서만 판정한다:
+    //     생존 유닛(출전 명단 + 예비) 0 AND 골드 0          → returnByDeath()
+    //     생존 유닛 0 AND 골드 > 0                           → openEmergencyRecruit()
+    //       └ 골드가 MIN_RECRUIT_COST 미만이라 아무도 못 뽑으면 안내 후 골드 0 → returnByDeath()
+    //   상점 구매 등으로 골드가 0이 되는 것은 회귀를 일으키지 않는다.
+
+    // 같은 캐릭터인지 판단하는 id (인스턴스 id가 아니라 원본 캐릭터 id)
+    function getCharacterId(unit) {
+      if (!unit) return '';
+      return String(unit.characterId || unit.sourceCharacterId || unit.catalogId || unit.id || '');
+    }
+
+    function isUnitAlive(u) {
+      return !!u && !u.isDead && (typeof u.hp === 'number' ? u.hp > 0 : true);
+    }
+
+    function getAliveRunUnits() {
+      return [...(state.playerUnits || []), ...(state.reserveUnits || [])].filter(isUnitAlive);
+    }
+
+    /**
+     * 지휘력 보정(방어 +N). 이번 런의 run.commandBonus 대상 캐릭터에게만, 아군에게만 적용된다.
+     * 방어력 계산은 calculateEffectiveStrength(unit,'def')가 이 값을 더하는 한 곳뿐이다.
+     */
+    function getCommandBonusDef(unit) {
+      const bonus = state && state.run && state.run.commandBonus;
+      if (!bonus || !unit || unit.owner !== 'PLAYER') return 0;
+      return getCharacterId(unit) === String(bonus.characterId) ? (Number(bonus.def) || 0) : 0;
+    }
+    window.getCommandBonusDef = getCommandBonusDef;
+
+    function getBaseDef(unit) {
+      if (!unit) return 0;
+      if (typeof unit.def === 'number') return unit.def;
+      if (unit.stats && typeof unit.stats.def === 'number') return unit.stats.def;
+      return 0;
+    }
+
+    // 표시용: "39 (+1 지휘)" — 전투에 실제로 쓰이는 값(기본 + 보정)과 보정분
+    function formatDefense(unit) {
+      const bonus = getCommandBonusDef(unit);
+      const base = getBaseDef(unit);
+      return bonus ? `${base + bonus} <span class="cmd-bonus-tag" title="지휘력 보정 (이번 런 한정)">(+${bonus} 지휘)</span>` : `${base}`;
+    }
+    window.formatDefense = formatDefense;
+
+    function syncUnlockedCharacters() {
+      if (!state || !state.player) return;
+      const set = new Set((state.player.unlockedCharacters || []).map(String));
+      [...(state.playerUnits || []), ...(state.reserveUnits || [])].forEach(u => { const id = getCharacterId(u); if (id) set.add(id); });
+      (state.characterCollection || []).forEach(e => { if (e && e.characterId != null) set.add(String(e.characterId)); });
+      state.player.unlockedCharacters = [...set];
+    }
+
+    // 회귀해도 남는 기억: 이번 런에서 방문한 노드(완료 + 도전했던 노드)를 seed별로 병합한다.
+    function rememberCurrentRun() {
+      const run = state.run;
+      if (!run || !state.player) return;
+      const mem = state.player.memories || (state.player.memories = { visitedNodesBySeed: {} });
+      if (!mem.visitedNodesBySeed) mem.visitedNodesBySeed = {};
+      const seen = new Set(mem.visitedNodesBySeed[run.seed] || []);
+      (run.completedNodes || []).forEach(id => seen.add(id));
+      (run.encounters || []).forEach(e => { if (e && e.nodeId) seen.add(e.nodeId); });
+      if (run.currentNodeId) seen.add(run.currentNodeId);
+      mem.visitedNodesBySeed[run.seed] = [...seen];
+    }
+
+    function isRememberedNode(run, nodeId) {
+      const list = state.player && state.player.memories && state.player.memories.visitedNodesBySeed
+        ? state.player.memories.visitedNodesBySeed[run.seed] : null;
+      return Array.isArray(list) && list.includes(nodeId);
+    }
+
+    // 긴급 모집/사망회귀 진행 중에는 전략맵 이동(노드 진입·출격)을 막는다.
+    function isRunBlocked() {
+      const run = state && state.run;
+      return !!(run && (run.emergencyRecruit || run.returnPending));
+    }
+    function reportRunBlocked() {
+      const msg = state.run && state.run.returnPending
+        ? '⏳ 사망회귀가 진행 중입니다. 지휘력 보정 대상을 먼저 고르세요.'
+        : '⚠️ 부대가 전멸했습니다. 긴급 모집으로 최소 1명을 모집해야 이동할 수 있습니다.';
+      addLog(msg, 'warning');
+      if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+      return false;
+    }
+
+    // ---- 긴급 모집 ---------------------------------------------------------
+    // 모집 비용은 데이터(TOWN_UNIT_SHOP_CATALOG)에서 계산한다. 쓰러진 기존 대원은 같은 병과 용병 비용으로 재모집할 수 있다.
+    function getRecruitCatalog() {
+      return (window.TOWN_UNIT_SHOP_CATALOG || []).filter(c => c && typeof c.cost === 'number' && c.stats);
+    }
+    function getMinRecruitCost() {
+      const costs = getRecruitCatalog().map(c => c.cost);
+      return costs.length ? Math.min(...costs) : Infinity;
+    }
+    window.getMinRecruitCost = getMinRecruitCost;
+
+    function getRehireCost(unit) {
+      const cls = unit.classType || unit.unitClass;
+      const same = getRecruitCatalog().filter(c => c.classType === cls).map(c => c.cost);
+      return same.length ? Math.min(...same) : getMinRecruitCost();
+    }
+
+    function createUnitFromCatalog(template) {
+      return {
+        id: `hired_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+        catalogId: template.id,
+        characterId: template.id,
+        owner: 'PLAYER',
+        isPlayer: true,
+        name: template.name,
+        classType: template.classType,
+        unitClass: template.classType,
+        avatar: template.avatar || '🛡️',
+        level: 1,
+        exp: 0,
+        stats: { ...template.stats },
+        hp: template.stats.hp,
+        maxHp: template.stats.maxHp,
+        atk: template.stats.atk,
+        def: template.stats.def,
+        ap: template.stats.mobility || 2,
+        baseAP: template.stats.mobility || 2,
+        mobility: template.stats.mobility || 2,
+        range: (template.classType === 'ARCHER' || template.classType === 'FIREARM') ? 2 : 1,
+        affection: 80,
+        favorability: 80,
+        promotions: { combatRank: 0 },
+        skillTree: [],
+        customSkill: DEFAULT_CLASS_SKILLS[template.classType] ? JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS[template.classType])) : null,
+        customSkillCooldown: 0,
+        x: -1,
+        y: -1,
+        isDead: false,
+        isInactivated: false,
+        inactivatedUntil: null,
+        upkeep: template.upkeep || 10,
+        description: template.description
+      };
+    }
+
+    /** 긴급 모집 1건. offer = { kind:'catalog', template } | { kind:'rehire', unit } */
+    function emergencyRecruit(offer) {
+      const run = state.run;
+      if (!run || !run.emergencyRecruit) return { ok: false, reason: '긴급 모집 중이 아닙니다.' };
+      const cost = offer.kind === 'rehire' ? getRehireCost(offer.unit) : offer.template.cost;
+      if (state.gold < cost) return { ok: false, reason: `골드가 부족합니다 (필요 ${cost}G)` };
+      state.gold -= cost;
+      let unit;
+      if (offer.kind === 'rehire') {
+        unit = offer.unit;
+        unit.isDead = false;
+        unit.hp = Number(unit.maxHp) || 100;
+        if (unit.stats) unit.stats.hp = unit.hp;
+        unit.isInactivated = false;
+        unit.inactivatedUntil = null;
+        if (!state.playerUnits.includes(unit)) state.playerUnits.push(unit);
+      } else {
+        unit = createUnitFromCatalog(offer.template);
+        state.playerUnits.push(unit);
+      }
+      normalizeAllUnitsHP(state);
+      run.emergencyRecruitCount = (run.emergencyRecruitCount || 0) + 1;
+      const bonus = getCommandBonusDef(unit);
+      addLog(`🆘 [긴급 모집] ${unit.name} 합류 (-${cost}G, 잔여 ${state.gold}G)${bonus ? ` · 지휘력 보정 방어 +${bonus} 적용` : ''}`, 'gold');
+      saveGameState(true);
+      return { ok: true, unit, cost };
+    }
+    window.emergencyRecruit = emergencyRecruit;
+
+    function closeEmergencyRecruit() {
+      const run = state.run;
+      if (!run || !run.emergencyRecruit) return true;
+      if (getAliveRunUnits().length === 0) return false; // 1명 이상 모집해야 닫을 수 있다
+      run.emergencyRecruit = false;
+      run.emergencyRecruitCount = 0;
+      document.getElementById('modal-emergency-recruit')?.remove();
+      if (state.strategy) state.strategy.deploySelectedIds = null; // 편성은 새 대원 기준으로 다시 잡는다
+      addLog('🚩 [긴급 모집 완료] 재편성한 부대로 작전을 이어갑니다.', 'gold');
+      goToStrategyMap();
+      saveGameState(true);
+      return true;
+    }
+    window.closeEmergencyRecruit = closeEmergencyRecruit;
+
+    function rbdModal(id, borderColor) {
+      document.getElementById(id)?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = id;
+      overlay.className = 'rbd-overlay';
+      const card = document.createElement('div');
+      card.className = 'rbd-card';
+      card.style.borderColor = borderColor;
+      overlay.appendChild(card);
+      document.body.appendChild(overlay);
+      return { overlay, card };
+    }
+
+    // "더 이상 싸울 수 없다" — 확인을 누르면 resolve
+    function showCannotFightNotice(gold, minCost) {
+      return new Promise(resolve => {
+        const { overlay, card } = rbdModal('modal-cannot-fight', '#ef4444');
+        card.innerHTML = `
+          <div class="rbd-icon">🕯️</div>
+          <h2 class="rbd-title" style="color:#f87171;">더 이상 싸울 수 없다</h2>
+          <p class="rbd-text">남은 골드 ${gold}G로는 아무도 모집할 수 없습니다. (최소 ${minCost}G)<br/>남은 골드를 모두 잃고, 처음으로 돌아갑니다.</p>
+          <button type="button" class="rbd-btn rbd-btn-danger" id="btn-cannot-fight-ok">받아들인다</button>`;
+        card.querySelector('#btn-cannot-fight-ok').onclick = () => { overlay.remove(); resolve(); };
+      });
+    }
+
+    /**
+     * 전멸했지만 골드가 남아 있을 때의 모집 화면. 1명 이상 모집해야 닫힌다(전략맵 이동 불가).
+     * 아무도 모집할 수 없으면(0 < 골드 < 최소 모집비) 안내 후 골드를 0으로 만들고 사망회귀한다.
+     */
+    async function openEmergencyRecruit() {
+      const run = state.run;
+      if (!run) return;
+      run.emergencyRecruit = true;
+      saveGameState(true);
+
+      const minCost = getMinRecruitCost();
+      const recruitedSoFar = () => getAliveRunUnits().length > 0;
+
+      if (state.gold < minCost && !recruitedSoFar()) {
+        // 회귀 판정 지점 (긴급 모집 화면)
+        await showCannotFightNotice(state.gold, minCost);
+        state.gold = 0;
+        run.emergencyRecruit = false;
+        saveGameState(true);
+        return returnByDeath();
+      }
+
+      const { card } = rbdModal('modal-emergency-recruit', '#f59e0b');
+      const render = () => {
+        const fallen = (state.playerUnits || []).filter(u => !isUnitAlive(u));
+        const offers = [
+          ...fallen.map(u => ({ kind: 'rehire', unit: u, cost: getRehireCost(u), name: u.name, avatar: u.avatar || '👤', cls: u.classType || u.unitClass, defUnit: u, note: `Lv.${u.level || 1} 재모집` })),
+          ...getRecruitCatalog().map(t => ({ kind: 'catalog', template: t, cost: t.cost, name: t.name, avatar: t.avatar || '🛡️', cls: t.classType, defUnit: { owner: 'PLAYER', characterId: t.id, def: t.stats.def }, note: '신규 용병' }))
+        ];
+        const hasRecruited = recruitedSoFar();
+        card.innerHTML = `
+          <div class="rbd-icon">🆘</div>
+          <h2 class="rbd-title" style="color:#fbbf24;">긴급 모집</h2>
+          <p class="rbd-text">부대가 전멸했습니다. 남은 골드로 1명 이상 모집해야 작전을 이어갈 수 있습니다.</p>
+          <div class="rbd-gold">보유 골드 <b>${state.gold}G</b> · 모집 <b>${run.emergencyRecruitCount || 0}</b>명</div>
+          <div class="rbd-list">${offers.map((o, i) => `
+            <div class="rbd-row">
+              <span class="rbd-row-avatar">${o.avatar}</span>
+              <span class="rbd-row-main"><b>${o.name}</b><small>${o.cls} · ${o.note} · 방어 ${formatDefense(o.defUnit)}</small></span>
+              <button type="button" class="rbd-btn rbd-btn-small" data-offer="${i}" ${state.gold < o.cost ? 'disabled' : ''}>${o.cost}G</button>
+            </div>`).join('')}
+          </div>
+          <button type="button" class="rbd-btn" id="btn-emergency-done" ${hasRecruited ? '' : 'disabled'}>${hasRecruited ? '모집 완료 — 전략맵으로' : '1명 이상 모집해야 합니다'}</button>`;
+        card.querySelectorAll('[data-offer]').forEach(btn => {
+          btn.onclick = () => {
+            const res = emergencyRecruit(offers[Number(btn.dataset.offer)]);
+            if (!res.ok && typeof window.UI?.showToast === 'function') window.UI.showToast(res.reason, 'warning');
+            render();
+          };
+        });
+        card.querySelector('#btn-emergency-done').onclick = () => closeEmergencyRecruit();
+      };
+      render();
+    }
+    window.openEmergencyRecruit = openEmergencyRecruit;
+
+    // ---- 사망회귀 -----------------------------------------------------------
+    async function playReturnByDeathEffect() {
+      if (!window.ReturnByDeathFX || typeof window.ReturnByDeathFX.play !== 'function') return;
+      try {
+        await window.ReturnByDeathFX.play({ muted: !!(state.player && state.player.settings && state.player.settings.muted) });
+      } catch (e) {
+        console.warn('[ReturnByDeath] 연출 실패 — 건너뜁니다.', e);
+      }
+    }
+
+    /**
+     * 지휘력 보정 대상 선택. 대상은 다음 런 시작 파티(createStartingParty)의 캐릭터. 건너뛰기 없음.
+     * @returns {Promise<string>} 고른 캐릭터 id
+     */
+    function openCommandBonusSelect() {
+      return new Promise(resolve => {
+        const candidates = createStartingParty();
+        const { card } = rbdModal('modal-command-bonus', '#a78bfa');
+        card.innerHTML = `
+          <div class="rbd-icon">🔁</div>
+          <h2 class="rbd-title" style="color:#c4b5fd;">지휘력 보정</h2>
+          <p class="rbd-text">회귀 ${state.player.loopCount}회차. 이번 생에서 곁을 지킬 한 명을 고르세요.<br/>고른 대원은 <b>이번 런 동안</b> 방어력 +1을 얻습니다. (다시 회귀하면 사라집니다)</p>
+          <div class="rbd-list">${candidates.map(u => `
+            <button type="button" class="rbd-row rbd-row-pick" data-char="${getCharacterId(u)}">
+              <span class="rbd-row-avatar">${u.avatar || '👤'}</span>
+              <span class="rbd-row-main"><b>${u.name}</b><small>${u.classType} · Lv.${u.level || 1} · 방어 ${getBaseDef(u)} → <b class="rbd-up">${getBaseDef(u) + 1}</b></small></span>
+            </button>`).join('')}
+          </div>`;
+        card.querySelectorAll('[data-char]').forEach(btn => {
+          btn.onclick = () => {
+            document.getElementById('modal-command-bonus')?.remove();
+            resolve(btn.dataset.char);
+          };
+        });
+      });
+    }
+    window.openCommandBonusSelect = openCommandBonusSelect;
+
+    // 저장은 gameState 문서 하나에 player와 run이 함께 들어간다 (Supabase 왕복 1회).
+    async function savePlayer() { saveGameState(true); }
+    async function saveRun() { saveGameState(true); }
+
+    function goToStrategyMap() {
+      state.currentView = 'STRATEGY';
+      [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = 'STRATEGY'; });
+      switchGameView('STRATEGY');
+      renderAll();
+    }
+
+    let returnByDeathRunning = false;
+    /**
+     * 사망회귀: 같은 seed의 세계를 처음부터 반복한다.
+     * loopCount/기억은 player(영구)에, 파티·골드·노드 진행은 createInitialRun()으로 초기화된다.
+     * 연출 중 새로고침해도 run.returnPending이 남아 있어 횟수가 두 번 오르지 않고 선택 화면부터 이어진다.
+     */
+    async function returnByDeath() {
+      if (returnByDeathRunning) return;
+      returnByDeathRunning = true;
+      try {
+        const run = state.run;
+        if (!run.returnPending) {
+          state.player.loopCount = (Number(state.player.loopCount) || 0) + 1;
+          rememberCurrentRun();
+          run.returnPending = true;
+          run.emergencyRecruit = false;
+          run.status = 'lost';
+          addLog(`🔁 [사망회귀] 모든 것을 잃었다… 눈을 뜨자 처음 그 자리다. (회귀 ${state.player.loopCount}회)`, 'danger');
+          saveGameState(true);
+          await playReturnByDeathEffect();
+        }
+        const seed = run.seed; // 같은 세계를 반복
+        const characterId = await openCommandBonusSelect();
+        state.run = createInitialRun(seed, { characterId, def: 1 });
+        state.encounterSeq = 0;
+        state.turn = 1;
+        state.currentBattle = null;
+        state.enemyUnits = [];
+        state.selectedNodeId = null;
+        state.isWipedOut = false;
+        state.inactivated = false;
+        if (state.strategy) {
+          state.strategy.commanderAP = state.strategy.maxCommanderAP;
+          state.strategy.deploySelectedIds = null;
+          state.strategy.deployKnownIds = [];
+        }
+        normalizeAllUnitsHP(state);
+        selectedUnitId = (state.playerUnits[0] && state.playerUnits[0].id) || 'u1';
+        historyStack = [];
+        ensureNodeSelection();
+        const picked = state.playerUnits.find(u => getCharacterId(u) === String(characterId));
+        addLog(`🛡️ [지휘력 보정] ${picked ? picked.name : characterId} — 이번 런 동안 방어력 +1`, 'gold');
+        await savePlayer();
+        await saveRun();
+        goToStrategyMap();
+      } finally {
+        returnByDeathRunning = false;
+      }
+    }
+    window.returnByDeath = returnByDeath;
+
+    /** 전투 종료 시 생존/골드로 회귀·긴급 모집을 판정한다. finishEncounter()의 마지막 단계. */
+    function resolveRunSurvival() {
+      if (getAliveRunUnits().length > 0) return 'alive';
+      if (Number(state.gold) <= 0) {
+        state.gold = 0;
+        returnByDeath();
+        return 'returnByDeath';
+      }
+      openEmergencyRecruit();
+      return 'emergencyRecruit';
+    }
+
+    // 새로고침 직후: 중단된 회귀/긴급 모집을 이어서 연다.
+    function resumePendingRunFlow() {
+      const run = state && state.run;
+      if (!run || state.currentBattle) return;
+      if (run.returnPending) returnByDeath();
+      else if (run.emergencyRecruit) openEmergencyRecruit();
+    }
+    window.resumePendingRunFlow = resumePendingRunFlow;
+
+    function renderLoopCounter() {
+      let el = document.getElementById('loop-counter');
+      const count = Number(state && state.player && state.player.loopCount) || 0;
+      if (!count) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'loop-counter';
+        el.className = 'loop-counter';
+        document.body.appendChild(el);
+      }
+      el.textContent = `🔁 회귀 ${count}회`;
+      el.title = `사망회귀 ${count}회`;
+    }
+
     /**
      * 12단계: 전투 결과 처리의 단일 진입점.
      *
@@ -8458,6 +9026,8 @@
       switchGameView('STRATEGY');
       renderStrategyView();
       saveGameState();
+      // 8) 2차: 생존 유닛 0이면 골드에 따라 사망회귀 / 긴급 모집 (회귀 판정은 여기와 긴급 모집 화면에서만 한다)
+      finished.survival = resolveRunSurvival();
       return finished;
     }
     window.finishEncounter = finishEncounter;

@@ -135,7 +135,7 @@ with sync_playwright() as pw:
     fresh_run(page,'RUN-WON'); s0=page.evaluate("state.run.mapState.layers[0][0]"); page.evaluate("(id)=>selectNode(id)",s0)
     launch_selected(page); win(page); g0=page.evaluate("state.gold")
     sv=page.evaluate("saveGameState(true), window.__saved[window.__saved.length-1]")
-    c.ok(sv['currentBattle']['status']=='won' and sv['player']['gold']==g0,'won 상태 전투가 저장됨 (골드는 아직 미지급)')
+    c.ok(sv['currentBattle']['status']=='won' and sv['run']['gold']==g0,'won 상태 전투가 저장됨 (골드는 아직 미지급)')
     b2,p2,e2=boot(pw, sv)
     c.ok(p2.evaluate("state.currentBattle && state.currentBattle.status")=='won' and p2.is_visible('#btn-victory-proceed'),'새로고침 후 승리 모달이 다시 뜬다')
     p2.click('#btn-victory-proceed'); p2.wait_for_timeout(500)
@@ -161,9 +161,9 @@ with sync_playwright() as pw:
     b3.close()
 
     print('\n=== 손상된 세이브 방어 ===')
-    bad=json.loads(json.dumps(sv2)); bad['player']['roguelikeRun']['mapState']={'nodes':[],'layers':[]}
+    bad=json.loads(json.dumps(sv2)); bad['run']['mapState']={'nodes':[],'layers':[]}
     b4,p4,e4=boot(pw, bad)
-    c.ok(p4.evaluate("state.run.status")=='active' and p4.evaluate("state.run.mapState.nodes.length")>0 and p4.evaluate("state.gold")==sv2['player']['gold'],'손상된 런 → 새 런으로 대체, 골드/캐릭터는 유지')
+    c.ok(p4.evaluate("state.run.status")=='active' and p4.evaluate("state.run.mapState.nodes.length")>0 and p4.evaluate("state.gold")==sv2['run']['gold'],'손상된 런 → 새 런으로 대체, 골드/캐릭터는 유지')
     b4.close()
     stale=json.loads(json.dumps(sv)); stale['currentBattle']['nodeId']='Z-9-999'; stale['currentBattle']['status']='active'
     b5,p5,e5=boot(pw, stale)

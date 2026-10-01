@@ -71,10 +71,10 @@ with sync_playwright() as pw:
     print('\n=== [13단계] 전투 중 저장 구조 ===')
     page.evaluate("saveGameState(true)")
     sv=page.evaluate("window.__saved[window.__saved.length-1]")
-    c.ok(sv['version']=='2.0.0' and set(['player','currentBattle']).issubset(sv.keys()),'v2 최상위: '+str(sorted(sv.keys())))
-    c.ok(set(sv['player'].keys())=={'characters','characterCollection','inventory','gold','rewinders','progression','roguelikeRun'},'player 구성: '+str(sorted(sv['player'].keys())))
-    run=sv['player']['roguelikeRun']
-    c.ok(set(['id','seed','status','currentNodeId','completedNodes','mapState','encounters','encounterSeq']).issubset(run.keys()),'roguelikeRun 구성: '+str(sorted(run.keys())))
+    c.ok(sv['version']=='3.0.0' and set(['player','run','currentBattle']).issubset(sv.keys()),'v3 최상위: '+str(sorted(sv.keys())))
+    c.ok(set(sv['player'].keys())=={'loopCount','memories','unlockedCharacters','settings','characterCollection','inventory','rewinders','progression'},'player(영구) 구성: '+str(sorted(sv['player'].keys())))
+    run=sv['run']
+    c.ok(set(['id','seed','status','currentNodeId','completedNodes','mapState','encounters','encounterSeq','party','reserve','gold','commandBonus']).issubset(run.keys()),'run 구성: '+str(sorted(run.keys())))
     c.ok(not any(('tiles' in n or 'map' in n) for n in run['mapState']['nodes']),'런(노드)에 전술 타일 없음')
     c.ok(sv['currentBattle']['live']['enemyUnits'].__len__()==2 and sv['currentBattle']['map']['tiles'].__len__()==112 and run['encounterSeq']==1,'currentBattle에 map + live.enemyUnits, encounterSeq=1')
     c.ok('playerUnits' not in sv and 'gold' not in sv,'옛 평평한 키(playerUnits/gold)는 최상위에 없음')
@@ -86,7 +86,7 @@ with sync_playwright() as pw:
     c.ok(p2.evaluate("state.currentBattle && state.currentBattle.id")==mid_battle_id,'같은 전투 복원 (id '+mid_battle_id+')')
     c.ok(p2.evaluate("state.currentBattle.seed")==mid_seed,'seed 동일')
     c.ok(p2.evaluate("state.enemyUnits.length")==2 and p2.evaluate("state.currentBattle.map.tiles.length")==112,'적/맵 복원')
-    c.ok(p2.evaluate("state.run.seed")==saved_mid['player']['roguelikeRun']['seed'] and p2.evaluate("state.encounterSeq")==1,'런 seed / encounterSeq 복원')
+    c.ok(p2.evaluate("state.run.seed")==saved_mid['run']['seed'] and p2.evaluate("state.encounterSeq")==1,'런 seed / encounterSeq 복원')
     c.ok(p2.evaluate("state.isCombatActive")==True and p2.evaluate("state.isCombatPaused")==True,'복원된 전투는 일시정지 상태')
     c.ok(p2.is_visible('#modal-tactical-pause') and p2.is_visible('#btn-pause-resume'),'일시정지 메뉴(계속하기/후퇴) 표시')
     p2.click('#btn-pause-resume'); p2.wait_for_timeout(300)

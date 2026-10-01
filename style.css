@@ -5332,3 +5332,38 @@
 .pool-btn.absorb{background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff}
 .pool-btn:disabled{opacity:.4;cursor:not-allowed}
 .pool-open-wide{width:100%;padding:10px}
+
+/* ==========================================================================
+   2차: 사망회귀 · 긴급 모집 · 지휘력 보정
+   ========================================================================== */
+.rbd-overlay{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(2,6,23,.82);backdrop-filter:blur(6px)}
+.rbd-card{width:100%;max-width:420px;max-height:calc(100vh - 32px);overflow-y:auto;background:#0f172a;color:#f8fafc;border:2px solid #475569;border-radius:16px;padding:20px;text-align:center;box-shadow:0 24px 48px rgba(0,0,0,.55)}
+.rbd-icon{font-size:40px;line-height:1;margin-bottom:6px}
+.rbd-title{font-size:18px;font-weight:900;margin:4px 0 6px;letter-spacing:-.3px}
+.rbd-text{font-size:12px;line-height:1.6;color:#cbd5e1;margin:0 0 12px}
+.rbd-gold{font-size:12px;color:#fde68a;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.3);border-radius:10px;padding:6px 10px;margin-bottom:10px}
+.rbd-list{display:flex;flex-direction:column;gap:6px;margin-bottom:12px;text-align:left}
+.rbd-row{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border-radius:10px;background:#1e293b;border:1px solid #334155;color:inherit;font:inherit}
+.rbd-row-pick{cursor:pointer;text-align:left}
+.rbd-row-pick:hover,.rbd-row-pick:focus-visible{border-color:#a78bfa;background:#272548;outline:none}
+.rbd-row-avatar{font-size:22px;width:28px;text-align:center;flex:none}
+.rbd-row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.rbd-row-main b{font-size:13px}
+.rbd-row-main small{font-size:11px;color:#94a3b8}
+.rbd-up{color:#86efac}
+.rbd-btn{width:100%;padding:10px;border-radius:10px;font-weight:800;font-size:13px;cursor:pointer;border:1px solid #475569;background:#334155;color:#f1f5f9}
+.rbd-btn:hover:not(:disabled){background:#475569}
+.rbd-btn:disabled{opacity:.45;cursor:not-allowed}
+.rbd-btn-small{width:auto;flex:none;padding:6px 10px;font-size:12px;background:#b45309;border-color:#d97706}
+.rbd-btn-small:hover:not(:disabled){background:#d97706}
+.rbd-btn-danger{background:#991b1b;border-color:#dc2626}
+.rbd-btn-danger:hover:not(:disabled){background:#b91c1c}
+.cmd-bonus-tag{color:#7c3aed;font-weight:800;font-size:.9em}
+.rbd-card .cmd-bonus-tag{color:#c4b5fd}
+.loop-counter{position:fixed;left:10px;bottom:10px;z-index:9000;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800;color:#ede9fe;background:rgba(76,29,149,.85);border:1px solid #8b5cf6;box-shadow:0 4px 12px rgba(76,29,149,.35);pointer-events:none}
+.strat-node-pin.is-remembered .strat-node-circle{box-shadow:0 0 0 3px rgba(139,92,246,.35),0 3px 10px rgba(139,92,246,.35)}
+.strat-node-memory{position:absolute;top:-9px;right:-10px;font-size:11px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,.25))}
+/* 회귀 연출 화면 (audio/returnByDeath.js) */
+.rbd-fx{position:fixed;inset:0;z-index:100001;pointer-events:all;background:transparent}
+.rbd-fx-flash{position:absolute;inset:0;background:#fff;opacity:0}
+@media (prefers-reduced-motion: reduce){.rbd-fx-flash{display:none}}
