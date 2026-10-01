@@ -14,9 +14,9 @@
  *       { type:'recruit', id | pool, weight }            // id = characters 컬렉션의 캐릭터 id
  *     - id(특정 대상)와 pool(하위 풀에서 1번 다시 뽑기) 중 정확히 하나만 쓴다.
  *     - 하위 풀의 entry는 모두 부모 entry와 같은 type(relic이면 같은 kind)이어야 한다.
- *   relics/{id}: { id, name, kind:'commander'|'gift', rarity, description, effects:[{ scope, stat, value }] }
+ *   relics/{id}: { id, name, kind:'commander'|'gift', rarity, description, imageUrl?, effects:[{ scope, stat, value }] }
  *     - gift는 scope가 항상 'self'. commander는 'army' | 'battle' | 'run'.
- *   items/{id}:  { id, name, description, category?, rarity? }   (category: ITEM_CATEGORIES)
+ *   items/{id}:  { id, name, description, category?, rarity?, imageUrl? }   (category: ITEM_CATEGORIES)
  *
  * 노출: window.RewardEngine (브라우저), 전역 RewardEngine (node vm 테스트)
  */
@@ -66,6 +66,14 @@
     return new Map(Object.entries(source));
   }
 
+  /** 이미지는 업로드된 URL(http/https)만 저장한다. base64(data:)는 DB를 무겁게 하므로 받지 않는다. */
+  function validateImageUrl(r, url) {
+    if (!hasValue(url)) return;
+    if (typeof url !== 'string' || !/^https?:\/\/\S+$/i.test(url)) {
+      r.error(null, 'imageUrl', '이미지는 http(s) URL이어야 합니다. 파일은 업로드 버튼으로 올리세요.');
+    }
+  }
+
   function validateId(id, label = 'id') {
     if (!hasValue(id)) return `${label}가 비어 있습니다.`;
     if (!ID_PATTERN.test(String(id))) return `${label} "${id}"는 영문/숫자/_/- 만 쓸 수 있습니다 (최대 64자).`;
@@ -110,6 +118,7 @@
       kind: r.kind,
       rarity: r.rarity,
       description: r.description ?? '',
+      ...(hasValue(r.imageUrl) ? { imageUrl: r.imageUrl } : {}),
       effects: Array.isArray(r.effects)
         ? r.effects.map(fx => ({ scope: fx?.scope, stat: fx?.stat, value: fx?.value }))
         : r.effects
@@ -122,6 +131,7 @@
     // category/rarity는 선택 항목 (예전에 만든 아이템에는 없을 수 있음)
     if (hasValue(it.category)) out.category = it.category;
     if (hasValue(it.rarity)) out.rarity = it.rarity;
+    if (hasValue(it.imageUrl)) out.imageUrl = it.imageUrl;
     return out;
   }
 
@@ -276,6 +286,7 @@
     if (!RELIC_KINDS.includes(x.kind)) r.error(null, 'kind', `kind는 commander 또는 gift여야 합니다. (현재: ${x.kind})`);
     if (!RELIC_RARITIES.includes(x.rarity)) r.error(null, 'rarity', `rarity는 ${RELIC_RARITIES.join('/')} 중 하나여야 합니다. (현재: ${x.rarity})`);
     if (x.description != null && typeof x.description !== 'string') r.error(null, 'description', '설명은 문자열이어야 합니다.');
+    validateImageUrl(r, x.imageUrl);
     if (!Array.isArray(x.effects) || x.effects.length === 0) {
       r.error(null, 'effects', '효과(effects)를 1개 이상 추가하세요.');
       return r.done();
@@ -299,6 +310,7 @@
     if (x.description != null && typeof x.description !== 'string') r.error(null, 'description', '설명은 문자열이어야 합니다.');
     if (hasValue(x.category) && !ITEM_CATEGORIES[x.category]) r.error(null, 'category', `알 수 없는 분류 "${x.category}"`);
     if (hasValue(x.rarity) && !RELIC_RARITIES.includes(x.rarity)) r.error(null, 'rarity', `rarity는 ${RELIC_RARITIES.join('/')} 중 하나여야 합니다.`);
+    validateImageUrl(r, x.imageUrl);
     return r.done();
   }
 

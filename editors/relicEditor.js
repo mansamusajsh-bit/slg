@@ -18,7 +18,9 @@ class RelicEditor extends RecordEditorBase {
       refType: 'relic',
       title: '💎 유물 에디터',
       banner: 'relics 컬렉션. 효과 적용 로직은 아직 없고 데이터만 저장합니다.',
-      emptyLabel: '저장된 유물이 없습니다.'
+      emptyLabel: '저장된 유물이 없습니다.',
+      imageFolder: 'relic_icons',
+      icon: '💎'
     });
   }
 

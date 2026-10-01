@@ -36,7 +36,12 @@ STORE_STUB = r"""
     async list(c) { return Object.values(col(c)).map(copy); },
     async save(c, id, data, v) { this.validate(data, v); window.__saves++; col(c)[id] = copy({...data, id}); return true; },
     async saveMany(c, list, v) { list.forEach(x => this.validate(x, v)); list.forEach(x => { col(c)[x.id] = copy(x); }); window.__saves += list.length; return list.length; },
-    async remove(c, id) { delete col(c)[id]; return true; }
+    async remove(c, id) { delete col(c)[id]; return true; },
+    async uploadImage(blob, folder, name) {
+      if (!(blob instanceof Blob) || !/^image\//.test(blob.type)) throw new Error('이미지 파일만 올릴 수 있습니다.');
+      (window.__uploads = window.__uploads || []).push({ folder, name, type: blob.type, size: blob.size });
+      return `https://cdn.test/${folder}/${name}.png`;
+    }
   };
 })();
 """
@@ -218,13 +223,48 @@ with sync_playwright() as pw:
     opts = page.locator(f'{ROOT_RP} .slg-ed-entry').nth(1).locator('select').nth(3).locator('option').all_inner_texts()
     c.ok(any('행운의 부적' in o for o in opts) and not any('전쟁 뿔피리' in o for o in opts), f'유물 드롭다운은 kind(gift) 필터: {opts}')
 
+    print('\n=== 아이템 사진 / 이름 편집 ===')
+    import tempfile, base64
+    png = os.path.join(tempfile.mkdtemp(), 'icon.png')
+    open(png, 'wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='))
+    open_tab(page, 'items', ROOT_IT)
+    load_item(page, ROOT_IT, 'potion')
+    page.locator(f'{ROOT_IT} .slg-ed-grid2').first.locator('input').nth(1).fill('빨간 물약')
+    page.locator(f'{ROOT_IT} input[type=file]').set_input_files(png); page.wait_for_timeout(600)
+    up = page.evaluate("window.__uploads || []")
+    c.ok(len(up) == 1 and up[0]['folder'] == 'item_icons' and up[0]['name'] == 'potion', f'사진 파일 → Storage 업로드 호출: {up}')
+    c.ok(page.locator(f'{ROOT_IT} img.slg-ed-image').get_attribute('src') == 'https://cdn.test/item_icons/potion.png', '업로드 후 미리보기 표시')
+    btn(page, ROOT_IT, '💾 저장').click(); page.wait_for_timeout(300)
+    potion = page.evaluate("__db.items.potion")
+    c.ok(potion['name'] == '빨간 물약' and potion['imageUrl'] == 'https://cdn.test/item_icons/potion.png', f'이름·사진 저장: {potion}')
+    c.ok(page.locator(f'{ROOT_IT} .slg-ed-list-item.active img.slg-ed-thumb').count() == 1, '목록에 썸네일 표시')
+    page.locator(f'{ROOT_IT} input[type=url]').fill('data:image/png;base64,AAAA')
+    btn(page, ROOT_IT, '💾 저장').click(); page.wait_for_timeout(300)
+    c.ok(page.evaluate("__db.items.potion.imageUrl") == 'https://cdn.test/item_icons/potion.png' and 'http(s) URL' in page.locator(f'{ROOT_IT} .slg-ed-validation').inner_text(), 'base64(data:) 이미지 URL → 저장 차단')
+    btn(page, ROOT_IT, '사진 지우기').click(); page.wait_for_timeout(100)
+    btn(page, ROOT_IT, '💾 저장').click(); page.wait_for_timeout(300)
+    c.ok('imageUrl' not in page.evaluate("__db.items.potion"), '사진 지우기 후 저장 → imageUrl 제거')
+    page.locator(f'{ROOT_IT} input[type=url]').fill('https://cdn.test/item_icons/potion.png')
+    btn(page, ROOT_IT, '💾 저장').click(); page.wait_for_timeout(300)
+    c.ok(page.evaluate("__db.items.potion.imageUrl") == 'https://cdn.test/item_icons/potion.png', 'URL 직접 입력으로 사진 지정')
+    page.evaluate("() => { window.SlgStore.__up = window.SlgStore.uploadImage; window.SlgStore.uploadImage = async () => { throw new Error('storage denied'); }; }")
+    page.locator(f'{ROOT_IT} input[type=file]').set_input_files(png); page.wait_for_timeout(500)
+    c.ok('storage denied' in status(page, ROOT_IT) and page.locator(f'{ROOT_IT} input[type=url]').input_value() == 'https://cdn.test/item_icons/potion.png', '업로드 실패 → 오류 표시, 기존 사진 유지 (base64 대체 없음)')
+    page.evaluate("() => { window.SlgStore.uploadImage = window.SlgStore.__up; }")
+    open_tab(page, 'reward-pools', ROOT_RP)
+    load_item(page, ROOT_RP, 'A-battle-normal')
+    c.ok(page.locator(f'{ROOT_RP} .slg-ed-entry').nth(1).locator('img.slg-ed-thumb').get_attribute('src') == 'https://cdn.test/item_icons/potion.png', '보상 풀 entry에 아이템 썸네일 표시')
+    open_tab(page, 'relics', ROOT_RL)
+    c.ok(page.locator(f'{ROOT_RL} .slg-ed-list-item .slg-ed-thumb').count() >= 1, '유물 목록에도 썸네일 칸 표시')
+    open_tab(page, 'reward-pools', ROOT_RP)
+
     print('\n=== 기본 데이터 가져오기 ===')
     page.evaluate("() => { window.confirm = () => true; }")
     page.locator(f'{ROOT_RP} .slg-ed-list-item').first.click(); page.wait_for_timeout(150)  # 편집 중인 draft 정리
     btn(page, ROOT_RP, '기본 데이터 가져오기').click(); page.wait_for_timeout(1500)
     counts = page.evaluate("() => ({ items: Object.keys(__db.items).length, relics: Object.keys(__db.relics).length, pools: Object.keys(__db.rewardPools).length, potion: __db.items.potion.name })")
     c.ok('추가 완료' in status(page, ROOT_RP), '가져오기 완료 메시지: ' + status(page, ROOT_RP))
-    c.ok(counts['relics'] >= 100 and counts['items'] >= 100 and counts['pools'] >= 80 and counts['potion'] == '회복약', f'유물/아이템/풀 추가, 기존 id는 유지: {counts}')
+    c.ok(counts['relics'] >= 100 and counts['items'] >= 100 and counts['pools'] >= 80 and counts['potion'] == '빨간 물약', f'유물/아이템/풀 추가, 편집한 기존 아이템(potion)은 덮어쓰지 않음: {counts}')
     btn(page, ROOT_RP, '기본 데이터 가져오기').click(); page.wait_for_timeout(800)
     c.ok('이미 모두' in status(page, ROOT_RP), '두 번째 가져오기 → 추가할 것 없음')
     load_item(page, ROOT_RP, 'B-2-boss-relic')

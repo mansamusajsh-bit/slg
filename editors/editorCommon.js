@@ -145,3 +145,75 @@ export function errorText(err) {
 export function confirmDiscard(dirty) {
   return !dirty || window.confirm('저장하지 않은 변경 사항이 있습니다. 버리고 계속할까요?');
 }
+
+/** 썸네일(작은 이미지). URL이 없으면 대체 이모지를 보여 준다. */
+export function thumbEl(url, fallback = '▫️', className = 'slg-ed-thumb') {
+  if (url) return h('img', { class: className, src: url, alt: '', loading: 'lazy' });
+  return h('span', { class: `${className} empty`, text: fallback });
+}
+
+/** 업로드 전에 긴 변을 maxSize(px) 이하로 줄여 webp로 만든다. 이미 작으면 원본 그대로. */
+export async function downscaleImage(file, maxSize = 256) {
+  if (!file || !/^image\//.test(file.type)) throw new Error('이미지 파일만 올릴 수 있습니다.');
+  if (file.type === 'image/svg+xml' || file.type === 'image/gif') return file; // 벡터/움짤은 그대로
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxSize / Math.max(bitmap.width, bitmap.height));
+  if (scale === 1 && file.size <= 300 * 1024) { bitmap.close?.(); return file; }
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', 0.9));
+  if (!blob) throw new Error('이미지 변환에 실패했습니다.');
+  return blob;
+}
+
+/**
+ * 사진 편집 필드: 미리보기 + 파일 업로드(Storage) + URL 직접 입력 + 지우기.
+ * @param {{ url?:string, folder:string, getName:()=>string, store:object, onChange:(url:string|undefined)=>void, onStatus:(msg:string, kind:string)=>void }} opts
+ */
+export function imageField({ url, folder, getName, store, onChange, onStatus }) {
+  const preview = h('div', { class: 'slg-ed-image-preview' }, [thumbEl(url, '🖼️', 'slg-ed-image')]);
+  const setPreview = (u) => { preview.innerHTML = ''; preview.appendChild(thumbEl(u, '🖼️', 'slg-ed-image')); };
+  const urlInput = h('input', {
+    class: 'slg-ed-input', type: 'url', value: url || '', placeholder: 'https://... (직접 입력 또는 파일 업로드)',
+    on: { input: (e) => { const v = e.target.value.trim(); setPreview(v); onChange(v || undefined); } }
+  });
+  const fileInput = h('input', {
+    type: 'file', accept: 'image/*', style: 'display:none',
+    on: {
+      change: async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+          onStatus('⏳ 이미지 업로드 중...', 'info');
+          const blob = await downscaleImage(file);
+          const uploaded = await store.uploadImage(blob, folder, getName() || 'image');
+          urlInput.value = uploaded;
+          setPreview(uploaded);
+          onChange(uploaded);
+          onStatus('🖼️ 이미지를 올렸습니다. 💾 저장을 눌러야 반영됩니다.', 'info');
+        } catch (err) {
+          onStatus(`❌ 이미지 업로드 실패: ${errorText(err)}`, 'error');
+        }
+      }
+    }
+  });
+  return h('div', { class: 'slg-ed-field' }, [
+    h('span', { text: '사진' }),
+    h('div', { class: 'slg-ed-image-row' }, [
+      preview,
+      h('div', { class: 'slg-ed-image-controls' }, [
+        h('div', { class: 'slg-ed-toolbar' }, [
+          h('button', { class: 'slg-ed-btn primary', type: 'button', text: '📷 파일 올리기', on: { click: () => fileInput.click() } }),
+          h('button', { class: 'slg-ed-btn', type: 'button', text: '🗑️ 사진 지우기', on: { click: () => { urlInput.value = ''; setPreview(''); onChange(undefined); } } })
+        ]),
+        urlInput,
+        h('span', { class: 'slg-ed-muted', text: 'PNG/JPG/WebP. 긴 변 256px로 줄여 slg-assets 버킷에 올립니다.' }),
+        fileInput
+      ])
+    ])
+  ]);
+}

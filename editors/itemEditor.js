@@ -12,7 +12,9 @@ class ItemEditor extends RecordEditorBase {
       refType: 'item',
       title: '📦 아이템 카탈로그',
       banner: 'items 컬렉션. 보상 풀의 아이템 드롭다운이 이 목록을 씁니다.',
-      emptyLabel: '저장된 아이템이 없습니다.'
+      emptyLabel: '저장된 아이템이 없습니다.',
+      imageFolder: 'item_icons',
+      icon: '📦'
     });
   }
 

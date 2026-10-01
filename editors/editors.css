@@ -47,3 +47,12 @@
 .slg-ed-table th, .slg-ed-table td { border-bottom: 1px solid #e2e8f0; padding: 3px 4px; text-align: right; }
 .slg-ed-table th:first-child, .slg-ed-table td:first-child { text-align: left; }
 .slg-ed-table th { color: #475569; background: #f1f5f9; }
+.slg-ed-thumb { width: 22px; height: 22px; border-radius: 5px; object-fit: cover; flex: 0 0 auto; background: #f1f5f9; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; }
+.slg-ed-image-row { display: flex; gap: 8px; align-items: flex-start; }
+.slg-ed-image-preview { flex: 0 0 auto; }
+.slg-ed-image { width: 64px; height: 64px; border-radius: 10px; object-fit: cover; border: 1px solid #e2e8f0; background: #f8fafc; display: inline-flex; align-items: center; justify-content: center; font-size: 26px; }
+.slg-ed-image-controls { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.slg-ed-list-item { align-items: center; }
+.slg-ed-entry-thumb { display: inline-flex; }
+.slg-ed-entry-thumb:empty { display: none; }
+.slg-ed-reward-cell { display: inline-flex; align-items: center; gap: 4px; }

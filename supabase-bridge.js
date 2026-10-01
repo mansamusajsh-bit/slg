@@ -177,6 +177,25 @@ const SlgStore = {
     await putRecord(collection, id, { ...data, id: String(id), updatedAt: new Date().toISOString() });
     return true;
   },
+  /**
+   * 에디터용 이미지 업로드 (slg-assets 버킷). 실패하면 throw — 기존 uploadAsset처럼 base64로 대체하지 않는다.
+   * @param {Blob} blob 이미지
+   * @param {string} folder 예: 'item_icons'
+   * @param {string} name 파일명 접두어 (레코드 id)
+   * @returns {Promise<string>} 공개 URL
+   */
+  async uploadImage(blob, folder, name) {
+    if (!(blob instanceof Blob) || !/^image\//.test(blob.type)) throw new SlgStoreError('VALIDATION', '이미지 파일만 올릴 수 있습니다.');
+    const safeFolder = String(folder || 'misc').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const safe = String(name || 'image').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const ext = (blob.type.split('/')[1] || 'png').replace(/[^a-zA-Z0-9]/g, '');
+    const path = `${safeFolder}/${safe}_${Date.now()}.${ext}`;
+    const { error } = await requireClient().storage.from(BUCKET).upload(path, blob, { upsert: true, contentType: blob.type });
+    if (error) throw error;
+    const { data } = requireClient().storage.from(BUCKET).getPublicUrl(path);
+    if (!data?.publicUrl) throw new SlgStoreError('UPLOAD', '업로드는 됐지만 공개 URL을 받지 못했습니다.');
+    return data.publicUrl;
+  },
   /** 여러 레코드를 한 번에 저장. 전부 검증한 뒤에만 쓴다 (하나라도 실패하면 아무것도 쓰지 않음). */
   async saveMany(collection, records, validator) {
     const list = Array.isArray(records) ? records : [];

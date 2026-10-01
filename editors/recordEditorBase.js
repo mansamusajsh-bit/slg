@@ -3,13 +3,13 @@
  * 목록 조회 · 새로 만들기 · 불러오기 · 복제 · 삭제(확인창 + 참조 검사) · 저장(검증 필수)
  * 게임 state는 모른다. 하위 클래스가 collection / validate / normalize / renderFields 만 정한다.
  */
-import { getStore, h, clone, createStatusBar, renderValidation, errorText, confirmDiscard } from './editorCommon.js';
+import { getStore, h, clone, createStatusBar, renderValidation, errorText, confirmDiscard, imageField, thumbEl } from './editorCommon.js';
 
 export class RecordEditorBase {
   /**
    * @param {HTMLElement} root
    * @param {object} engine RewardEngine
-   * @param {{ collection:string, refType:'relic'|'item', title:string, banner:string, emptyLabel:string }} opts
+   * @param {{ collection:string, refType:'relic'|'item', title:string, banner:string, emptyLabel:string, imageFolder?:string, icon?:string }} opts
    */
   constructor(root, engine, opts) {
     this.root = root;
@@ -173,6 +173,7 @@ export class RecordEditorBase {
     for (const rec of this.records) {
       const active = this.draft && !this.isNew && this.draft.id === rec.id;
       list.appendChild(h('button', { class: `slg-ed-list-item${active ? ' active' : ''}`, on: { click: () => this.loadRecord(rec.id) } }, [
+        this.opts.imageFolder ? thumbEl(rec.imageUrl, this.opts.icon) : null,
         h('span', { class: 'id', text: rec.id }),
         h('span', { class: 'name', text: rec.name || '' }),
         h('span', { class: 'meta', text: this.listMeta(rec) })
@@ -199,6 +200,16 @@ export class RecordEditorBase {
         h('input', { class: 'slg-ed-input', value: this.draft.name || '', on: { input: (e) => { this.draft.name = e.target.value; this.markDirty(); } } })
       ]));
       form.appendChild(grid);
+      if (this.opts.imageFolder) {
+        form.appendChild(imageField({
+          url: this.draft.imageUrl,
+          folder: this.opts.imageFolder,
+          getName: () => this.draft.id,
+          store: this.store,
+          onChange: (url) => { if (url) this.draft.imageUrl = url; else delete this.draft.imageUrl; this.markDirty(); },
+          onStatus: (msg, kind) => this.status.set(msg, kind)
+        }));
+      }
       this.renderFields(form);
       wrap.appendChild(form);
       this.validationBox = h('div', { class: 'slg-ed-section slg-ed-validation' });

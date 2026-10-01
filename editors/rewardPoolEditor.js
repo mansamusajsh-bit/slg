@@ -7,7 +7,7 @@
  */
 import {
   ensureEditorCss, getEngine, getStore, loadCatalog, createSeededRng,
-  h, selectEl, numberEl, clone, createStatusBar, renderValidation, errorText, confirmDiscard
+  h, selectEl, numberEl, clone, createStatusBar, renderValidation, errorText, confirmDiscard, thumbEl
 } from './editorCommon.js';
 
 const TYPE_LABELS = { gold: '💰 골드', item: '📦 아이템', relic: '💎 유물', recruit: '🧑 영입' };
@@ -310,6 +310,11 @@ class RewardPoolEditor {
       && p.entries.every(se => se && se.type === entry.type && (entry.type !== 'relic' || se.kind === entry.kind)));
   }
 
+  targetRecord(type, id) {
+    const list = type === 'item' ? this.catalog.items : type === 'relic' ? this.catalog.relics : this.catalog.characters;
+    return list.find(x => x.id === id);
+  }
+
   targetOptions(entry) {
     if (entry.type === 'item') return this.catalog.items.map(x => ({ value: x.id, label: `${x.name} (${x.id})` }));
     if (entry.type === 'recruit') return this.catalog.characters.map(x => ({ value: x.id, label: `${x.name} (${x.id})` }));
@@ -352,7 +357,14 @@ class RewardPoolEditor {
         top.appendChild(selectEl(this.compatiblePools(entry).map(p => ({ value: p.id, label: `${p.name || p.id} (${p.id})` })),
           entry.pool, (v) => { entry.pool = v; this.markDirty(); }, { placeholder: '— 하위 풀 선택 —' }));
       } else {
-        top.appendChild(selectEl(this.targetOptions(entry), entry.id, (v) => { entry.id = v; this.markDirty(); },
+        const thumbBox = h('span', { class: 'slg-ed-entry-thumb' });
+        const setThumb = (id) => {
+          thumbBox.innerHTML = '';
+          if (entry.type === 'item' || entry.type === 'relic') thumbBox.appendChild(thumbEl(this.targetRecord(entry.type, id)?.imageUrl, entry.type === 'item' ? '📦' : '💎'));
+        };
+        setThumb(entry.id);
+        top.appendChild(thumbBox);
+        top.appendChild(selectEl(this.targetOptions(entry), entry.id, (v) => { entry.id = v; setThumb(v); this.markDirty(); },
           { placeholder: entry.type === 'relic' ? `— ${KIND_LABELS[entry.kind] || ''} 유물 선택 —` : '— 선택 —' }));
       }
     }
@@ -459,15 +471,20 @@ class RewardPoolEditor {
     this.renderSimResult();
   }
 
+  rewardThumb(row) {
+    if (row.type !== 'item' && row.type !== 'relic') return null;
+    return thumbEl(this.targetRecord(row.type, row.id)?.imageUrl, row.type === 'item' ? '📦' : '💎');
+  }
+
   rewardLabel(row) {
     const find = (list, id) => list.find(x => x.id === id);
     if (row.type === 'gold') {
       const avg = row.count ? (row.goldTotal / row.count).toFixed(1) : '0';
       return `💰 골드 (평균 ${avg}, ${row.goldMin}~${row.goldMax})`;
     }
-    if (row.type === 'item') return `📦 ${find(this.catalog.items, row.id)?.name || row.id} (${row.id})`;
+    if (row.type === 'item') return `${find(this.catalog.items, row.id)?.name || row.id} (${row.id})`;
     if (row.type === 'recruit') return `🧑 ${find(this.catalog.characters, row.id)?.name || row.id} (${row.id})`;
-    if (row.type === 'relic') return `💎 [${KIND_LABELS[row.kind] || row.kind}] ${find(this.catalog.relics, row.id)?.name || row.id} (${row.id})`;
+    if (row.type === 'relic') return `[${KIND_LABELS[row.kind] || row.kind}] ${find(this.catalog.relics, row.id)?.name || row.id} (${row.id})`;
     return row.key;
   }
 
@@ -485,7 +502,7 @@ class RewardPoolEditor {
     const body = h('tbody');
     for (const row of r.rows) {
       body.appendChild(h('tr', {}, [
-        h('td', { text: this.rewardLabel(row) }),
+        h('td', {}, h('span', { class: 'slg-ed-reward-cell' }, [this.rewardThumb(row), h('span', { text: this.rewardLabel(row) })])),
         h('td', { text: String(row.count) }),
         h('td', { text: `${(row.perRun * 100).toFixed(1)}%` }),
         h('td', { text: `${(row.share * 100).toFixed(1)}%` })
