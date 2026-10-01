@@ -896,7 +896,15 @@
           <button class="debug-tab-btn" id="tab-btn-dbg-balance" onclick="switchDebugTab('balance')">⚖️ 밸런스·공식</button>
           <button class="debug-tab-btn" id="tab-btn-dbg-econ" onclick="switchDebugTab('econ')">💰 재화·수량</button>
           <button class="debug-tab-btn" id="tab-btn-dbg-cheats" onclick="switchDebugTab('cheats')">⚡ 치트 버튼</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-reward-pools" onclick="switchDebugTab('reward-pools')">🎁 보상 풀</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-relics" onclick="switchDebugTab('relics')">💎 유물</button>
+          <button class="debug-tab-btn" id="tab-btn-dbg-items" onclick="switchDebugTab('items')">📦 아이템</button>
         </div>
+
+        <!-- 데이터 에디터 탭: 내용은 탭을 열 때 editors/*.js 를 import()로 지연 로드해서 채운다 -->
+        <div id="tab-content-dbg-reward-pools" class="debug-tab-page" style="display: none;"><div id="dev-reward-pool-editor-root"></div></div>
+        <div id="tab-content-dbg-relics" class="debug-tab-page" style="display: none;"><div id="dev-relic-editor-root"></div></div>
+        <div id="tab-content-dbg-items" class="debug-tab-page" style="display: none;"><div id="dev-item-editor-root"></div></div>
 
         <!-- 3. Tab Contents -->
 

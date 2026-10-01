@@ -6182,7 +6182,7 @@
     }
 
     function switchDebugTab(tabName) {
-      ['create-char', 'images', 'units', 'balance', 'econ', 'cheats'].forEach(t => {
+      ['create-char', 'images', 'units', 'balance', 'econ', 'cheats', ...Object.keys(DEV_DATA_EDITORS)].forEach(t => {
         const btn = document.getElementById(`tab-btn-dbg-${t}`);
         const page = document.getElementById(`tab-content-dbg-${t}`);
         if (btn) btn.classList.toggle('active', t === tabName);
@@ -6192,8 +6192,31 @@
         initCustomCharCreationForm();
       } else if (tabName === 'images') {
         renderDebugImageManager();
+      } else if (DEV_DATA_EDITORS[tabName]) {
+        mountDevDataEditor(tabName);
       }
       updateDebugInspector();
+    }
+
+    // DEV 데이터 에디터(보상 풀/유물/아이템): 탭을 처음 열 때만 모듈을 import()한다 → 일반 플레이 초기 로딩에 영향 없음.
+    // 에디터 모듈은 게임 state를 모르고, 여기서도 state를 넘기지 않는다 (DOM 컨테이너만 넘김).
+    const DEV_DATA_EDITORS = {
+      'reward-pools': { module: './editors/rewardPoolEditor.js', rootId: 'dev-reward-pool-editor-root' },
+      'relics': { module: './editors/relicEditor.js', rootId: 'dev-relic-editor-root' },
+      'items': { module: './editors/itemEditor.js', rootId: 'dev-item-editor-root' }
+    };
+
+    async function mountDevDataEditor(tabName) {
+      const spec = DEV_DATA_EDITORS[tabName];
+      const root = spec && document.getElementById(spec.rootId);
+      if (!root) return;
+      try {
+        const mod = await import(spec.module);
+        await mod.mount(root);
+      } catch (err) {
+        console.error(`[DEV 에디터] ${tabName} 로드 실패`, err);
+        root.textContent = `❌ 에디터를 불러오지 못했습니다: ${err && err.message ? err.message : err}`;
+      }
     }
 
     function selectDebugClass(classType) {

@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/vercel-static-build.mjs",
     "build:vercel": "node scripts/vercel-static-build.mjs",
-    "test": "node tests/verify_run.cjs && node tests/verify_norm.cjs",
-    "test:e2e": "python3 tests/e2e_battle.py && python3 tests/e2e_run_nodes.py && python3 tests/e2e_enemy_pool.py"
+    "test": "node tests/verify_run.cjs && node tests/verify_norm.cjs && node tests/verify_reward.cjs",
+    "test:e2e": "python3 tests/e2e_battle.py && python3 tests/e2e_run_nodes.py && python3 tests/e2e_enemy_pool.py && python3 tests/e2e_reward_editor.py"
   }
 }

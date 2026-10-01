@@ -141,6 +141,46 @@ const bridge = {
   async loadGameStateFromCloud(uid){try{return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
   subscribeGameState(uid,cb){return subscribeOne('gameState',uid||this.currentUser?.uid||'guest_main',cb);}
 };
+/**
+ * SlgStore — 에디터 공용 저장 계층 (보상 풀/유물/아이템 에디터가 사용).
+ * 위의 기존 함수들과 달리 오류를 삼키지 않는다:
+ *   - load: 레코드가 없으면 NOT_FOUND 에러를 던진다. 기본값으로 대체하지 않는다.
+ *   - save: validator가 있으면 먼저 검증하고, 실패하면 VALIDATION 에러를 던진다(저장하지 않음).
+ *   - Supabase 오류는 그대로 던진다.
+ */
+class SlgStoreError extends Error {
+  constructor(code, message, details) { super(message); this.name = 'SlgStoreError'; this.code = code; this.details = details; }
+}
+const SlgStore = {
+  Error: SlgStoreError,
+  get isReady() { return !!client; },
+  /** validator(data) → { valid, errors } 를 실행하고 실패하면 throw */
+  validate(data, validator) {
+    if (typeof validator !== 'function') return { valid: true, errors: [], warnings: [] };
+    const report = validator(data);
+    if (!report || report.valid !== true) {
+      const msgs = (report?.errors || []).map(e => (e && e.message) || String(e));
+      throw new SlgStoreError('VALIDATION', `검증 실패: ${msgs.join(' / ') || '알 수 없는 오류'}`, report);
+    }
+    return report;
+  },
+  async load(collection, id) {
+    const value = await getRecord(collection, id);
+    if (value == null) throw new SlgStoreError('NOT_FOUND', `[${collection}/${id}] 데이터가 없습니다.`);
+    return value;
+  },
+  async exists(collection, id) { return (await getRecord(collection, id)) != null; },
+  async list(collection) { return listRecords(collection); },
+  async save(collection, id, data, validator) {
+    if (!id) throw new SlgStoreError('VALIDATION', `[${collection}] id가 비어 있어 저장할 수 없습니다.`);
+    this.validate(data, validator);
+    await putRecord(collection, id, { ...data, id: String(id), updatedAt: new Date().toISOString() });
+    return true;
+  },
+  async remove(collection, id) { await deleteRecord(collection, id); return true; }
+};
+window.SlgStore = SlgStore;
+
 function subscribeCollection(collection, callback, sortCharacters=false){
   if(!client)return ()=>{}; let active=true;
   const refresh=async()=>{const rows=await listRecords(collection); if(sortCharacters)rows.sort((a,b)=>new Date(b.createdAt||0)-new Date(a.createdAt||0)); if(active&&typeof callback==='function')callback(rows);};

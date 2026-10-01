@@ -1,0 +1,49 @@
+/* editors/editors.css — DEV 데이터 에디터(보상 풀/유물/아이템) 전용. 에디터 탭을 열 때만 로드된다. */
+.slg-ed { display: flex; flex-direction: column; gap: 8px; font-size: 11px; color: #1e293b; }
+.slg-ed-banner { background: linear-gradient(135deg, #fefce8 0%, #fef3c7 100%); border: 1px solid #fcd34d; border-radius: 10px; padding: 8px 10px; line-height: 1.45; }
+.slg-ed-loading, .slg-ed-empty { padding: 14px; text-align: center; color: #64748b; }
+.slg-ed-section { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+.slg-ed-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.slg-ed-title { font-weight: 900; color: #0f172a; margin-right: auto; }
+.slg-ed-muted { color: #64748b; font-size: 10px; }
+.slg-ed-btn { border: 1px solid #cbd5e1; background: #f8fafc; color: #0f172a; border-radius: 7px; padding: 4px 8px; font-size: 10.5px; font-weight: 800; cursor: pointer; }
+.slg-ed-btn:hover { background: #e2e8f0; }
+.slg-ed-btn:disabled { opacity: .45; cursor: not-allowed; }
+.slg-ed-btn.primary { background: #0284c7; border-color: #0284c7; color: #fff; }
+.slg-ed-btn.success { background: #059669; border-color: #059669; color: #fff; }
+.slg-ed-btn.danger { background: #fff1f2; border-color: #fda4af; color: #be123c; }
+.slg-ed-btn.small { padding: 2px 6px; }
+.slg-ed-list { display: flex; flex-direction: column; gap: 3px; max-height: 150px; overflow-y: auto; }
+.slg-ed-list-item { display: flex; gap: 6px; align-items: baseline; text-align: left; border: 1px solid #e2e8f0; background: #f8fafc; border-radius: 7px; padding: 4px 6px; cursor: pointer; font-size: 10.5px; }
+.slg-ed-list-item.active { border-color: #0284c7; background: #e0f2fe; }
+.slg-ed-list-item .id { font-family: ui-monospace, monospace; font-weight: 800; color: #0369a1; }
+.slg-ed-list-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slg-ed-list-item .meta { color: #64748b; font-size: 9.5px; white-space: nowrap; }
+.slg-ed-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px; }
+.slg-ed-field { display: flex; flex-direction: column; gap: 2px; font-size: 10px; font-weight: 700; color: #475569; }
+.slg-ed-check { flex-direction: row; align-items: center; gap: 6px; }
+.slg-ed-input { border: 1px solid #cbd5e1; border-radius: 6px; padding: 4px 6px; font-size: 11px; background: #fff; color: #0f172a; min-width: 0; max-width: 100%; }
+.slg-ed-input[readonly] { background: #f1f5f9; color: #64748b; }
+.slg-ed-num { width: 64px; }
+.slg-ed-entry { border: 1px solid #e2e8f0; border-radius: 8px; padding: 5px; background: #f8fafc; }
+.slg-ed-entry.invalid { border-color: #f87171; background: #fff1f2; }
+.slg-ed-entry-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.slg-ed-entry-row > select.slg-ed-input { flex: 1 1 110px; }
+.slg-ed-entry-errors { color: #be123c; font-size: 10px; font-weight: 700; }
+.slg-ed-entry-errors:empty { display: none; }
+.slg-ed-idx { font-weight: 900; color: #64748b; min-width: 22px; }
+.slg-ed-prob { font-weight: 900; color: #7c3aed; min-width: 46px; text-align: right; }
+.slg-ed-status { border-radius: 8px; padding: 6px 8px; font-weight: 800; background: #f1f5f9; color: #334155; }
+.slg-ed-status:empty { display: none; }
+.slg-ed-status[data-kind="error"] { background: #fff1f2; color: #be123c; border: 1px solid #fecdd3; }
+.slg-ed-status[data-kind="success"] { background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; }
+.slg-ed-issues { margin: 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+.slg-ed-issues .err { color: #be123c; font-weight: 700; }
+.slg-ed-issues .warn { color: #b45309; }
+.slg-ed-ok { color: #047857; font-weight: 800; }
+.slg-ed-chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.slg-ed-chip { display: inline-flex; align-items: center; gap: 3px; border: 1px solid #e2e8f0; border-radius: 999px; padding: 2px 6px; background: #f8fafc; }
+.slg-ed-table { width: 100%; border-collapse: collapse; font-size: 10.5px; margin-top: 4px; }
+.slg-ed-table th, .slg-ed-table td { border-bottom: 1px solid #e2e8f0; padding: 3px 4px; text-align: right; }
+.slg-ed-table th:first-child, .slg-ed-table td:first-child { text-align: left; }
+.slg-ed-table th { color: #475569; background: #f1f5f9; }

@@ -19,6 +19,9 @@ const files = [
   'game.js',
   'civ4-editor.js',
   'supabase-bridge.js', 'supabase-config.js',
+  // DEV 데이터 에디터: rewardEngine.js(순수 로직)와 editors/ 폴더는 에디터 탭을 열 때 import()로만 로드된다.
+  'rewardEngine.js',
+  'editors',
 ];
 
 rmSync(dist, { recursive: true, force: true });

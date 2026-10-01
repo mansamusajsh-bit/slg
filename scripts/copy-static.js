@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, copyFileSync, cpSync, rmSync } from 'fs';
 import { join } from 'path';
 
 const ROOT = process.cwd();
@@ -20,7 +20,11 @@ const STATIC_FILES = [
   'civ4-editor.js',
   'supabase-bridge.js',
   'supabase-config.js',
+  'rewardEngine.js',
 ];
+
+// 폴더 단위로 복사 (DEV 에디터 모듈은 import()로 지연 로드)
+const STATIC_DIRS = ['editors'];
 
 export function copyStaticFiles() {
   if (!existsSync(OUT_DIR)) {
@@ -33,6 +37,10 @@ export function copyStaticFiles() {
       continue;
     }
     copyFileSync(src, join(OUT_DIR, file));
+  }
+  for (const dir of STATIC_DIRS) {
+    const src = join(ROOT, dir);
+    if (existsSync(src)) cpSync(src, join(OUT_DIR, dir), { recursive: true });
   }
 }
 
