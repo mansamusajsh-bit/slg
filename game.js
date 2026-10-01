@@ -1385,6 +1385,34 @@
     }
 
     /* --------------------------------------------------------------------------
+       상황별 캐릭터 대사 (dialogueLines.js) + 일러스트 말풍선 연출
+       -------------------------------------------------------------------------- */
+    function getUnitIllustration(unit) {
+      if (!unit) return '';
+      return unit.imageUrl || customClassImages[unit.classType]
+        || (typeof SAMPLE_CLASS_IMAGES !== 'undefined' ? SAMPLE_CLASS_IMAGES[unit.classType] : '') || '';
+    }
+
+    // 유닛에 대사가 없으면(구버전 유닛) 원본 캐릭터 레코드의 대사를 쓴다.
+    function pickUnitLine(unit, situation, vars = {}) {
+      if (!window.DialogueLines) return '';
+      let source = unit;
+      if (!unit?.dialogues && unit?.sourceCharacterId) {
+        const record = getStoredCustomCharacters().find(c => String(c.id) === String(unit.sourceCharacterId));
+        if (record?.dialogues) source = { ...unit, dialogues: record.dialogues };
+      }
+      return DialogueLines.pick(source, situation, vars);
+    }
+
+    function speakUnitLine(unit, situation, mood, vars = {}) {
+      const line = pickUnitLine(unit, situation, vars);
+      if (!line) return '';
+      window.UI?.showUnitSpeech?.(unit, line, { imageUrl: getUnitIllustration(unit), mood });
+      addLog(`💬 "${unit.name}: ${line}"`, mood === 'refuse' ? 'danger' : 'system');
+      return line;
+    }
+
+    /* --------------------------------------------------------------------------
        Command Interception & Refusal Guard Logic
        -------------------------------------------------------------------------- */
     function checkCommandRefusal(unit, target, winChance = 1.0) {
@@ -1410,20 +1438,15 @@
       const isTerrified = (isLowLoyalty && isDangerousBattle) || (isLowLoyalty && isCriticalHp) || (currentLoyalty <= 15);
 
       if (isTerrified) {
-        let fearDialogue = '죽고 싶지 않아요...! 제발 이번 명령만은...!';
-        if (isCriticalHp) {
-          fearDialogue = `피가 멈추지 않아요... (HP ${unit.hp}/${maxHp}) 더 싸우다간 죽고 말 거예요!`;
-        } else if (currentLoyalty <= 15) {
-          fearDialogue = `지휘관님을 더는 신뢰할 수 없습니다! 이런 자살 특공 명령엔 따를 수 없어요!`;
-        } else if (isDangerousBattle) {
-          fearDialogue = `적(${target?.name || '적군'})의 기세가 너무 흉포합니다... 살아서 돌아오지 못할 것 같아요!`;
-        }
+        const situation = isCriticalHp ? 'refuse_lowhp' : (currentLoyalty <= 15 ? 'refuse_distrust' : 'refuse_danger');
+        const fearDialogue = pickUnitLine(unit, situation, { target: target?.name || '적군', win: Math.round(winChance * 100) });
 
-        // a. 공포 비주얼 & 심장박동 사운드 효과 발동
+        // a. 공포 비주얼 & 심장박동 사운드 효과 + 일러스트/말풍선 발동
+        const speech = { unit, imageUrl: getUnitIllustration(unit) };
         if (typeof window.triggerFearFX === 'function') {
-          window.triggerFearFX(unit.id, fearDialogue);
+          window.triggerFearFX(unit.id, fearDialogue, undefined, speech);
         } else if (typeof window.UI?.triggerFearFX === 'function') {
-          window.UI.triggerFearFX(unit.id, fearDialogue);
+          window.UI.triggerFearFX(unit.id, fearDialogue, undefined, speech);
         }
 
         // b. 방어 태세(Defensive Stance / Guard)로 자동 전환
@@ -1435,10 +1458,7 @@
         addLog(`🛡️ [명령 거부 및 방어 태세] ${unit.name}(충성/호감 ${currentLoyalty}, HP ${unit.hp}/${maxHp})이(가) 공포에 질려 명령을 거부하고 [방어 태세]로 전환했습니다! (방어력 +30%)`, 'danger');
 
         // d. UI 갱신
-        if (state.selectedUnit?.id === unit.id) {
-          renderUnitCard(unit);
-        }
-        renderMap();
+        renderAll();
 
         return true; // 명령 차단 및 취소
       }
@@ -1565,13 +1585,19 @@
       if (isPlayerAttacker && checkCommandRefusal(attacker, defender, P)) {
         return; // 전투 취소 및 AP 보존 상태로 방어 태세 전환 완료
       }
+      const lineVars = { target: defender.name, win: Math.round(P * 100) };
       if (isPlayerAttacker && isDangerAffection) {
-        addLog(`❌ [전투 거부!] ${attacker.name}의 호감도가 ${attacker.affection}이며 승률이 ${winPercent}%로 극히 위험합니다!`, 'danger');
-        addLog(`💬 "${attacker.name}: 이런 무모한 사지로 갈 순 없습니다! 명령을 거부합니다!" (AP/턴 미소모)`, 'warning');
+        addLog(`❌ [전투 거부!] ${attacker.name}의 호감도가 ${attacker.affection}이며 승률이 ${winPercent}%로 극히 위험합니다! (AP/턴 미소모)`, 'danger');
+        speakUnitLine(attacker, 'refuse_danger', 'refuse', lineVars);
         return;
       }
+      // 이번 교전에서 이미 대사가 나왔으면 격파 대사로 덮어쓰지 않는다
+      let spokeThisCombat = false;
       if (isPlayerAttacker && attacker.affection <= 30 && P < 0.30 && skills.Berserk) {
         addLog(`🔥 [지휘관 패시브: 광폭화] 호감도 저하(${attacker.affection})를 무시하고 강제 전투 돌입!`, 'warning');
+        spokeThisCombat = !!speakUnitLine(attacker, 'forced_attack', 'forced', lineVars);
+      } else if (isPlayerAttacker && attacker.affection >= 70 && P < 0.50) {
+        spokeThisCombat = !!speakUnitLine(attacker, 'brave_attack', 'brave', lineVars);
       }
 
       // 5. 행동력(AP) 소모
@@ -1627,6 +1653,9 @@
 
         if (isPlayerAttacker) {
           // A. 아군 플레이어의 공격 성공
+          if (!spokeThisCombat && Math.random() < 0.35) {
+            speakUnitLine(attacker, 'enemy_defeated', 'victory', lineVars);
+          }
           const splashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
           if (splashRatio > 0) {
             const splashDamage = Math.round(finalAtk * splashRatio);
@@ -1672,6 +1701,8 @@
               upkeep: 8,
               x: defender.x,
               y: defender.y,
+              imageUrl: defender.imageUrl || '',
+              dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
               isInactivated: false,
               isDead: false,
               promotions: { combatRank: 0 }
@@ -1799,6 +1830,8 @@
               upkeep: 8,
               x: defender.x,
               y: defender.y,
+              imageUrl: defender.imageUrl || '',
+              dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
               isInactivated: false,
               isDead: false,
               promotions: { combatRank: 0 }
@@ -5321,6 +5354,7 @@
        -------------------------------------------------------------------------- */
     const CUSTOM_CHARACTERS_STORAGE_KEY = 'slg_custom_created_characters';
     let createCharImageDataUrl = '';
+    let createCharDialogueEditor = null; // 생성 탭 상황별 대사 편집기 (DialogueLines.mountEditor)
 
     // 병과 선택 변경 시 기본 스탯, 추천 고유 스킬 및 실루엣 자동 동기화
     function onCustomClassSelectChanged(classType) {
@@ -5517,6 +5551,11 @@
       const avatarMap = { KNIGHT: '🐴', MAGE: '🔮', ARCHER: '🏹', MELEE: '⚔️', FIREARM: '💥' };
       const avatar = avatarMap[unitClass] || '👤';
 
+      // 상황별 대사: 편집기 입력값, 비어 있는 상황은 기본 풀에서 랜덤 부여
+      const dialogues = window.DialogueLines
+        ? DialogueLines.fillMissing(createCharDialogueEditor ? createCharDialogueEditor.getDialogues() : null)
+        : undefined;
+
       // 생성 위치 선정 (왕도 x:3, y:4 또는 인접 빈 타일)
       let spawnX = 3;
       let spawnY = 4;
@@ -5577,6 +5616,7 @@
         x: spawnX,
         y: spawnY,
         imageUrl: finalImageUrl,
+        dialogues: dialogues,
         isInactivated: false,
         isDead: false,
         promotions: { combatRank: 0 },
@@ -5609,6 +5649,8 @@
       saveGameState();
       renderAll();
       renderCustomCharactersList();
+      // 다음 캐릭터는 새 랜덤 대사로 시작
+      if (createCharDialogueEditor) createCharDialogueEditor.randomizeAll();
 
       // 디버그 모달을 닫고 풀샷 오버레이 즉시 오픈 연출
       closeAllModals();
@@ -5710,6 +5752,9 @@
               <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0284c7;" onclick="openCharacterSkillTreeEditor('${c.id}')" title="스킬 · 스킬트리 편집">
                 🌳 트리
               </button>
+              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #db2777;" onclick="openCharacterDialogueEditor('${c.id}')" title="상황별 대사 편집">
+                💬 대사
+              </button>
               <button class="btn-cheat purple" style="font-size: 9px; padding: 4px 7px;" onclick="spawnSavedCustomCharacter('${c.id}')" title="현재 전장에 이 캐릭터를 추가 배치합니다.">
                 소환
               </button>
@@ -5760,6 +5805,7 @@
         x: o.x,
         y: o.y,
         imageUrl: target.imageUrl || '',
+        dialogues: target.dialogues ? clone(target.dialogues) : undefined,
         isInactivated: false,
         isDead: false,
         promotions: { combatRank: 0 },
@@ -6092,8 +6138,49 @@
       addLog('🗑️ Supabase 클라우드 보관함에서 선택한 영웅이 영구 삭제되었습니다.', 'system');
     }
 
+    // 보관함 캐릭터의 상황별 대사 편집 (저장 시 클라우드 레코드와 로스터의 같은 캐릭터에 반영)
+    function openCharacterDialogueEditor(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record || !window.DialogueLines) return;
+      document.getElementById('dlg-char-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'dlg-char-modal';
+      overlay.className = 'sk-modal-overlay';
+      overlay.innerHTML = `
+        <div class="sk-modal">
+          <div class="sk-modal-head"><span></span><button class="btn-close" data-close>✕</button></div>
+          <div class="sk-modal-body"><div data-editor></div></div>
+          <div class="sk-modal-foot">
+            <button class="btn-cheat" style="background:#64748b;" data-close>닫기</button>
+            <button class="btn-cheat purple" data-save>💾 대사 저장</button>
+          </div>
+        </div>`;
+      overlay.querySelector('.sk-modal-head span').textContent = `💬 ${record.name} — 상황별 대사 편집`;
+      document.body.appendChild(overlay);
+      const close = () => overlay.remove();
+      overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      const editor = DialogueLines.mountEditor(overlay.querySelector('[data-editor]'), DialogueLines.fillMissing(record.dialogues));
+      overlay.querySelector('[data-save]').onclick = () => {
+        const dialogues = DialogueLines.fillMissing(editor.getDialogues());
+        record.dialogues = dialogues;
+        if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+        (state.playerUnits || []).forEach(u => {
+          if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+          u.dialogues = JSON.parse(JSON.stringify(dialogues));
+        });
+        saveGameState(true);
+        addLog(`💬 [대사 저장] ${record.name}의 상황별 대사를 저장했습니다.`, 'gold');
+        close();
+      };
+    }
+    window.openCharacterDialogueEditor = openCharacterDialogueEditor;
+
     function initCustomCharCreationForm() {
       setupCustomCharDropzone();
+      if (window.DialogueLines && !createCharDialogueEditor) {
+        createCharDialogueEditor = DialogueLines.mountEditor(document.getElementById('create-char-dialogue-editor'));
+      }
       renderCustomCharactersList();
       // Load initial character list from Supabase
       if (typeof window.getCharactersFromCloud === 'function') {
@@ -6290,6 +6377,9 @@
       const hostile = skill.effects.some(e => (SkillEngine.EFFECTS[e.type] || {}).hostile);
       if (hostile && unit.affection <= 30 && !state.commander.unlockedSkills.Berserk) {
         addLog(`❌ [스킬 거부!] ${unit.name}의 호감도가 ${unit.affection}으로 극히 낮아 위험한 스킬 명령을 거부합니다!`, 'danger');
+        const line = pickUnitLine(unit, 'refuse_skill');
+        const speech = { unit, imageUrl: getUnitIllustration(unit) };
+        if (typeof window.UI?.triggerFearFX === 'function') window.UI.triggerFearFX(unit.id, line, undefined, speech);
         return;
       }
       if (skill.targeting.mode === 'SELF') {
@@ -7391,10 +7481,7 @@
         'gold'
       );
 
-      if (state.selectedUnit?.id === unit.id) {
-        renderUnitCard(unit);
-      }
-      renderMap();
+      renderAll();
 
       return true;
     }

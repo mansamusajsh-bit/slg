@@ -89,13 +89,71 @@
   }
 
   /**
+   * 캐릭터 일러스트 + 말풍선을 게임 화면 위에 잠깐 띄운다. (클릭은 통과, 화면 터치 시 즉시 닫힘)
+   *
+   * @param {Object} unit - 말하는 유닛 (name 사용)
+   * @param {string} text - 대사
+   * @param {Object} [opts]
+   * @param {string} [opts.imageUrl] - 전신 일러스트 URL
+   * @param {'refuse'|'brave'|'forced'|'victory'} [opts.mood='refuse'] - 연출 톤
+   * @param {number} [opts.durationMs=3000]
+   */
+  let removeActiveSpeech = null;
+  function showUnitSpeech(unit, text, opts = {}) {
+    if (!unit || !text) return;
+    const mood = opts.mood || 'refuse';
+    const durationMs = opts.durationMs || 3000;
+    const host = document.getElementById('mobile-app') || document.body;
+
+    if (removeActiveSpeech) removeActiveSpeech();
+
+    const layer = document.createElement('div');
+    layer.id = 'unit-speech-layer';
+    layer.className = `unit-speech-layer mood-${mood}`;
+    layer.innerHTML = `
+      ${opts.imageUrl ? `<img class="unit-speech-illust" alt="" />` : ''}
+      <div class="unit-speech-bubble">
+        <div class="unit-speech-name"></div>
+        <div class="unit-speech-text"></div>
+      </div>
+    `;
+    if (opts.imageUrl) layer.querySelector('.unit-speech-illust').src = opts.imageUrl;
+    layer.querySelector('.unit-speech-name').textContent = unit.name || '';
+    host.appendChild(layer);
+
+    let hideTimer = null;
+    let armTimer = null;
+    const cleanup = () => {
+      clearTimeout(hideTimer);
+      clearTimeout(armTimer);
+      document.removeEventListener('pointerdown', dismiss, true);
+      if (removeActiveSpeech === removeNow) removeActiveSpeech = null;
+    };
+    // 새 대사가 오면 이전 연출은 즉시 제거
+    const removeNow = () => { cleanup(); layer.remove(); };
+    function dismiss() {
+      cleanup();
+      layer.classList.add('leaving');
+      setTimeout(() => layer.remove(), 280);
+    }
+    removeActiveSpeech = removeNow;
+
+    requestAnimationFrame(() => layer.classList.add('show'));
+    typewriteText(layer.querySelector('.unit-speech-text'), text, 26);
+    hideTimer = setTimeout(dismiss, durationMs + text.length * 26);
+    // 다음 조작(터치/클릭)이 들어오면 연출을 바로 걷어낸다. 조작 자체는 막지 않는다.
+    armTimer = setTimeout(() => document.addEventListener('pointerdown', dismiss, true), 400);
+  }
+
+  /**
    * Main Trigger: Fear & Command Rejection Emotional FX
    *
    * @param {string|number} unitId - Identifier of the distressed unit
    * @param {string} [textMessage] - Panic line
    * @param {number} [durationMs=2600] - Duration of the fear state in milliseconds
+   * @param {Object} [speech] - { unit, imageUrl } 주면 일러스트+말풍선 연출을 함께 띄운다
    */
-  function triggerFearFX(unitId, textMessage, durationMs = 2600) {
+  function triggerFearFX(unitId, textMessage, durationMs = 2600, speech = null) {
     const panicQuote = textMessage || '죽고 싶지 않아요...! 제발 이번 명령만은...!';
 
     const unitCardAvatar = document.getElementById('card-avatar');
@@ -131,10 +189,9 @@
     const tileUnitTokens = document.querySelectorAll(`[data-unit-id="${unitId}"]`);
     tileUnitTokens.forEach((token) => token.classList.add('fx-fear-shake'));
 
-    // Dialogue display
-    const dialogueBox = document.getElementById('dialogue-content') || document.getElementById('ui-dialogue-text');
-    if (dialogueBox) {
-      typewriteText(dialogueBox, `😨 "${panicQuote}"`, 22);
+    // Dialogue display: 일러스트 + 말풍선
+    if (speech?.unit) {
+      showUnitSpeech(speech.unit, panicQuote, { imageUrl: speech.imageUrl, mood: 'refuse' });
     }
 
     if (typeof global.addLog === 'function') {
@@ -1266,6 +1323,7 @@
   // Export to global.UI and root window
   global.UI.showToast = showToast;
   global.UI.triggerFearFX = triggerFearFX;
+  global.UI.showUnitSpeech = showUnitSpeech;
   global.UI.playHeartbeatSFX = playHeartbeatSFX;
   global.UI.playVictoryFanfareSFX = playVictoryFanfareSFX;
   global.UI.showVictoryModal = showVictoryModal;
