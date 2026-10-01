@@ -81,16 +81,19 @@ Encounter               ── state.currentBattle = { id:"enc-00001", nodeId, s
 
 ```text
 { version: "3.0.0", currentView, guest,
-  player: { loopCount, memories: { visitedNodesBySeed }, unlockedCharacters, settings: { muted },   ← 영구 (회귀해도 유지)
-            characterCollection, inventory, rewinders,
-            progression: { commander, turn, stackMoveEnabled, strategy, selectedUnitId } },
-  run:    { id, seed, status, currentNodeId, completedNodes, mapState: { layers, nodes },            ← 이번 런 (회귀 시 초기화)
-            encounters, encounterSeq, party, reserve, gold, commandBonus,
-            returnPending?, emergencyRecruit? },
+  player: { loopCount, memories: { visitedNodesBySeed, deathBattle }, unlockedCharacters,         ← 영구 (회귀해도 유지)
+            settings: { muted }, rewinders,                                                       ← 리와인더는 유료 아이템이라 유지
+            progression: { turn, stackMoveEnabled, strategy, selectedUnitId } },
+  run:    { id, seed, status, currentNodeId, completedNodes, mapState: { layers, nodes },        ← 이번 런 (회귀 시 초기화)
+            encounters, encounterSeq, nodeAttempts, party, reserve, gold,
+            commander, inventory, characterCollection,
+            loopReward, commandBonus, foresight, dejavuEliteFree, echo,
+            returnPending?, emergencyRecruit?, lastStanding?, lastDeath? },
   currentBattle: null | { ...Encounter, live: { enemyUnits, deployedUnitIds, defeatedEnemyCount } } }
 ```
 
-- 코드의 `state.gold` / `state.playerUnits` / `state.reserveUnits`는 `state.run.gold / party / reserve`를 가리키는 접근자다 (JSON에는 run 쪽에만 저장된다).
+- 코드의 `state.gold` / `playerUnits` / `reserveUnits` / `commander` / `inventory` / `characterCollection`은 `state.run`의 필드를 가리키는 접근자다 (JSON에는 run 쪽에만 저장된다).
+- 클라우드 세이브를 다 불러오기 전에는 저장하지 않는다 (불러오기 전 초기 상태로 덮어쓰는 것 방지).
 - 런 초기값은 `createInitialRun(seed, commandBonus)` 한 곳에서만 만든다.
 - `currentBattle`은 전투 중일 때만 저장된다. 전투 중 새로고침하면 **일시정지 상태로 복원**되고, 승리 직후라면 승리 모달이 다시 뜬다.
 - v2(`player.characters / gold / roguelikeRun`)와 v1(평평한 구조) 세이브도 그대로 불러와 run으로 옮긴다. v1은 런이 새로 만들어진다.
@@ -108,7 +111,29 @@ Encounter               ── state.currentBattle = { id:"enc-00001", nodeId, s
 | 전원 사망 + 0 < 골드 < 최소 모집비 | "더 이상 싸울 수 없다" 안내 → 골드 0 → 회귀 |
 
 - 최소 모집비는 `TOWN_UNIT_SHOP_CATALOG`의 최저 `cost`. 긴급 모집에서는 쓰러진 대원을 같은 병과 용병 비용으로 재모집할 수도 있다.
-- **지휘력 보정**: 회귀할 때마다 시작 파티 중 1명을 골라 이번 런 동안 방어 +1. 다시 회귀하면 사라지고 새로 고른다(누적 없음). 방어력 가산은 `calculateEffectiveStrength(unit,'def')` 한 곳뿐이라 이중 적용이 없고, 같은 캐릭터를 다시 얻어도 자동 적용된다. 표시는 `방어 31 (+1 지휘)`.
+- **회귀 시 초기화**: 파티 · 골드 · 노드 진행 · 지휘 AP · 턴 · 지휘관(레벨/스킬) · 인벤토리 · 용병 명부. **유지**: 회귀 횟수, 기억, 리와인더(유료).
+
+### 회귀 보상
+
+자동 (회귀 1회 이상이면 항상):
+
+| 보상 | 내용 |
+| --- | --- |
+| 예지 | 같은 seed의 이전 런에서 방문한 노드(💭)는 들어가기 전에 적 구성과 보상이 보인다. |
+| 기시감 | 지난 런에서 전멸한 바로 그 전투(☠️, 같은 노드·같은 전장 seed)에 다시 들어가면 적 배치를 보고 아군 배치(아래쪽 절반)를 고른다. |
+| 잔향 | 전멸 직전 마지막까지 살아남은 캐릭터가 다음 런 첫 전투 첫 턴에 행동을 한 번 더 한다 (AP 2배, 1회). |
+
+회귀 카드 (회귀할 때마다 4장 중 3장이 나오고 1장 선택, 이번 런 한정, 누적 없음. 3장은 런 seed와 회귀 횟수로 정해진다):
+
+| 카드 | 내용 |
+| --- | --- |
+| 🛡️ 지휘력 | 시작 파티 중 1명 방어 +1 (`calculateEffectiveStrength('def')` 한 곳에서만 가산, 표시 `31 (+1 지휘)`) |
+| 🔮 예지 | 원하는 노드 2개를 골라 적 구성과 보상을 미리 본다 (전략맵 상세 패널의 "예지 사용") |
+| 💰 비상금 | 시작 골드 +100 |
+| 👁️ 기시감 | 이번 런 첫 엘리트 전투에서 아군 배치를 직접 고른다 |
+
+- 미리 보기가 실제와 같도록, 노드의 **이번 런 첫 도전** 전장 seed는 런 seed에서 정해진다 (`getPlannedBattleSeed`). 같은 런에서 재도전하면 예전처럼 새 seed로 새 전장이 열리고, 그 노드는 미리 볼 수 없다.
+- 회귀 횟수에 따라 대사가 바뀐다 (0 / 1~2 / 3~5 / 6+회): 전투 시작, 기억나는 장소, 쓰러졌던 장소.
 - 회귀 횟수(`player.loopCount`)는 화면 왼쪽 아래에, 이전 런에서 방문한 노드는 전략맵에 💭 "기억나는 장소"로 표시된다 (같은 seed 기준).
 - 연출: `audio/returnByDeath.js` — 외부 음원 없이 Web Audio API로 합성 (시계 틱 가속 → 심장 박동 2회 → 정적 → 급상승 드론 → 무음), 화면은 채도 감소 → 흰색 플래시 → 페이드 인. 약 3초. 사용자 입력 전에는 소리를 내지 않고, `player.settings.muted`가 true면 무음.
 - 연출/선택 도중 새로고침해도 `run.returnPending`이 남아 있어 회귀 횟수가 두 번 오르지 않고 선택 화면부터 이어진다. 긴급 모집도 `run.emergencyRecruit`로 이어진다.

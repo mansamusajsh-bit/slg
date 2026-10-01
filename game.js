@@ -447,38 +447,65 @@
       ];
     }
 
+    function createInitialCommander() {
+      return {
+        name: '레오나르도',
+        level: 1,
+        exp: 20,
+        maxExp: 100,
+        skillPoints: 2,
+        unlockedSkills: {
+          BearDown: false,
+          Precision: false,
+          Berserk: false,
+          ShieldWall: false,
+          Ironclad: false,
+          RapidAdvance: false,
+          CommanderLeadership: false,
+          StrategicDominance: false
+        }
+      };
+    }
+
     // 영구 플레이어 데이터 (Supabase gameState의 player). 사망회귀해도 유지된다.
     function createInitialPlayer() {
       return {
         loopCount: 0,                          // 사망회귀 횟수
-        memories: { visitedNodesBySeed: {} },  // 회귀해도 남는 기억: seed별 방문 노드
+        // 회귀해도 남는 기억: seed별 방문 노드(예지), 마지막으로 전멸한 전투(기시감)
+        memories: { visitedNodesBySeed: {}, deathBattle: null },
         unlockedCharacters: [],                // 한 번이라도 손에 넣은 캐릭터 id
         settings: { muted: false }             // 음소거 (true면 회귀 효과음을 내지 않는다)
       };
     }
 
     /**
-     * 런 초기값을 만드는 유일한 함수. 노드 그래프(RunEngine) + 파티 + 골드 + 지휘력 보정.
-     * 지휘력 보정 { characterId, def } 은 여기서 run에 기록만 하고, 실제 방어력 가산은
-     * getCommandBonusDef()(→ calculateEffectiveStrength 'def') 한 곳에서만 한다 (이중 적용 방지,
-     * 같은 캐릭터를 같은 런에서 다시 얻어도 자동 적용).
+     * 런 초기값을 만드는 유일한 함수. 노드 그래프(RunEngine) + 파티 + 골드 + 지휘관 + 인벤토리 + 용병 명부
+     * + 회귀 카드(loopReward: command/foresight/stash/dejavu, applyLoopRewardToRun 참고).
+     * 지휘력 카드의 방어 +1은 run.commandBonus에 기록만 하고, 실제 가산은
+     * getCommandBonusDef()(→ calculateEffectiveStrength 'def') 한 곳에서만 한다.
      */
-    function createInitialRun(seed = null, commandBonus = null) {
+    function createInitialRun(seed = null, loopReward = null) {
       const run = RunEngine.createRun(WORLD_SECTORS, seed);
       run.party = createStartingParty();
       run.reserve = [];
       run.gold = START_GOLD;
-      run.commandBonus = (commandBonus && commandBonus.characterId != null)
-        ? { characterId: String(commandBonus.characterId), def: Number(commandBonus.def) || 1 }
-        : null;
+      run.commander = createInitialCommander();
+      run.inventory = [];
+      run.characterCollection = [];
       run.encounterSeq = 0;
+      run.nodeAttempts = {};
+      run.echo = null;
+      applyLoopRewardToRun(run, loopReward);
       return run;
     }
     window.createInitialRun = createInitialRun;
 
     // 기존 코드의 state.gold / state.playerUnits / state.reserveUnits 는 state.run의 필드를 가리킨다.
     // (열거 불가: JSON 직렬화 시 중복 저장되지 않는다.)
-    const RUN_FIELD_ALIASES = { gold: 'gold', playerUnits: 'party', reserveUnits: 'reserve' };
+    const RUN_FIELD_ALIASES = {
+      gold: 'gold', playerUnits: 'party', reserveUnits: 'reserve',
+      commander: 'commander', inventory: 'inventory', characterCollection: 'characterCollection'
+    };
     function bindRunAccessors(s) {
       Object.entries(RUN_FIELD_ALIASES).forEach(([key, runKey]) => {
         Object.defineProperty(s, key, {
@@ -499,6 +526,10 @@
         if (!Array.isArray(nextRun.reserve)) nextRun.reserve = Array.isArray(prev.reserve) ? prev.reserve : [];
         if (typeof nextRun.gold !== 'number') nextRun.gold = typeof prev.gold === 'number' ? prev.gold : START_GOLD;
         if (!('commandBonus' in nextRun)) nextRun.commandBonus = prev.commandBonus || null;
+        if (!nextRun.commander) nextRun.commander = prev.commander || createInitialCommander();
+        if (!Array.isArray(nextRun.inventory)) nextRun.inventory = Array.isArray(prev.inventory) ? prev.inventory : [];
+        if (!Array.isArray(nextRun.characterCollection)) nextRun.characterCollection = Array.isArray(prev.characterCollection) ? prev.characterCollection : [];
+        if (!nextRun.nodeAttempts) nextRun.nodeAttempts = {};
       }
       state.run = nextRun;
       return nextRun;
@@ -551,25 +582,8 @@
         turn: 1,
         rewinders: 3,
         stackMoveEnabled: true, // 중첩 유닛 함께 이동 기본 활성화
-        commander: {
-          name: '레오나르도',
-          level: 1,
-          exp: 20,
-          maxExp: 100,
-          skillPoints: 2,
-          unlockedSkills: {
-            BearDown: false,
-            Precision: false,
-            Berserk: false,
-            ShieldWall: false,
-            Ironclad: false,
-            RapidAdvance: false,
-            CommanderLeadership: false,
-            StrategicDominance: false
-          }
-        },
-        characterCollection: [], // 용병 고용 획득 기록 (Supabase characters를 원본으로 사용). 출전 명단 편입 전 사본
-        // 출전 명단(playerUnits) · 예비(reserveUnits) · 골드(gold)는 state.run(party/reserve/gold)에 있다 — bindRunAccessors 참고.
+        // 지휘관(commander) · 인벤토리(inventory) · 용병 명부(characterCollection) · 출전 명단(playerUnits) ·
+        // 예비(reserveUnits) · 골드(gold)는 state.run에 있다 (회귀 시 초기화) — bindRunAccessors 참고.
         enemyUnits: [
           {
             id: 'e1',
@@ -795,10 +809,14 @@
        -------------------------------------------------------------------------- */
     const STORAGE_KEY = 'slg_guest_save';
 
+    // 클라우드 세이브를 불러오는 중에는 저장하지 않는다 (불러오기 전 초기 상태로 덮어쓰기 방지).
+    let cloudLoadPending = false;
+
     // 게임 상태를 Supabase에 안전하게 영구 저장 (Zero LocalStorage)
     function saveGameState(silent = false) {
       try {
         if (!state) return;
+        if (cloudLoadPending) return;
         if (!state.guest) {
           state.guest = {
             id: generateGuestId(),
@@ -842,11 +860,8 @@
             memories: state.player?.memories || { visitedNodesBySeed: {} },
             unlockedCharacters: Array.isArray(state.player?.unlockedCharacters) ? state.player.unlockedCharacters : [],
             settings: state.player?.settings || { muted: false },
-            characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : [],
-            inventory: Array.isArray(state.inventory) ? state.inventory : [],
-            rewinders: state.rewinders,
+            rewinders: state.rewinders, // 유료 아이템: 회귀해도 유지
             progression: {
-              commander: state.commander,
               turn: state.turn,
               stackMoveEnabled: state.stackMoveEnabled,
               strategy: state.strategy || {
@@ -863,7 +878,10 @@
             ...state.run,
             party: sanitizedPlayerUnits,
             reserve: Array.isArray(state.reserveUnits) ? state.reserveUnits : [],
-            gold: state.gold
+            gold: state.gold,
+            commander: state.commander,
+            inventory: Array.isArray(state.inventory) ? state.inventory : [],
+            characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : []
           } : null,
           currentBattle: battleToSave
         };
@@ -905,11 +923,11 @@
           gold: r.gold,
           rewinders: p.rewinders,
           stackMoveEnabled: prog.stackMoveEnabled,
-          commander: prog.commander,
+          commander: r.commander || prog.commander,
           playerUnits: r.party,
-          characterCollection: p.characterCollection,
+          characterCollection: r.characterCollection || p.characterCollection,
           reserveUnits: r.reserve,
-          inventory: p.inventory,
+          inventory: r.inventory || p.inventory,
           selectedUnitId: prog.selectedUnitId,
           playerMeta: { loopCount: p.loopCount, memories: p.memories, unlockedCharacters: p.unlockedCharacters, settings: p.settings },
           roguelikeRun: r,
@@ -953,7 +971,7 @@
         state.encounterSeq = Number(savedRun.encounterSeq) || savedRun.encounters.length;
       } else {
         if (savedRun) console.warn('[Save] 저장된 런이 손상되어 새 런으로 대체합니다:', check.errors);
-        const fresh = createInitialRun(null, savedRun && savedRun.commandBonus ? savedRun.commandBonus : null);
+        const fresh = createInitialRun(null, savedRun && savedRun.loopReward ? savedRun.loopReward : null);
         state.run = fresh;
         state.encounterSeq = 0;
       }
@@ -1030,7 +1048,7 @@
         state.player = {
           loopCount: Number(meta.loopCount) || 0,
           memories: (meta.memories && typeof meta.memories === 'object')
-            ? { visitedNodesBySeed: { ...(meta.memories.visitedNodesBySeed || {}) } }
+            ? { visitedNodesBySeed: { ...(meta.memories.visitedNodesBySeed || {}) }, deathBattle: meta.memories.deathBattle || null }
             : basePlayer.memories,
           unlockedCharacters: Array.isArray(meta.unlockedCharacters) ? meta.unlockedCharacters.map(String) : [],
           settings: { ...basePlayer.settings, ...(meta.settings || {}) }
@@ -2267,6 +2285,7 @@
 
     async function executeEndTurn() {
       if (isEnemyTurnProcessing) return;
+      if (getDeployPhase()) { addLog('👁️ [기시감] 먼저 아군 배치를 끝내세요 ("배치 완료").', 'warning'); return; }
       saveHistorySnapshot();
 
       // 1. 플레이어 턴 종료
@@ -2747,6 +2766,8 @@
         tileDiv.onclick = () => onTileClicked(t);
         mapEl.appendChild(tileDiv);
       });
+      decorateDeployPhase(mapEl);
+      renderDeployBanner();
     }
 
     function onTileClicked(tile) {
@@ -2758,6 +2779,7 @@
         addLog('⏸️ [전투 일시정지 중] 전술 작전이 일시 정지되었습니다. 일시 정지 메뉴에서 전투를 재개해주세요.', 'warning');
         return;
       }
+      if (getDeployPhase()) { handleDeployClick(tile); return; }
       if (skillTargeting) {
         castTargetedSkillAt(tile.x, tile.y);
         return;
@@ -3256,10 +3278,11 @@
       // 수동 새 런(디버그/재도전): 노드 그래프만 새로 만들고 파티·골드·지휘력 보정은 그대로 이어간다.
       // 사망회귀(returnByDeath)는 이 함수를 쓰지 않는다 — 그쪽은 createInitialRun()으로 전부 초기화한다.
       const prevRun = state.run;
-      const nextRun = createInitialRun(customSeed, prevRun && prevRun.commandBonus);
-      nextRun.party = prevRun ? prevRun.party : nextRun.party;
-      nextRun.reserve = prevRun ? prevRun.reserve : nextRun.reserve;
-      nextRun.gold = prevRun ? prevRun.gold : nextRun.gold;
+      const nextRun = createInitialRun(customSeed, null);
+      if (prevRun) {
+        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo']
+          .forEach(k => { if (k in prevRun) nextRun[k] = prevRun[k]; });
+      }
       state.run = nextRun;
       state.encounterSeq = 0;
       state.selectedNodeId = null;
@@ -3493,7 +3516,9 @@
       // 버그가 나면 그 값만 있으면 같은 전장을 재현할 수 있다.
       // 재현하려면 콘솔에서 state.forcedSeed = 'A-1-849201' 을 넣고 다시 진입한다 (1회용).
       // seed 결정은 enterBattleWithSeed()가 맡는다: forcedSeed가 있으면 그 값(1회용), 없으면 새로 뽑는다.
-      const replaySeed = state.forcedSeed ? String(state.forcedSeed) : null;
+      // 이번 런에서 이 노드에 처음 들어가면 런 seed에서 정해진 전장 seed를 쓴다 (예지/기시감이 보여 준 그대로).
+      const plannedSeed = getPlannedBattleSeed(state.run, node);
+      const replaySeed = state.forcedSeed ? String(state.forcedSeed) : plannedSeed;
       state.forcedSeed = null;
 
       console.log(`⚔️ [Encounter] ${targetSectorId} 전투 진입 시작 — 템플릿 [${templateId}]을(를) Supabase에서 로드`);
@@ -3607,6 +3632,20 @@
           }
         });
       }
+
+      // 도전 횟수 (재도전은 새 seed)
+      if (!state.run.nodeAttempts) state.run.nodeAttempts = {};
+      state.run.nodeAttempts[node.id] = getNodeAttempts(state.run, node.id) + 1;
+      // 기시감: 지난 생에 전멸한 바로 그 전장 / 기시감 카드의 첫 엘리트
+      const death = getDeathMemory(state.run, node.id);
+      if (death && death.battleSeed === seed) {
+        startDeployPhase(battle, 'death');
+      } else if (state.run.dejavuEliteFree && node.type === 'elite') {
+        state.run.dejavuEliteFree = false;
+        startDeployPhase(battle, 'card');
+      }
+      applyEchoAtBattleStart();
+      speakBattleStartLine(battle);
 
       console.log(`✅ [Encounter] ${targetSectorId} (템플릿 ${templateId}, seed=${seed}) → state.currentBattle.map 완료`, {
         tiles: battle.map.tiles.length,
@@ -3997,7 +4036,8 @@
         const meta = RunEngine.NODE_META[node.type] || { icon: '❔', label: node.type };
         const sec = WORLD_SECTORS[node.sectorId] || { name: node.sectorId };
         const remembered = isRememberedNode(run, node.id);
-        const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})${remembered ? ' · 💭 기억나는 장소' : ''}`;
+        const deathHere = !!getDeathMemory(run, node.id);
+        const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})${remembered ? ' · 💭 기억나는 장소' : ''}${deathHere ? ' · ☠️ 지난 생에 쓰러진 곳' : ''}`;
         const pin = document.createElement('div');
         pin.className = `strat-node-pin run-node node-${node.type} is-${status}${remembered ? ' is-remembered' : ''}${state.selectedNodeId === node.id ? ' active' : ''}`;
         pin.id = `node-pin-${node.id}`;
@@ -4007,7 +4047,7 @@
         pin.setAttribute('tabindex', '0');
         pin.setAttribute('aria-label', label);
         pin.title = label;
-        pin.innerHTML = `<div class="strat-node-circle"><div class="strat-node-pulse"></div><span>${meta.icon}</span>${remembered ? '<span class="strat-node-memory" aria-hidden="true">💭</span>' : ''}</div><span class="strat-node-tag">${meta.label}</span>`;
+        pin.innerHTML = `<div class="strat-node-circle"><div class="strat-node-pulse"></div><span>${meta.icon}</span>${deathHere ? '<span class="strat-node-memory" aria-hidden="true">☠️</span>' : remembered ? '<span class="strat-node-memory" aria-hidden="true">💭</span>' : ''}</div><span class="strat-node-tag">${meta.label}</span>`;
         pin.addEventListener('click', () => selectNode(node.id));
         pin.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(node.id); } });
         canvas.appendChild(pin);
@@ -4237,6 +4277,9 @@
       // Header sub-tag in sector map view
       const subTagEl = document.getElementById('ui-sector-sub-tag');
       if (subTagEl) subTagEl.textContent = `SECTOR ${curSec.id}: ${curSec.name.toUpperCase()}`;
+
+      // 회귀 보상: 선택 노드의 예지/기시감 정보
+      renderNodeForesight(state.selectedNodeId ? RunEngine.getNode(state.run, state.selectedNodeId) : null);
     }
     window.renderStrategyView = renderStrategyView;
 
@@ -4491,6 +4534,7 @@
 
     function renderAll() {
       renderLoopCounter();
+      renderDeployBanner();
       if (state && state.currentView === 'STRATEGY') {
         const viewStrat = document.getElementById('view-strategy-main');
         const viewSector = document.getElementById('view-sector-field');
@@ -7094,12 +7138,17 @@
           addLog(`🔥 [Supabase 연동 완료] 게스트(UID: ${user.uid.substring(0, 8)}...) 및 DB/Storage 실시간 동기화 활성화!`, 'gold');
 
           if (typeof window.loadGameStateFromCloud === 'function') {
+            // 클라우드 세이브를 다 읽기 전에는 저장하지 않는다. (예전에는 불러오기와 동시에 초기 상태를 저장해서,
+            // 아무 행동 없이 두 번 새로고침하면 진행이 초기 상태로 덮어써질 수 있었다.)
+            cloudLoadPending = true;
             window.loadGameStateFromCloud().then(data => {
+              cloudLoadPending = false;
               if (data) {
                 loadGameState(data);
                 addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
-            }).catch(e => console.warn(e));
+              saveGameState(true);
+            }).catch(e => { cloudLoadPending = false; console.warn(e); });
           }
           if (typeof window.getCharactersFromCloud === 'function') {
             window.getCharactersFromCloud().then(chars => {
@@ -7120,7 +7169,7 @@
 
           // (제거됨) 예전에는 기본 8x10 맵을 Supabase 'maps/default_map'에 올렸다.
           // 전술 맵은 tacticalMap 템플릿(에디터 산출물)만이 원본이므로 더 이상 기본맵을 동기화하지 않는다.
-          saveGameState(true);
+          // 첫 저장은 위의 불러오기가 끝난 뒤에 한다.
 
           applyStoredCustomImages();
         } catch (err) {
@@ -7607,6 +7656,12 @@
      * 사망회귀·긴급 모집 판정은 finishEncounter() → resolveRunSurvival()이 맡는다.
      */
     function checkPartyWipeout() {
+      const battle = state && state.currentBattle;
+      if (battle && battle.status === 'active') {
+        const ids = Array.isArray(state.currentDeployedUnitIds) && state.currentDeployedUnitIds.length ? state.currentDeployedUnitIds : (state.playerUnits || []).map(u => u.id);
+        const aliveNow = (state.playerUnits || []).filter(u => ids.includes(u.id) && u.x >= 0 && isUnitAlive(u));
+        if (aliveNow.length) battle.lastAliveIds = aliveNow.map(u => u.id); // 잔향: 전멸 직전 생존자
+      }
       if (!isDeployedForceWiped()) return false;
       if (wipeoutTimer) return true;
       const tryFinish = () => {
@@ -7614,6 +7669,11 @@
         if (!isDeployedForceWiped()) return;
         if (isEnemyTurnProcessing) { wipeoutTimer = setTimeout(tryFinish, 200); return; }
         addLog('💀 [부대 전멸] 출전한 아군이 모두 쓰러졌습니다.', 'danger');
+        const b = state.currentBattle;
+        const lastId = b && Array.isArray(b.lastAliveIds) ? b.lastAliveIds[b.lastAliveIds.length - 1] : null;
+        const last = lastId ? state.playerUnits.find(u => u.id === lastId) : null;
+        state.run.lastStanding = last ? { characterId: getCharacterId(last), name: last.name } : null;
+        state.run.lastDeath = b ? { nodeId: b.nodeId, battleSeed: b.seed } : null;
         finishEncounter({ victory: false, reason: 'wipeout' });
       };
       wipeoutTimer = setTimeout(tryFinish, 0);
@@ -8572,6 +8632,7 @@
       (run.encounters || []).forEach(e => { if (e && e.nodeId) seen.add(e.nodeId); });
       if (run.currentNodeId) seen.add(run.currentNodeId);
       mem.visitedNodesBySeed[run.seed] = [...seen];
+      if (run.lastDeath) mem.deathBattle = { runSeed: run.seed, nodeId: run.lastDeath.nodeId, battleSeed: run.lastDeath.battleSeed, loop: state.player.loopCount };
     }
 
     function isRememberedNode(run, nodeId) {
@@ -8846,8 +8907,13 @@
           await playReturnByDeathEffect();
         }
         const seed = run.seed; // 같은 세계를 반복
-        const characterId = await openCommandBonusSelect();
-        state.run = createInitialRun(seed, { characterId, def: 1 });
+        const reward = await openLoopRewardSelect(seed);
+        const echo = run.lastStanding || null;
+        state.run = createInitialRun(seed, reward);
+        // 잔향: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
+        if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {
+          state.run.echo = { characterId: String(echo.characterId), name: echo.name, used: false };
+        }
         state.encounterSeq = 0;
         state.turn = 1;
         state.currentBattle = null;
@@ -8864,8 +8930,14 @@
         selectedUnitId = (state.playerUnits[0] && state.playerUnits[0].id) || 'u1';
         historyStack = [];
         ensureNodeSelection();
-        const picked = state.playerUnits.find(u => getCharacterId(u) === String(characterId));
-        addLog(`🛡️ [지휘력 보정] ${picked ? picked.name : characterId} — 이번 런 동안 방어력 +1`, 'gold');
+        const card = LOOP_REWARD_CARDS[reward.type];
+        if (reward.type === 'command') {
+          const picked = state.playerUnits.find(u => getCharacterId(u) === String(reward.characterId));
+          addLog(`🛡️ [지휘력] ${picked ? picked.name : reward.characterId} — 이번 런 동안 방어력 +1`, 'gold');
+        } else {
+          addLog(`${card.icon} [${card.name}] ${card.desc} (이번 런 한정)`, 'gold');
+        }
+        if (state.run.echo) addLog(`🕯️ [잔향] ${state.run.echo.name}이(가) 마지막 순간을 기억한다. 첫 전투 첫 턴에 한 번 더 움직인다.`, 'gold');
         await savePlayer();
         await saveRun();
         goToStrategyMap();
@@ -8909,6 +8981,396 @@
       el.textContent = `🔁 회귀 ${count}회`;
       el.title = `사망회귀 ${count}회`;
     }
+
+    // ========================================================================
+    // 회귀 보상 (설정과 맞물리는 보상 + 회귀 카드)
+    // ========================================================================
+    //   자동 (회귀 1회 이상이면 항상):
+    //     예지   — 같은 seed의 이전 런에서 방문한 노드는 들어가기 전에 적 구성/보상이 보인다.
+    //     기시감 — 지난 런에서 전멸한 바로 그 전투(같은 노드·같은 전장 seed)에 다시 들어가면 적 배치를 보고 아군 배치를 고른다.
+    //     잔향   — 전멸 직전 마지막까지 살아남은 캐릭터가 다음 런 첫 전투 첫 턴에 행동을 한 번 더 한다.
+    //   회귀 카드 (회귀할 때마다 3장 중 1장, 이번 런 한정, 누적 없음):
+    //     지휘력 / 예지(노드 2개 미리 보기) / 비상금(시작 골드 +100) / 기시감(첫 엘리트 전투 배치 자유)
+    //   예지가 거짓말을 하지 않도록, 각 노드의 "이번 런 첫 도전" 전장 seed는 런 seed에서 결정된다
+    //   (같은 세계 = 같은 전장). 같은 런에서 다시 도전하면 예전처럼 새 seed로 새 전장이 열린다.
+
+    const LOOP_REWARD_CARDS = {
+      command:   { id: 'command',   icon: '🛡️', name: '지휘력', desc: '고른 대원 1명의 방어 +1' },
+      foresight: { id: 'foresight', icon: '🔮', name: '예지',   desc: '노드 2개의 적 구성과 보상을 미리 본다' },
+      stash:     { id: 'stash',     icon: '💰', name: '비상금', desc: '시작 골드 +100' },
+      dejavu:    { id: 'dejavu',    icon: '👁️', name: '기시감', desc: '첫 엘리트 전투에서 아군 배치를 직접 고른다' }
+    };
+    const STASH_GOLD = 100;
+    const FORESIGHT_CHARGES = 2;
+
+    // 회귀 카드 3장: (런 seed, 회귀 횟수)로 결정 — 선택 화면에서 새로고침해도 같은 3장이 나온다.
+    function drawLoopRewardCards(runSeed, loopCount) {
+      const ids = Object.keys(LOOP_REWARD_CARDS);
+      const rng = SeedEngine.createRNG(`${runSeed}|loop-cards|${loopCount}`);
+      for (let i = ids.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+      }
+      return ids.slice(0, 3).map(id => LOOP_REWARD_CARDS[id]);
+    }
+
+    // createInitialRun()이 부른다: 고른 카드를 새 런에 반영한다.
+    function applyLoopRewardToRun(run, reward) {
+      run.loopReward = reward ? { ...reward } : null;
+      run.commandBonus = null;
+      run.foresight = null;
+      run.dejavuEliteFree = false;
+      if (!reward) return run;
+      if (reward.type === 'command' && reward.characterId != null) {
+        run.commandBonus = { characterId: String(reward.characterId), def: Number(reward.def) || 1 };
+      } else if (reward.type === 'foresight') {
+        run.foresight = { charges: FORESIGHT_CHARGES, revealed: [] };
+      } else if (reward.type === 'stash') {
+        run.gold += STASH_GOLD;
+      } else if (reward.type === 'dejavu') {
+        run.dejavuEliteFree = true;
+      }
+      return run;
+    }
+
+    function getDeathMemory(run, nodeId) {
+      const d = state.player && state.player.memories && state.player.memories.deathBattle;
+      if (!d || !run || d.runSeed !== run.seed) return null;
+      return nodeId == null || d.nodeId === nodeId ? d : null;
+    }
+
+    function getNodeAttempts(run, nodeId) {
+      return (run && run.nodeAttempts && run.nodeAttempts[nodeId]) || 0;
+    }
+
+    /** 이번 런에서 이 노드에 처음 들어갈 때의 전장 seed. 이미 도전한 노드면 null(새 seed). */
+    function getPlannedBattleSeed(run, node) {
+      if (!run || !node || getNodeAttempts(run, node.id) > 0) return null;
+      const death = getDeathMemory(run, node.id);
+      if (death && death.battleSeed) return death.battleSeed;
+      const rng = SeedEngine.createRNG(`${run.seed}|${node.id}|battle`);
+      return `${node.sectorId}-${100000 + Math.floor(rng() * 900000)}`;
+    }
+
+    // 예지로 내용을 볼 수 있는 노드인가: 이전 런의 기억 또는 이번 런의 예지 카드
+    function isForeseenNode(run, nodeId) {
+      if (isRememberedNode(run, nodeId)) return 'memory';
+      if (run && run.foresight && Array.isArray(run.foresight.revealed) && run.foresight.revealed.includes(nodeId)) return 'card';
+      return null;
+    }
+
+    function useForesightCharge(nodeId) {
+      const run = state.run;
+      if (!run || !run.foresight || run.foresight.charges <= 0) return false;
+      if (isForeseenNode(run, nodeId)) return false;
+      run.foresight.charges -= 1;
+      run.foresight.revealed.push(nodeId);
+      addLog(`🔮 [예지] ${nodeId}의 앞날을 미리 보았다. (남은 예지 ${run.foresight.charges})`, 'gold');
+      saveGameState(true);
+      renderStrategyView();
+      return true;
+    }
+    window.useForesightCharge = useForesightCharge;
+
+    /**
+     * 노드 내용 미리 보기. 실제 전투와 같은 함수(템플릿 → 캐릭터 풀 → generateBattleMap → 보상)로 만들되
+     * 게임 state는 건드리지 않는다.
+     * @returns {Promise<{kind:string, enemies?:Array, rewards?:Array, title?:string, text?:string, offers?:Array, retry?:boolean, error?:string}>}
+     */
+    const nodePreviewCache = new Map();
+    async function previewNode(node) {
+      const run = state.run;
+      if (node.type === 'event') {
+        const ev = RunEngine.rollEvent(run, node);
+        return { kind: 'event', title: ev.title, text: ev.text };
+      }
+      if (node.type === 'shop') {
+        const offers = RunEngine.getShopOffers(run, node) || [];
+        return { kind: 'shop', offers };
+      }
+      const seed = getPlannedBattleSeed(run, node);
+      if (!seed) return { kind: 'battle', retry: true };
+      const key = `${run.seed}|${node.id}|${seed}`;
+      if (nodePreviewCache.has(key)) return nodePreviewCache.get(key);
+      const sector = WORLD_SECTORS[node.sectorId] || { id: node.sectorId };
+      const templateId = node.mapTemplateId || sector.mapTemplateId || sector.defaultTemplateId || MapSchema.resolveDefaultTemplateId(node.sectorId);
+      try {
+        const template = await loadTacticalMapTemplate(templateId);
+        await ensureCharacterPoolLoaded();
+        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type), sectorId: node.sectorId });
+        if (!map) throw new Error('전장 생성 실패');
+        const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1 }));
+        const rewards = MapSchema.generateEncounterRewards(seed, { enemyCount: enemies.length, type: node.type });
+        const res = { kind: 'battle', seed, enemies, rewards };
+        nodePreviewCache.set(key, res);
+        return res;
+      } catch (err) {
+        return { kind: 'battle', error: err?.message || String(err) };
+      }
+    }
+    window.previewNode = previewNode;
+
+    function describeRewards(rewards) {
+      return (rewards || []).map(r => r.type === 'gold' ? `${r.amount}G` : r.type === 'rewinder' ? `리와인더 ${r.amount}` : `${r.type} ${r.amount}`).join(' · ') || '없음';
+    }
+
+    // 전략맵 상세 패널: 선택한 노드의 예지/기시감 정보와 예지 카드 사용 버튼
+    let foresightRenderToken = 0;
+    function renderNodeForesight(node) {
+      const box = document.getElementById('strat-sector-detail-box');
+      if (!box) return;
+      let panel = document.getElementById('strat-node-foresight');
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.id = 'strat-node-foresight';
+        panel.className = 'strat-foresight';
+        box.appendChild(panel);
+      }
+      const run = state.run;
+      if (!node || !run) { panel.hidden = true; return; }
+      const how = isForeseenNode(run, node.id);
+      const death = getDeathMemory(run, node.id);
+      const charges = run.foresight ? run.foresight.charges : 0;
+      // 대사는 실제 기억(이전 런)에서만. 예지 카드로 본 노드는 처음 가는 곳이다.
+      const line = (how === 'memory' || death) ? getLoopLine(death ? 'deathNode' : 'rememberedNode', node.id) : '';
+      const head = [];
+      if (death && getNodeAttempts(run, node.id) === 0) head.push(`<div class="strat-foresight-death">☠️ 지난 생에서 여기서 쓰러졌다 — <b>기시감</b>: 적 배치를 보고 아군 배치를 고를 수 있다</div>`);
+      if (!how) {
+        panel.hidden = !(charges > 0 || head.length);
+        panel.innerHTML = head.join('') + (charges > 0
+          ? `<button type="button" class="strat-foresight-btn" onclick="useForesightCharge('${node.id}')">🔮 예지 사용 — 이 노드 미리 보기 (남은 ${charges})</button>`
+          : '');
+        return;
+      }
+      panel.hidden = false;
+      panel.innerHTML = head.join('') + `<div class="strat-foresight-title">${how === 'memory' ? '💭 기억나는 장소' : '🔮 예지'}</div>`
+        + (line ? `<div class="strat-foresight-line">${line}</div>` : '')
+        + `<div class="strat-foresight-body">불러오는 중…</div>`;
+      const token = ++foresightRenderToken;
+      previewNode(node).then(p => {
+        if (token !== foresightRenderToken) return; // 그 사이 다른 노드를 골랐다
+        const body = panel.querySelector('.strat-foresight-body');
+        if (!body) return;
+        if (p.error) { body.textContent = `미리 보기 실패: ${p.error}`; return; }
+        if (p.kind === 'event') { body.innerHTML = `<b>${p.title}</b><br/>${p.text || ''}`; return; }
+        if (p.kind === 'shop') { body.innerHTML = p.offers.length ? p.offers.map(o => `${o.label || o.name || o.id} (${o.cost}G)`).join('<br/>') : '판매 물품 없음'; return; }
+        if (p.retry) { body.textContent = '이미 한 번 들어갔던 전장이다. 다시 들어가면 전장이 달라져 앞을 볼 수 없다.'; return; }
+        body.innerHTML = `<div>적 ${p.enemies.length}명: ${p.enemies.map(e => `${e.avatar} ${e.name} Lv.${e.level}`).join(', ') || '없음'}</div><div>보상: ${describeRewards(p.rewards)}</div>`;
+      });
+    }
+
+    // ---- 기시감: 아군 배치 단계 ----------------------------------------------
+    function isDeployableTile(tile) {
+      if (!tile) return false;
+      const terrain = String(tile.terrain || tile.type || 'plain');
+      const spec = (typeof MapEditorController !== 'undefined' && MapEditorController.TERRAIN_SPECS) ? MapEditorController.TERRAIN_SPECS[terrain] : null;
+      if (spec && spec.passable === false) return false;
+      if (['sea', 'water', 'mountain'].includes(terrain)) return false;
+      const { height } = getBattleSize();
+      if (tile.y < Math.floor(height / 2)) return false; // 아군 진영(아래쪽 절반)
+      return !(state.enemyUnits || []).some(e => !e.isDead && e.x === tile.x && e.y === tile.y);
+    }
+
+    function getDeployPhase() {
+      const b = state && state.currentBattle;
+      return b && b.deployPhase && b.deployPhase.active ? b.deployPhase : null;
+    }
+
+    function startDeployPhase(battle, reason) {
+      const ids = (state.playerUnits || []).filter(u => u.isDeployed && isUnitAlive(u)).map(u => u.id);
+      if (!ids.length) return;
+      battle.deployPhase = { active: true, reason, unitIds: ids, selectedId: ids[0] };
+      const why = reason === 'death' ? '지난 생에 쓰러진 바로 그 전장이다' : '처음 보는 엘리트인데… 어디서 본 듯하다';
+      addLog(`👁️ [기시감] ${why}. 적 배치를 보고 아군 위치를 고르세요.`, 'gold');
+    }
+
+    function handleDeployClick(tile) {
+      const phase = getDeployPhase();
+      if (!phase) return false;
+      const own = (state.playerUnits || []).find(u => phase.unitIds.includes(u.id) && u.x === tile.x && u.y === tile.y);
+      if (own && own.id !== phase.selectedId) { phase.selectedId = own.id; renderAll(); return true; }
+      if (!isDeployableTile(tile)) {
+        addLog('🚫 [기시감] 아군 진영(아래쪽 절반)의 비어 있는 땅에만 배치할 수 있습니다.', 'warning');
+        return true;
+      }
+      const unit = state.playerUnits.find(u => u.id === phase.selectedId);
+      if (!unit) return true;
+      if (own && own !== unit) { own.x = unit.x; own.y = unit.y; } // 같은 칸의 아군과 자리 교환
+      unit.x = tile.x;
+      unit.y = tile.y;
+      const idx = phase.unitIds.indexOf(unit.id);
+      phase.selectedId = phase.unitIds[(idx + 1) % phase.unitIds.length];
+      renderAll();
+      return true;
+    }
+
+    function finishDeployPhase() {
+      const phase = getDeployPhase();
+      if (!phase) return;
+      phase.active = false;
+      document.getElementById('deploy-phase-banner')?.remove();
+      addLog('⚔️ [기시감] 배치 완료. 이번에는 다르게 간다.', 'gold');
+      renderAll();
+      saveGameState(true);
+    }
+    window.finishDeployPhase = finishDeployPhase;
+
+    function selectDeployUnit(id) {
+      const phase = getDeployPhase();
+      if (phase && phase.unitIds.includes(id)) { phase.selectedId = id; renderAll(); }
+    }
+    window.selectDeployUnit = selectDeployUnit;
+
+    // renderGrid() 직후: 배치 가능한 칸 표시
+    function decorateDeployPhase(mapEl) {
+      const phase = getDeployPhase();
+      if (!phase || !mapEl) return;
+      [...mapEl.children].forEach(el => {
+        const x = Number(el.dataset.x), y = Number(el.dataset.y);
+        if (Number.isNaN(x) || Number.isNaN(y)) return;
+        if (isDeployableTile(getTile(x, y))) el.classList.add('deploy-valid');
+        const sel = state.playerUnits.find(u => u.id === phase.selectedId);
+        if (sel && sel.x === x && sel.y === y) el.classList.add('deploy-selected');
+      });
+    }
+
+    function renderDeployBanner() {
+      const phase = state && state.currentView !== 'STRATEGY' ? getDeployPhase() : null;
+      let el = document.getElementById('deploy-phase-banner');
+      if (!phase) { if (el) el.remove(); return; }
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'deploy-phase-banner';
+        el.className = 'deploy-banner';
+        document.body.appendChild(el);
+      }
+      const units = state.playerUnits.filter(u => phase.unitIds.includes(u.id));
+      el.innerHTML = `
+        <div class="deploy-banner-title">👁️ 기시감 — 적 배치를 보고 아군 위치를 고르세요</div>
+        <div class="deploy-banner-units">${units.map(u => `<button type="button" class="deploy-chip${u.id === phase.selectedId ? ' is-selected' : ''}" onclick="selectDeployUnit('${u.id}')">${u.avatar || '👤'} ${u.name}</button>`).join('')}</div>
+        <div class="deploy-banner-hint">대원을 고른 뒤 아래쪽 절반의 빈 칸을 누르세요.</div>
+        <button type="button" class="deploy-banner-done" onclick="finishDeployPhase()">배치 완료</button>`;
+    }
+
+    // ---- 잔향 ---------------------------------------------------------------
+    function applyEchoAtBattleStart() {
+      const run = state.run;
+      if (!run || !run.echo || run.echo.used) return;
+      run.echo.used = true; // 다음 런 "첫 전투" 한 번뿐
+      const unit = (state.playerUnits || []).find(u => u.isDeployed && isUnitAlive(u) && getCharacterId(u) === String(run.echo.characterId));
+      if (!unit) {
+        addLog(`🕯️ [잔향] ${run.echo.name}의 기억이 희미해졌다… (첫 전투에 출전하지 않았다)`, 'system');
+        return;
+      }
+      const base = Number(unit.baseAP) || 2;
+      unit.ap = base * 2;
+      unit.echoActive = true;
+      addLog(`💀 [잔향] "죽음을 기억해." — ${unit.name}, 첫 턴 행동 한 번 더 (AP ${unit.ap})`, 'capture');
+      showLoopLine(unit, '…이번엔 내가 먼저 움직인다.');
+    }
+
+    // ---- 회귀 횟수에 따라 바뀌는 대사 ---------------------------------------------
+    const LOOP_LINES = {
+      battleStart: [
+        ['적이다. 대열을 갖춰라!', '시작하자. 다들 준비됐지?'],
+        ['…이 장면, 어디서 본 것 같은데.', '이상하네. 저 깃발, 처음 보는 게 아닌 것 같아.'],
+        ['또 이 바람 냄새야. 왜 다들 처음 보는 얼굴이지?', '저 녀석, 오른쪽으로 돌아 들어올 거야. …내가 그걸 어떻게 알지?'],
+        ['몇 번째인지 이제 세지도 않아. 이번엔… 끝까지 가자.', '괜찮아. 어떻게 끝나는지 알아. 그러니까 바꿀 수도 있어.']
+      ],
+      rememberedNode: [
+        [''],
+        ['이 길… 와 본 적 있어.'],
+        ['여기서 무슨 일이 있었는지, 손이 먼저 기억해.'],
+        ['이 길 끝에 뭐가 있는지 알아. 몇 번이고 봤으니까.']
+      ],
+      deathNode: [
+        [''],
+        ['…여기야. 여기서 다 끝났었어.'],
+        ['여기서 몇 번이나 쓰러졌지. 이번엔 다르게 서자.'],
+        ['이 전장의 끝을 알아. 그러니 처음부터 다시 짠다.']
+      ]
+    };
+    function getLoopTier() {
+      const n = Number(state && state.player && state.player.loopCount) || 0;
+      return n === 0 ? 0 : n <= 2 ? 1 : n <= 5 ? 2 : 3;
+    }
+    function getLoopLine(context, salt = '') {
+      const pool = (LOOP_LINES[context] || [])[getLoopTier()] || [];
+      if (!pool.length) return '';
+      const rng = SeedEngine.createRNG(`${context}|${salt}|${state.player ? state.player.loopCount : 0}`);
+      return pool[Math.floor(rng() * pool.length)];
+    }
+
+    // 대사는 차례대로 하나씩 보여 준다 (잔향 대사와 전투 시작 대사가 겹치지 않게).
+    const loopLineQueue = [];
+    let loopLineBusy = false;
+    function showLoopLine(unit, text) {
+      if (!text) return;
+      loopLineQueue.push({ unit, text });
+      if (!loopLineBusy) playNextLoopLine();
+    }
+    function playNextLoopLine() {
+      const next = loopLineQueue.shift();
+      if (!next) { loopLineBusy = false; return; }
+      loopLineBusy = true;
+      const { unit, text } = next;
+      addLog(`💬 ${unit ? unit.name : ''}: "${text}"`, 'system');
+      let el = document.getElementById('loop-line');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'loop-line';
+        el.className = 'loop-line';
+        document.body.appendChild(el);
+      }
+      el.innerHTML = `${unit ? `<b>${unit.avatar || ''} ${unit.name}</b>` : ''}<span>“${text}”</span>`;
+      el.classList.remove('is-visible');
+      void el.offsetWidth;
+      el.classList.add('is-visible');
+      setTimeout(() => {
+        el.classList.remove('is-visible');
+        setTimeout(playNextLoopLine, 350);
+      }, 3200);
+    }
+
+    function speakBattleStartLine(battle) {
+      const deployed = (state.playerUnits || []).filter(u => u.isDeployed && isUnitAlive(u));
+      if (!deployed.length) return;
+      const rng = SeedEngine.createRNG(`${battle.seed}|speaker`);
+      const speaker = deployed[Math.floor(rng() * deployed.length)];
+      showLoopLine(speaker, getLoopLine('battleStart', battle.seed));
+    }
+
+    // ---- 회귀 카드 선택 화면 -------------------------------------------------
+    function openLoopRewardSelect(runSeed) {
+      return new Promise(resolve => {
+        const cards = drawLoopRewardCards(runSeed, state.player.loopCount);
+        const { card } = rbdModal('modal-loop-reward', '#a78bfa');
+        card.innerHTML = `
+          <div class="rbd-icon">🔁</div>
+          <h2 class="rbd-title" style="color:#c4b5fd;">회귀의 대가</h2>
+          <p class="rbd-text">회귀 ${state.player.loopCount}회차. 무엇을 가지고 돌아갈지 하나만 고르세요.<br/>모두 <b>이번 런 한정</b>입니다. 다시 회귀하면 사라집니다.</p>
+          <div class="rbd-cards">${cards.map(c => `
+            <button type="button" class="rbd-reward-card" data-card="${c.id}">
+              <span class="rbd-reward-icon">${c.icon}</span>
+              <b>${c.name}</b>
+              <small>${c.desc}</small>
+            </button>`).join('')}
+          </div>`;
+        card.querySelectorAll('[data-card]').forEach(btn => {
+          btn.onclick = async () => {
+            const type = btn.dataset.card;
+            document.getElementById('modal-loop-reward')?.remove();
+            if (type === 'command') {
+              const characterId = await openCommandBonusSelect();
+              resolve({ type, characterId, def: 1 });
+            } else {
+              resolve({ type });
+            }
+          };
+        });
+      });
+    }
+    window.openLoopRewardSelect = openLoopRewardSelect;
 
     /**
      * 12단계: 전투 결과 처리의 단일 진입점.

@@ -5367,3 +5367,31 @@
 .rbd-fx{position:fixed;inset:0;z-index:100001;pointer-events:all;background:transparent}
 .rbd-fx-flash{position:absolute;inset:0;background:#fff;opacity:0}
 @media (prefers-reduced-motion: reduce){.rbd-fx-flash{display:none}}
+
+/* 회귀 보상: 카드 선택 · 예지 · 기시감 배치 · 대사 */
+.rbd-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px}
+.rbd-reward-card{display:flex;flex-direction:column;align-items:center;gap:4px;padding:12px 6px;border-radius:12px;background:#1e293b;border:1px solid #334155;color:#f1f5f9;font:inherit;cursor:pointer;min-height:132px}
+.rbd-reward-card:hover,.rbd-reward-card:focus-visible{border-color:#a78bfa;background:#272548;outline:none;transform:translateY(-2px)}
+.rbd-reward-card b{font-size:14px}
+.rbd-reward-card small{font-size:11px;line-height:1.4;color:#94a3b8}
+.rbd-reward-icon{font-size:28px;line-height:1}
+@media (max-width:420px){.rbd-cards{grid-template-columns:1fr}.rbd-reward-card{min-height:0;flex-direction:row;text-align:left;gap:10px}.rbd-reward-card small{flex:1}}
+.strat-foresight{margin-top:10px;padding:10px;border-radius:10px;background:#f5f3ff;border:1px solid #ddd6fe;font-size:12px;color:#3b0764;line-height:1.5}
+.strat-foresight[hidden]{display:none}
+.strat-foresight-title{font-weight:900;margin-bottom:2px}
+.strat-foresight-line{font-style:italic;color:#6d28d9;margin-bottom:4px}
+.strat-foresight-death{font-weight:700;color:#991b1b;margin-bottom:6px}
+.strat-foresight-btn{width:100%;padding:8px;border-radius:8px;border:1px solid #8b5cf6;background:#ede9fe;color:#5b21b6;font-weight:800;cursor:pointer}
+.strat-foresight-btn:hover{background:#ddd6fe}
+.deploy-banner{position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:9500;width:min(420px,calc(100vw - 32px));padding:10px 12px;border-radius:12px;background:rgba(15,23,42,.94);border:1px solid #a78bfa;color:#f8fafc;box-shadow:0 10px 24px rgba(0,0,0,.35);text-align:center}
+.deploy-banner-title{font-size:12px;font-weight:900;color:#c4b5fd;margin-bottom:6px}
+.deploy-banner-units{display:flex;flex-wrap:wrap;gap:4px;justify-content:center;margin-bottom:4px}
+.deploy-chip{padding:4px 8px;border-radius:999px;border:1px solid #475569;background:#1e293b;color:#e2e8f0;font-size:11px;cursor:pointer}
+.deploy-chip.is-selected{border-color:#a78bfa;background:#4c1d95;color:#fff}
+.deploy-banner-hint{font-size:10px;color:#94a3b8;margin-bottom:6px}
+.deploy-banner-done{width:100%;padding:7px;border-radius:8px;border:none;background:#7c3aed;color:#fff;font-weight:800;cursor:pointer}
+#grid-map .tile.deploy-valid{box-shadow:inset 0 0 0 2px rgba(139,92,246,.55)}
+#grid-map .tile.deploy-selected{box-shadow:inset 0 0 0 3px #f59e0b}
+.loop-line{position:fixed;left:50%;bottom:70px;transform:translate(-50%,8px);z-index:9400;max-width:min(380px,calc(100vw - 32px));padding:8px 12px;border-radius:12px;background:rgba(15,23,42,.9);color:#f1f5f9;font-size:12px;line-height:1.5;opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;display:flex;flex-direction:column;gap:2px}
+.loop-line.is-visible{opacity:1;transform:translate(-50%,0)}
+.loop-line b{font-size:11px;color:#c4b5fd}
