@@ -17,7 +17,7 @@ Vercel 배포에 맞춘 정적 Web-SLG 프로젝트입니다.
 3. `supabase-config.js`의 `url`, `anonKey`를 프로젝트 API 설정값으로 교체합니다. 브라우저에는 `anon`/publishable key만 사용하고 `service_role` key는 절대 넣지 않습니다.
 4. Vercel에 재배포합니다.
 
-캐릭터(`characters`), 스킬(`skills`), 게임 설정(`game_configs`), 전술 맵 템플릿(`tacticalMapTemplates`), 게임 세이브(`gameState`)는 모두 `slg_records` 테이블에 `collection_name`으로 구분되어 저장됩니다. 전투 진입(`enterEncounter`)과 맵 에디터는 둘 다 `tacticalMapTemplates`만 사용하며, 템플릿이 없으면 기본맵으로 대체하지 않고 실패합니다. (이전 버전이 `scenarioMaps`와 `game_configs/world_sectors`에 저장해 둔 맵은 읽기 전용 마이그레이션 경로로만 조회됩니다. 에디터에서 한 번 저장하면 `tacticalMapTemplates`로 옮겨집니다.) 캐릭터·스킬 이미지는 `slg-assets` Storage 버킷에 업로드됩니다. 현재 데이터 구조는 전역 공유 운영자용이므로, 공개 읽기/쓰기 정책을 적용합니다. 여러 사용자의 비공개 계정으로 운영할 때는 RLS 정책을 사용자별로 변경해야 합니다.
+캐릭터(`characters`), 스킬(`skills`), 게임 설정(`game_configs`), 전술 맵 템플릿(`tacticalMapTemplates`), 게임 세이브(`gameState`)는 모두 `slg_records` 테이블에 `collection_name`으로 구분되어 저장됩니다. 전투 진입(`enterEncounter`)과 맵 에디터는 둘 다 `tacticalMapTemplates`만 사용하며, 템플릿이 없으면 기본맵으로 대체하지 않고 실패합니다. (이전 버전이 `scenarioMaps`와 `game_configs/world_sectors`의 `scenarioMap`에 저장해 둔 맵은 더 이상 조회하지 않습니다. 브라우저 콘솔에서 `await migrateScenarioMaps()`로 옮길 대상을 미리 보고, `await migrateScenarioMaps({ dryRun:false })`로 `tacticalMapTemplates`에 복사합니다. 자동 실행되지 않으며 원본은 지우지 않습니다. 개발 모드(localhost 또는 `?dev`)에서는 에디터 저장 직후 다시 불러와 내용이 같은지 확인합니다.) 캐릭터·스킬 이미지는 `slg-assets` Storage 버킷에 업로드됩니다. 현재 데이터 구조는 전역 공유 운영자용이므로, 공개 읽기/쓰기 정책을 적용합니다. 여러 사용자의 비공개 계정으로 운영할 때는 RLS 정책을 사용자별로 변경해야 합니다.
 
 ## 로컬 실행
 
