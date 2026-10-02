@@ -1402,6 +1402,45 @@
         || (typeof SAMPLE_CLASS_IMAGES !== 'undefined' ? SAMPLE_CLASS_IMAGES[unit.classType] : '') || '';
     }
 
+    /* --------------------------------------------------------------------------
+       공통 초상화(얼굴 크롭) — 맵 타일·선택 카드·출전 명부·가챠·캐릭터 목록이 모두 이 함수를 쓴다.
+       전신 일러스트를 background로 확대해 얼굴 부분만 보여준다(찌그러짐 없음).
+       캐릭터별 보정: char.portraitFocus = { x, y, zoom } (x/y: background-position %, zoom: 가로 배율)
+       -------------------------------------------------------------------------- */
+    const DEFAULT_PORTRAIT_FOCUS = { x: 50, y: 6, zoom: 2.2 };
+
+    function getPortraitFocus(char) {
+      const f = char?.portraitFocus || {};
+      const num = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+      return {
+        x: num(f.x, DEFAULT_PORTRAIT_FOCUS.x),
+        y: num(f.y, DEFAULT_PORTRAIT_FOCUS.y),
+        zoom: Math.max(1, num(f.zoom, DEFAULT_PORTRAIT_FOCUS.zoom))
+      };
+    }
+
+    /**
+     * @param {Object} char - 유닛 또는 캐릭터 레코드 (imageUrl, classType/unitClass, avatar, portraitFocus)
+     * @param {Object} [opts]
+     * @param {string} [opts.emojiSize] - 이미지가 없을 때 이모지 font-size (예: '20px')
+     * @param {string} [opts.className] - 추가 클래스
+     */
+    function renderPortrait(char, opts = {}) {
+      const cls = char?.classType || char?.unitClass;
+      const url = (char?.imageUrl || customClassImages[cls] || '').trim();
+      const name = escapeGachaHtml(char?.name || '');
+      const extra = opts.className ? ` ${opts.className}` : '';
+      if (!url) {
+        const avatar = char?.avatar || (typeof CLASS_META !== 'undefined' && CLASS_META[cls] ? CLASS_META[cls].avatar : '') || '👤';
+        const size = opts.emojiSize ? ` style="font-size:${opts.emojiSize};"` : '';
+        return `<span class="portrait-emoji${extra}"${size}>${escapeGachaHtml(avatar)}</span>`;
+      }
+      const f = getPortraitFocus(char);
+      const cssUrl = url.replace(/["\\\n\r]/g, c => encodeURIComponent(c));
+      const style = `background-image:url("${cssUrl}");background-size:${f.zoom * 100}% auto;background-position:${f.x}% ${f.y}%;`;
+      return `<div class="portrait-crop${extra}" role="img" aria-label="${name}" style="${escapeGachaHtml(style)}"></div>`;
+    }
+
     // 유닛에 대사가 없으면(구버전 유닛) 원본 캐릭터 레코드의 대사를 쓴다.
     function pickUnitLine(unit, situation, vars = {}) {
       if (!window.DialogueLines) return '';
@@ -1711,6 +1750,7 @@
               x: defender.x,
               y: defender.y,
               imageUrl: defender.imageUrl || '',
+              portraitFocus: defender.portraitFocus,
               dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
               isInactivated: false,
               isDead: false,
@@ -1840,6 +1880,7 @@
               x: defender.x,
               y: defender.y,
               imageUrl: defender.imageUrl || '',
+              portraitFocus: defender.portraitFocus,
               dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
               isInactivated: false,
               isDead: false,
@@ -2723,12 +2764,7 @@
 
           const uDiv = document.createElement('div');
           uDiv.className = `unit-avatar unit-player ${pUnits.length > 1 ? 'stacked-card' : ''}`;
-          const customImg = topUnit.imageUrl || customClassImages[topUnit.classType];
-          if (customImg) {
-            uDiv.innerHTML = `<img src="${customImg}" class="unit-avatar-img" alt="${topUnit.name}" />`;
-          } else {
-            uDiv.textContent = topUnit.avatar;
-          }
+          uDiv.innerHTML = renderPortrait(topUnit, { className: 'unit-avatar-img' });
 
           // 클래스 뱃지
           const badge = document.createElement('span');
@@ -2774,12 +2810,7 @@
 
           const uDiv = document.createElement('div');
           uDiv.className = `unit-avatar unit-enemy ${eUnits.length > 1 ? 'stacked-card' : ''}`;
-          const customEnemyImg = topUnit.imageUrl || customClassImages[topUnit.classType];
-          if (customEnemyImg) {
-            uDiv.innerHTML = `<img src="${customEnemyImg}" class="unit-avatar-img" alt="${topUnit.name}" />`;
-          } else {
-            uDiv.textContent = topUnit.avatar;
-          }
+          uDiv.innerHTML = renderPortrait(topUnit, { className: 'unit-avatar-img' });
 
           const badge = document.createElement('span');
           badge.className = 'unit-class-badge';
@@ -3114,12 +3145,7 @@
       const cardAvatar = document.getElementById('card-avatar');
       if (cardAvatar) {
         cardAvatar.classList.add('char-main-portrait');
-        const customImg = unit.imageUrl || customClassImages[unit.classType];
-        if (customImg && customImg.trim() !== '') {
-          cardAvatar.innerHTML = `<img src="${customImg}" class="character-image card-avatar-img hero-card-img" alt="${unit.name}" loading="lazy" style="width:100%; height:100%; object-fit:contain; object-position:center bottom; display:block;" onerror="this.onerror=null; this.parentElement.innerHTML='<span style=\\'font-size:28px; line-height:1;\\'>${unit.avatar || '🛡️'}</span>';" />`;
-        } else {
-          cardAvatar.innerHTML = `<span style="font-size: 30px; line-height: 1;">${unit.avatar || '⚔️'}</span>`;
-        }
+        cardAvatar.innerHTML = renderPortrait(unit, { emojiSize: '30px' });
       }
       document.getElementById('card-name').textContent = unit.name;
       document.getElementById('card-level').textContent = `Lv.${unit.level}`;
@@ -3884,11 +3910,7 @@
     }
 
     function getGachaAvatarHtml(charObj) {
-      const name = escapeGachaHtml(charObj?.name || '영웅');
-      if (charObj?.imageUrl) return `<img src="${escapeGachaHtml(charObj.imageUrl)}" alt="${name}" />`;
-      const cls = charObj?.unitClass || charObj?.classType || 'KNIGHT';
-      const avatar = charObj?.avatar || ((typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls].avatar : '👤');
-      return `<span>${escapeGachaHtml(avatar)}</span>`;
+      return renderPortrait(charObj);
     }
 
     function renderGachaCharacterCard(charObj, extraClass = '') {
@@ -4273,9 +4295,7 @@
               totalUpkeep += uUpkeep;
             }
 
-            const avatarContent = u.imageUrl 
-              ? `<img src="${u.imageUrl}" alt="${u.name}" style="width: 100%; height: 100%; object-fit: cover;" />`
-              : `<span style="font-size: 15px;">${u.avatar || clsMeta.avatar || '👤'}</span>`;
+            const avatarContent = renderPortrait(u, { emojiSize: '15px' });
 
             return `
               <div class="strat-char-roster-item ${isSelected ? 'is-selected' : 'is-benched'}" title="${u.name} (클릭 시 출전 선택/해제)" onclick="toggleDeployUnitSelection('${u.id}')" role="checkbox" aria-checked="${isSelected}" tabindex="0">
@@ -5365,6 +5385,7 @@
        -------------------------------------------------------------------------- */
     const CUSTOM_CHARACTERS_STORAGE_KEY = 'slg_custom_created_characters';
     let createCharImageDataUrl = '';
+    let createCharPortraitFocus = null; // 생성 폼 초상화 얼굴 위치 (openNewCharacterPortraitEditor)
     let createCharDialogueEditor = null; // 생성 탭 상황별 대사 편집기 (DialogueLines.mountEditor)
 
     // 병과 선택 변경 시 기본 스탯, 추천 고유 스킬 및 실루엣 자동 동기화
@@ -5449,6 +5470,7 @@
     }
 
     function setNewCharacterImage(dataUrlOrUrl) {
+      if (dataUrlOrUrl !== createCharImageDataUrl) createCharPortraitFocus = null;
       createCharImageDataUrl = dataUrlOrUrl;
       const previewImg = document.getElementById('create-char-preview-img');
       const placeholder = document.getElementById('create-char-preview-placeholder');
@@ -5471,6 +5493,7 @@
 
     function clearCustomCharImage() {
       createCharImageDataUrl = '';
+      createCharPortraitFocus = null;
       const previewImg = document.getElementById('create-char-preview-img');
       const placeholder = document.getElementById('create-char-preview-placeholder');
       const urlInput = document.getElementById('create-char-img-url');
@@ -5627,6 +5650,7 @@
         x: spawnX,
         y: spawnY,
         imageUrl: finalImageUrl,
+        portraitFocus: createCharPortraitFocus || undefined,
         dialogues: dialogues,
         isInactivated: false,
         isDead: false,
@@ -5737,7 +5761,7 @@
         const skillSummary = c.customSkill
           ? `🌟 ${c.customSkill.name}${tree.length ? ` · 트리 ${tree.length}개` : ''}`
           : `🌳 트리 ${tree.length}개 노드${starts.length ? ` · 시작: ${starts.join(', ')}` : ''}`;
-        const imgDisplay = c.imageUrl ? `<img src="${c.imageUrl}" style="width: 100%; height: 100%; object-fit: cover; border-radius: 8px;" alt="${c.name}" />` : `<span style="font-size: 20px;">${c.avatar || meta.icon}</span>`;
+        const imgDisplay = renderPortrait({ ...c, avatar: c.avatar || meta.icon }, { emojiSize: '20px' });
 
         return `
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); gap: 10px;">
@@ -5765,6 +5789,9 @@
               </button>
               <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #db2777;" onclick="openCharacterDialogueEditor('${c.id}')" title="상황별 대사 편집">
                 💬 대사
+              </button>
+              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0d9488;" onclick="openCharacterPortraitEditor('${c.id}')" title="초상화 얼굴 위치 편집">
+                🎯 얼굴
               </button>
               <button class="btn-cheat purple" style="font-size: 9px; padding: 4px 7px;" onclick="spawnSavedCustomCharacter('${c.id}')" title="현재 전장에 이 캐릭터를 추가 배치합니다.">
                 소환
@@ -5816,6 +5843,7 @@
         x: o.x,
         y: o.y,
         imageUrl: target.imageUrl || '',
+        portraitFocus: target.portraitFocus ? clone(target.portraitFocus) : undefined,
         dialogues: target.dialogues ? clone(target.dialogues) : undefined,
         isInactivated: false,
         isDead: false,
@@ -6186,6 +6214,150 @@
       };
     }
     window.openCharacterDialogueEditor = openCharacterDialogueEditor;
+
+    /* --------------------------------------------------------------------------
+       초상화 얼굴 크롭 편집기 — 드래그로 위치, 휠/슬라이더로 확대.
+       결과 { x, y, zoom }을 onSave로 넘긴다 (renderPortrait의 portraitFocus 형식).
+       -------------------------------------------------------------------------- */
+    const PORTRAIT_ZOOM_MIN = 1;
+    const PORTRAIT_ZOOM_MAX = 5;
+
+    function openPortraitCropEditor(char, onSave) {
+      const url = (char?.imageUrl || customClassImages[char?.classType || char?.unitClass] || '').trim();
+      if (!url) {
+        addLog('🖼️ 일러스트가 없는 캐릭터는 얼굴 위치를 조정할 수 없습니다.', 'system');
+        return;
+      }
+      document.getElementById('portrait-crop-modal')?.remove();
+
+      let focus = getPortraitFocus(char);
+      let ratio = 1.5; // 이미지 세로/가로 비율 — 로드 후 실제 값으로 갱신
+
+      const overlay = document.createElement('div');
+      overlay.id = 'portrait-crop-modal';
+      overlay.className = 'sk-modal-overlay';
+      overlay.innerHTML = `
+        <div class="sk-modal pc-modal">
+          <div class="sk-modal-head"><span></span><button class="btn-close" data-close>✕</button></div>
+          <div class="sk-modal-body">
+            <div class="pc-editor">
+              <div class="pc-stage" data-stage><div class="pc-guide"></div></div>
+              <div class="pc-side">
+                <div class="pc-hint">드래그로 얼굴 위치를 옮기고, 휠이나 슬라이더로 확대합니다.</div>
+                <label class="pc-zoom">🔍 확대
+                  <input type="range" min="${PORTRAIT_ZOOM_MIN}" max="${PORTRAIT_ZOOM_MAX}" step="0.05" data-zoom />
+                  <span data-zoom-val></span>
+                </label>
+                <div class="pc-previews">
+                  <div class="pc-prev-item"><div class="pc-prev pc-prev-tile" data-prev></div><span>맵 타일</span></div>
+                  <div class="pc-prev-item"><div class="pc-prev pc-prev-card" data-prev></div><span>선택 카드</span></div>
+                  <div class="pc-prev-item"><div class="pc-prev pc-prev-roster" data-prev></div><span>명부</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="sk-modal-foot">
+            <button class="btn-cheat" style="background:#64748b; margin-right:auto;" data-reset>↺ 기본값</button>
+            <button class="btn-cheat" style="background:#64748b;" data-close>닫기</button>
+            <button class="btn-cheat purple" data-save>💾 저장</button>
+          </div>
+        </div>`;
+      overlay.querySelector('.sk-modal-head span').textContent = `🎯 ${char.name || '캐릭터'} — 초상화 얼굴 위치`;
+      document.body.appendChild(overlay);
+
+      const stage = overlay.querySelector('[data-stage]');
+      const zoomInput = overlay.querySelector('[data-zoom]');
+      const zoomVal = overlay.querySelector('[data-zoom-val]');
+      const views = [stage, ...overlay.querySelectorAll('[data-prev]')];
+      const cssUrl = url.replace(/["\\\n\r]/g, c => encodeURIComponent(c));
+      views.forEach(v => { v.style.backgroundImage = `url("${cssUrl}")`; });
+
+      const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+      const paint = () => {
+        views.forEach(v => {
+          v.style.backgroundSize = `${focus.zoom * 100}% auto`;
+          v.style.backgroundPosition = `${focus.x}% ${focus.y}%`;
+        });
+        zoomInput.value = focus.zoom;
+        zoomVal.textContent = `${focus.zoom.toFixed(2)}x`;
+      };
+      paint();
+
+      const img = new Image();
+      img.onload = () => { if (img.naturalWidth) ratio = img.naturalHeight / img.naturalWidth; };
+      img.src = url;
+
+      // 드래그: background-position %는 (틀 크기 - 이미지 크기) 대비 비율이므로 픽셀 이동량을 그 비율로 환산
+      let drag = null;
+      stage.addEventListener('pointerdown', (e) => {
+        drag = { px: e.clientX, py: e.clientY, x: focus.x, y: focus.y };
+        stage.setPointerCapture(e.pointerId);
+        stage.classList.add('dragging');
+      });
+      stage.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        const w = stage.clientWidth, h = stage.clientHeight;
+        const imgW = focus.zoom * w, imgH = imgW * ratio;
+        if (imgW > w) focus.x = clamp(drag.x - (e.clientX - drag.px) / (imgW - w) * 100, 0, 100);
+        if (imgH > h) focus.y = clamp(drag.y - (e.clientY - drag.py) / (imgH - h) * 100, 0, 100);
+        paint();
+      });
+      const endDrag = () => { drag = null; stage.classList.remove('dragging'); };
+      stage.addEventListener('pointerup', endDrag);
+      stage.addEventListener('pointercancel', endDrag);
+      stage.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        focus.zoom = clamp(focus.zoom * (e.deltaY < 0 ? 1.08 : 1 / 1.08), PORTRAIT_ZOOM_MIN, PORTRAIT_ZOOM_MAX);
+        paint();
+      }, { passive: false });
+      zoomInput.addEventListener('input', () => {
+        focus.zoom = clamp(Number(zoomInput.value), PORTRAIT_ZOOM_MIN, PORTRAIT_ZOOM_MAX);
+        paint();
+      });
+
+      const close = () => overlay.remove();
+      overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      overlay.querySelector('[data-reset]').onclick = () => { focus = { ...DEFAULT_PORTRAIT_FOCUS }; paint(); };
+      overlay.querySelector('[data-save]').onclick = () => {
+        onSave({
+          x: Math.round(focus.x * 10) / 10,
+          y: Math.round(focus.y * 10) / 10,
+          zoom: Math.round(focus.zoom * 100) / 100
+        });
+        close();
+      };
+    }
+
+    // 보관함 캐릭터의 얼굴 위치 편집 (저장 시 클라우드 레코드와 전장의 같은 캐릭터에 반영)
+    function openCharacterPortraitEditor(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record) return;
+      openPortraitCropEditor(record, (focus) => {
+        record.portraitFocus = focus;
+        if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+        [...(state.playerUnits || []), ...(state.enemyUnits || [])].forEach(u => {
+          if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+          u.portraitFocus = { ...focus };
+        });
+        saveGameState(true);
+        renderAll();
+        renderCustomCharactersList();
+        addLog(`🎯 [초상화] ${record.name}의 얼굴 위치를 저장했습니다.`, 'gold');
+      });
+    }
+    window.openCharacterPortraitEditor = openCharacterPortraitEditor;
+
+    // 생성 폼: 아직 저장 전인 캐릭터의 얼굴 위치
+    function openNewCharacterPortraitEditor() {
+      const name = document.getElementById('create-char-name')?.value?.trim() || '새 캐릭터';
+      const classType = document.getElementById('create-char-class')?.value || 'KNIGHT';
+      openPortraitCropEditor(
+        { name, classType, imageUrl: createCharImageDataUrl, portraitFocus: createCharPortraitFocus },
+        (focus) => { createCharPortraitFocus = focus; }
+      );
+    }
+    window.openNewCharacterPortraitEditor = openNewCharacterPortraitEditor;
 
     function initCustomCharCreationForm() {
       setupCustomCharDropzone();

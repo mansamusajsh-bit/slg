@@ -2008,9 +2008,97 @@
     }
 
     .char-main-portrait:hover .character-image,
-    .char-main-portrait:hover img {
+    .char-main-portrait:hover img,
+    .char-main-portrait:hover .portrait-crop {
       transform: scale(1.04);
     }
+
+    /* 공통 초상화 (game.js renderPortrait) — 전신 일러스트를 얼굴 위주로 크롭 */
+    .portrait-crop {
+      width: 100%;
+      height: 100%;
+      background-repeat: no-repeat;
+      border-radius: inherit;
+      flex-shrink: 0;
+      pointer-events: none;
+      transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    .portrait-emoji {
+      line-height: 1;
+    }
+    .char-main-portrait .portrait-crop {
+      border-radius: 10px;
+    }
+    .rbd-row-avatar .portrait-crop {
+      width: 28px;
+      height: 28px;
+      border-radius: 6px;
+    }
+
+    /* 초상화 얼굴 크롭 편집기 (game.js openPortraitCropEditor) */
+    .pc-modal { max-width: 520px; }
+    .pc-editor {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+    .pc-stage,
+    .pc-prev {
+      background-color: #f1f5f9;
+      background-repeat: no-repeat;
+      border: 1px solid #cbd5e1;
+    }
+    .pc-stage {
+      position: relative;
+      width: 220px;
+      height: 220px;
+      max-width: 100%;
+      border-radius: 14px;
+      cursor: grab;
+      touch-action: none;
+      user-select: none;
+      flex-shrink: 0;
+    }
+    .pc-stage.dragging { cursor: grabbing; }
+    .pc-guide {
+      position: absolute;
+      inset: 18%;
+      border: 1.5px dashed rgba(255, 255, 255, 0.85);
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
+      pointer-events: none;
+    }
+    .pc-side {
+      flex: 1;
+      min-width: 180px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pc-hint { font-size: 11px; color: #64748b; line-height: 1.4; }
+    .pc-zoom {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 800;
+      color: #334155;
+    }
+    .pc-zoom input { flex: 1; min-width: 0; }
+    .pc-zoom span { width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
+    .pc-previews { display: flex; gap: 10px; align-items: flex-end; }
+    .pc-prev-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      font-size: 9.5px;
+      color: #64748b;
+    }
+    .pc-prev-tile { width: 44px; height: 44px; border-radius: 9px; }
+    .pc-prev-card { width: 76px; height: 96px; border-radius: 12px; }
+    .pc-prev-roster { width: 30px; height: 30px; border-radius: 6px; }
 
     /* ==========================================================================
        Character Image Customization & DEV Manager
