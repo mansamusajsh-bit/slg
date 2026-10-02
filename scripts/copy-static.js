@@ -11,9 +11,11 @@ const STATIC_FILES = [
   'seedEngine.js',
   'mapSchema.js',
   'runEngine.js',
+  'campaignRegions.js',
   'config.js',
   'skillEngine.js',
   'skillEditor.js',
+  'dialogueLines.js',
   'skill-system.css',
   'ui.js',
   'game.js',
@@ -24,7 +26,7 @@ const STATIC_FILES = [
 ];
 
 // 폴더 단위로 복사 (DEV 에디터 모듈은 import()로 지연 로드)
-const STATIC_DIRS = ['editors'];
+const STATIC_DIRS = ['editors', 'audio'];
 
 export function copyStaticFiles() {
   if (!existsSync(OUT_DIR)) {

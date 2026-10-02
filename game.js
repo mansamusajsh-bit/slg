@@ -495,16 +495,21 @@
       run.encounterSeq = 0;
       run.nodeAttempts = {};
       run.echo = null;
+      // 작전지도: 지도 형태(campaignRegions.js)는 고정, 회차별 구역 상태만 여기 둔다. 시작 구역 하나만 available.
+      run.campaign = createCampaignState();
+      // 진행 중인 전술 전투. run 아래에 있으므로 회귀(새 run)와 함께 사라진다.
+      run.currentBattle = null;
       applyLoopRewardToRun(run, loopReward);
       return run;
     }
     window.createInitialRun = createInitialRun;
 
-    // 기존 코드의 state.gold / state.playerUnits / state.reserveUnits 는 state.run의 필드를 가리킨다.
+    // 기존 코드의 state.gold / state.playerUnits / state.reserveUnits / state.currentBattle 은 state.run의 필드를 가리킨다.
     // (열거 불가: JSON 직렬화 시 중복 저장되지 않는다.)
     const RUN_FIELD_ALIASES = {
       gold: 'gold', playerUnits: 'party', reserveUnits: 'reserve',
-      commander: 'commander', inventory: 'inventory', characterCollection: 'characterCollection'
+      commander: 'commander', inventory: 'inventory', characterCollection: 'characterCollection',
+      currentBattle: 'currentBattle'
     };
     function bindRunAccessors(s) {
       Object.entries(RUN_FIELD_ALIASES).forEach(([key, runKey]) => {
@@ -531,6 +536,9 @@
         if (!Array.isArray(nextRun.characterCollection)) nextRun.characterCollection = Array.isArray(prev.characterCollection) ? prev.characterCollection : [];
         if (!nextRun.nodeAttempts) nextRun.nodeAttempts = {};
       }
+      // 작전지도 이전 세이브의 런: 구역 상태를 새로 만든다. 전투는 restoreSavedBattle()이 따로 채운다.
+      if (!nextRun.campaign) nextRun.campaign = createCampaignState();
+      if (!('currentBattle' in nextRun)) nextRun.currentBattle = null;
       state.run = nextRun;
       return nextRun;
     }
@@ -548,8 +556,7 @@
         currentSector: 'A-1',
         selectedSectorId: 'A-1',
         editingSectorId: 'A-1',
-        // 1차 맵 파이프라인의 단일 전술 전투 데이터. 랜덤/Seed는 후속 단계에서 추가한다.
-        currentBattle: null,
+        // 전술 전투(currentBattle)는 state.run.currentBattle에 있다 — bindRunAccessors 참고.
         // 11~13단계: 로그라이크 런(노드 그래프 + 진행도). 전술 타일/적 데이터는 절대 여기에 넣지 않는다.
         // 2차: player(영구, 회귀해도 유지) / run(회귀 시 초기화) 분리.
         player: createInitialPlayer(),
@@ -838,8 +845,9 @@
 
         // v3 저장 구조 (2차: 사망회귀).
         //   player        — 영구 데이터. 회귀해도 유지 (loopCount, memories, unlockedCharacters, 지휘관 등)
-        //   run           — 이번 런. 회귀 시 초기화 (노드 그래프 + party/reserve/gold/commandBonus)
-        //   currentBattle — 전투 중일 때만 별도로 저장 (map + 실시간 전투 상태 live). 전투가 없으면 null.
+        //   run           — 이번 런. 회귀 시 초기화 (노드 그래프 + party/reserve/gold/commandBonus + campaign)
+        //   run.currentBattle — 전투 중일 때만 (map + 실시간 전투 상태 live). 전투가 없으면 null.
+        //                   (이전 v3 세이브는 최상위 currentBattle에 있었다 — normalizeSavePayload가 둘 다 읽는다.)
         if (state.run) state.run.encounterSeq = state.encounterSeq;
         syncUnlockedCharacters();
         const battleToSave = state.currentBattle ? {
@@ -881,9 +889,9 @@
             gold: state.gold,
             commander: state.commander,
             inventory: Array.isArray(state.inventory) ? state.inventory : [],
-            characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : []
-          } : null,
-          currentBattle: battleToSave
+            characterCollection: Array.isArray(state.characterCollection) ? state.characterCollection : [],
+            currentBattle: battleToSave
+          } : null
         };
 
         // Supabase 동기화 처리 (Cloud Database 영구 저장)
@@ -913,6 +921,7 @@
         const p = raw.player;
         const r = raw.run;
         const prog = p.progression || {};
+        const savedBattle = r.currentBattle || raw.currentBattle || null;
         return {
           version: raw.version,
           savedAt: raw.savedAt,
@@ -931,8 +940,8 @@
           selectedUnitId: prog.selectedUnitId,
           playerMeta: { loopCount: p.loopCount, memories: p.memories, unlockedCharacters: p.unlockedCharacters, settings: p.settings },
           roguelikeRun: r,
-          currentBattle: raw.currentBattle || null,
-          enemyUnits: (raw.currentBattle && raw.currentBattle.live && Array.isArray(raw.currentBattle.live.enemyUnits)) ? raw.currentBattle.live.enemyUnits : []
+          currentBattle: savedBattle,
+          enemyUnits: (savedBattle && savedBattle.live && Array.isArray(savedBattle.live.enemyUnits)) ? savedBattle.live.enemyUnits : []
         };
       }
       if (raw.player && typeof raw.player === 'object') {
@@ -3615,6 +3624,8 @@
       // 전술 화면이 섹터 표시명을 위해 WORLD_SECTORS를 직접 보지 않도록 진입 시점에 복사해 둔다.
       state.currentBattle.sectorName = sector.name || targetSectorId;
       state.currentBattle.seed = seed;
+      // 작전지도 구역. 구역 진입 흐름이 붙기 전까지는 시작 구역으로 고정한다.
+      state.currentBattle.regionId = (state.run.campaign && state.run.campaign.currentRegionId) || CAMPAIGN_MAP.startRegionId;
       state.selectedNodeId = node.id;
       historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
       state.selectedSectorId = targetSectorId;
