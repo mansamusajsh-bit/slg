@@ -306,7 +306,7 @@
       <div class="rbd-list">${candidates.map((u) => `
         <button type="button" class="rbd-row rbd-row-pick" data-unit="${esc(u.id)}">
           <span class="rbd-row-avatar">${renderPortrait(u, { emojiSize: '22px' })}</span>
-          <span class="rbd-row-main"><b>${esc(u.name)}</b><small>${esc(u.classType || '')} · Lv.${u.level || 1} · 💗 ${getUnitAffection(u)}${command ? ` · 방어 ${getBaseDef(u)} → <b class="rbd-up">${getBaseDef(u) + 1}</b>` : ''}</small></span>
+          <span class="rbd-row-main"><b>${esc(u.name)}</b><small>${esc(window.getClassLabel ? window.getClassLabel(u.classType) : (u.classType || ''))} · Lv.${u.level || 1} · 💗 ${getUnitAffection(u)}${command ? ` · 방어 ${getBaseDef(u)} → <b class="rbd-up">${getBaseDef(u) + 1}</b>` : ''}</small></span>
         </button>`).join('')}
       </div>`;
     card.querySelectorAll('[data-unit]').forEach((btn) => {

@@ -1678,9 +1678,37 @@
       // 불굴(PROTECT) 스킬: 패배한 쪽이 치명상을 1회 버티면 교전은 무승부로 끝난다.
       if (window.SkillEngine) SkillEngine.breakStealth(attacker);
       const combatLoser = isWin ? defender : attacker;
+      const combatWinnerUnit = isWin ? attacker : defender;
       const loserSaved = !!(window.SkillEngine && SkillEngine.tryPreventDeath(combatLoser));
 
-      if (loserSaved) {
+      // 퇴각 판정: 패배한 쪽이 승급(측면 기습)·지휘관 패시브의 퇴각 확률로 전사를 피한다.
+      const combatMods = loserSaved ? null : calculateCombatModifiers(attacker, defender);
+      const loserMods = combatMods ? (isWin ? combatMods.defender : combatMods.attacker) : null;
+      const loserRetreatChance = loserMods ? (loserMods.retreatChance || 0) : 0;
+      const loserRetreated = loserRetreatChance > 0 && Math.random() < loserRetreatChance;
+
+      if (!loserSaved) {
+        // 승자는 승률이 낮을수록 더 많은 병과 경험치를 얻는다
+        const winnerChance = isWin ? P : (1 - P);
+        awardPromotionXp(combatWinnerUnit, getVictoryXp(winnerChance), '전투 승리');
+      }
+
+      if (loserRetreated) {
+        const loserDmg = isWin ? roundDmg.defenderDamage : roundDmg.attackerDamage;
+        const winnerDmg = isWin ? roundDmg.attackerDamage : roundDmg.defenderDamage;
+        combatLoser.hp = Math.max(1, Math.round(combatLoser.hp - loserDmg));
+        if (loserMods.retreatHpRecovery > 0) {
+          const maxHp = combatLoser.maxHp || 100;
+          combatLoser.hp = Math.min(maxHp, combatLoser.hp + Math.round(maxHp * loserMods.retreatHpRecovery));
+        }
+        if (combatLoser.stats) combatLoser.stats.hp = combatLoser.hp;
+        if (winnerDmg > 0) {
+          combatWinnerUnit.hp = Math.max(1, Math.round(combatWinnerUnit.hp - winnerDmg));
+          if (combatWinnerUnit.stats) combatWinnerUnit.stats.hp = combatWinnerUnit.hp;
+        }
+        addLog(`🏃 [퇴각 성공] ${combatLoser.name}이(가) 패배했지만 ${Math.round(loserRetreatChance * 100)}% 퇴각 판정에 성공해 살아남았습니다. (HP ${combatLoser.hp}/${combatLoser.maxHp || 100})`, 'warning');
+        awardPromotionXp(combatLoser, PROMOTION_XP_GAIN.retreat, '퇴각 성공');
+      } else if (loserSaved) {
         const combatWinner = isWin ? attacker : defender;
         const winnerDmg = isWin ? roundDmg.attackerDamage : roundDmg.defenderDamage;
         if (winnerDmg > 0) {
@@ -1960,7 +1988,7 @@
                   <span style="font-size: 16px;">${u.avatar}</span>
                   <div>
                     <span style="font-weight: 700; color: ${isLack ? '#ef4444' : '#15803d'};">${u.name}</span>
-                    <span style="font-size: 9px; opacity: 0.8; margin-left: 4px;">Lv.${u.level} ${u.classType || ''}</span>
+                    <span style="font-size: 9px; opacity: 0.8; margin-left: 4px;">Lv.${u.level} ${getClassLabel(u.classType)}</span>
                   </div>
                 </div>
                 <div style="text-align: right;">
@@ -4921,12 +4949,18 @@
        Character Image Management & Full-Shot Overlay System (우마무스메풍 전신 풀샷)
        -------------------------------------------------------------------------- */
     const CLASS_META = {
-      KNIGHT: { name: '성기사 롤랑 (Knight)', icon: '🐴', role: '전열 탱커 & 돌격기', color: '#0284c7' },
-      MAGE: { name: '대마법사 셀레스테 (Mage)', icon: '🔮', role: '광역 마법 화력 지원', color: '#7c3aed' },
-      ARCHER: { name: '엘프 사냥꾼 리리아 (Archer)', icon: '🏹', role: '원거리 저격 및 급소 사격', color: '#16a34a' },
-      MELEE: { name: '철벽 전사 월터 (Melee)', icon: '⚔️', role: '근접 방벽 및 백병전', color: '#dc2626' },
-      FIREARM: { name: '화포 사령관 빅터 (Firearm)', icon: '💥', role: '원거리 포격 및 진지 돌파', color: '#ea580c' }
+      KNIGHT: { name: '기사', icon: '🐴', role: '전열 탱커 & 돌격기', color: '#0284c7' },
+      MAGE: { name: '마법사', icon: '🔮', role: '광역 마법 화력 지원', color: '#7c3aed' },
+      ARCHER: { name: '궁수', icon: '🏹', role: '원거리 저격 및 급소 사격', color: '#16a34a' },
+      MELEE: { name: '근접', icon: '⚔️', role: '근접 방벽 및 백병전', color: '#dc2626' },
+      FIREARM: { name: '화기', icon: '💥', role: '원거리 포격 및 진지 돌파', color: '#ea580c' }
     };
+
+    // 직업(병과) 표시명. CLASS_META에 없으면 코드값 그대로.
+    function getClassLabel(cls) {
+      return (cls && CLASS_META[cls]?.name) || cls || '';
+    }
+    window.getClassLabel = getClassLabel;
 
     let customClassImages = {
       KNIGHT: '',
@@ -7636,6 +7670,36 @@
       4: 10,
       5: 17
     };
+    window.PROMOTION_XP_TABLE = PROMOTION_XP_TABLE;
+
+    // 병과 경험치 획득량 (전술 전투에서만 획득)
+    const PROMOTION_XP_GAIN = {
+      victory: 2,       // 승리 기본
+      underdog: 1,      // 승률 50% 미만에서 승리 시 추가
+      longshot: 1,      // 승률 25% 미만에서 승리 시 추가 (underdog과 중첩)
+      retreat: 1        // 패배했지만 퇴각 확률로 살아남음
+    };
+    window.PROMOTION_XP_GAIN = PROMOTION_XP_GAIN;
+
+    function getPromotionXpCost(level) {
+      return PROMOTION_XP_TABLE[level] || (level * 3);
+    }
+    window.getPromotionXpCost = getPromotionXpCost;
+
+    function getVictoryXp(winChance) {
+      let xp = PROMOTION_XP_GAIN.victory;
+      if (winChance < 0.50) xp += PROMOTION_XP_GAIN.underdog;
+      if (winChance < 0.25) xp += PROMOTION_XP_GAIN.longshot;
+      return xp;
+    }
+
+    function awardPromotionXp(unit, amount, reason) {
+      if (!unit || unit.isDead || !(amount > 0)) return;
+      unit.xp = (unit.xp || 0) + amount;
+      if (unit.owner === 'PLAYER' || !unit.owner) {
+        addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${amount} XP (보유 ${unit.xp} XP)`, 'gold');
+      }
+    }
 
     function applyPromotion(unit, promotionId) {
       if (!unit || unit.isDead) {
@@ -7687,7 +7751,7 @@
         }
       }
 
-      const requiredXP = PROMOTION_XP_TABLE[promoData.level] || (promoData.level * 3);
+      const requiredXP = getPromotionXpCost(promoData.level);
       const currentXP = unit.xp || 0;
       if (currentXP < requiredXP) {
         addLog(`⚡ [XP 부족] [${promoData.name}] 승급에는 ${requiredXP} XP가 필요합니다. (현재 XP: ${currentXP})`, 'warning');
@@ -9137,8 +9201,7 @@
 
       const { card } = rbdModal('modal-emergency-recruit', '#f59e0b');
       const esc = escapeGachaHtml;
-      const CLASS_LABEL = { KNIGHT: '기사', MAGE: '마법사', ARCHER: '궁수', MELEE: '보병', FIREARM: '총병' };
-      const clsLabel = (u) => { const c = u.classType || u.unitClass; return CLASS_LABEL[c] || c || ''; };
+      const clsLabel = (u) => { const c = u.classType || u.unitClass; return CLASS_META[c]?.name || c || ''; };
       let poolError = '';
       let lastDraw = null; // { unit, alias, originalName }
 
@@ -9449,7 +9512,7 @@
         ${adj ? `
           <div class="adj-current">
             <span class="adj-portrait">${renderPortrait(adj, { emojiSize: '22px' })}</span>
-            <span class="adj-main"><b>${escapeGachaHtml(adj.name)}</b><span class="adj-meta">${escapeGachaHtml(adj.classType || '')} · Lv.${adj.level || 1}${run.commandBonus && run.commandBonus.characterId === getCharacterId(adj) ? ' · 🛡️ 방어 +1' : ''}</span><span class="adj-aff-row">${affBar(adj)}</span></span>
+            <span class="adj-main"><b>${escapeGachaHtml(adj.name)}</b><span class="adj-meta">${escapeGachaHtml(getClassLabel(adj.classType))} · Lv.${adj.level || 1}${run.commandBonus && run.commandBonus.characterId === getCharacterId(adj) ? ' · 🛡️ 방어 +1' : ''}</span><span class="adj-aff-row">${affBar(adj)}</span></span>
             <button type="button" class="adj-btn danger" data-adj-dismiss ${locked ? 'disabled' : ''}>해임</button>
           </div>` : `<div class="adj-empty">부관이 공석입니다. 아래에서 임명하세요.</div>`}
         ${locked ? '<div class="adj-locked">⚔️ 전투 중에는 부관을 바꿀 수 없습니다.</div>' : ''}

@@ -241,6 +241,24 @@
    *
    * @param {Object} unit - Target unit object to promote
    */
+  // 병과 승급 XP 테이블 + 획득 방식 안내
+  function renderPromotionXpGuide() {
+    const table = global.PROMOTION_XP_TABLE || {};
+    const gain = global.PROMOTION_XP_GAIN || {};
+    const tiers = Object.keys(table)
+      .map((lv) => `<span style="padding:2px 6px; border-radius:6px; background:rgba(245,158,11,0.12); border:1px solid rgba(245,158,11,0.3);">Tier ${lv} · <b style="color:#fbbf24;">${table[lv]} XP</b></span>`)
+      .join('');
+    return `
+      <div style="margin-bottom:10px; padding:8px 10px; border-radius:10px; background:rgba(15,23,42,0.6); border:1px solid rgba(148,163,184,0.2); font-size:11px; color:#cbd5e1; line-height:1.6;">
+        <div style="font-weight:800; color:#fbbf24; margin-bottom:4px;">📈 승급 필요 XP</div>
+        <div style="display:flex; flex-wrap:wrap; gap:4px; margin-bottom:6px;">${tiers}</div>
+        <div style="font-weight:800; color:#fbbf24; margin-bottom:2px;">🎖️ XP 획득 (전술 전투)</div>
+        <div>· 교전 승리 +${gain.victory ?? 2} XP (승률 50% 미만 +${gain.underdog ?? 1}, 25% 미만 추가 +${gain.longshot ?? 1})</div>
+        <div>· 패배 후 퇴각 확률로 생존 +${gain.retreat ?? 1} XP</div>
+      </div>
+    `;
+  }
+
   function renderPromotionMenu(unit, opts = {}) {
     if (!unit || unit.isDead) return;
 
@@ -297,7 +315,7 @@
           <span class="promotion-modal-icon">🌳</span>
           <div>
             <h3>부대 승급 훈련 & 스킬트리</h3>
-            <p>${unit.name} <span class="badge-class">${unitClass}</span> | 잔여 XP: <b style="color: #fbbf24;">${unitXP} XP</b></p>
+            <p>${unit.name} <span class="badge-class">${(typeof CLASS_META !== 'undefined' && CLASS_META[unitClass]?.name) || unitClass}</span> | 잔여 XP: <b style="color: #fbbf24;">${unitXP} XP</b></p>
           </div>
         </div>
         <button class="promotion-modal-close" id="btn-promo-close">&times;</button>
@@ -315,13 +333,14 @@
 
       <!-- Tab 1: Promotion List -->
       <div class="promotion-modal-body" id="tab-content-promo">
+        ${renderPromotionXpGuide()}
         ${
           candidatePromos.length === 0
             ? `<div class="promotion-empty-state">현재 습득 가능한 승급 항목이 없거나 이미 최고 단계입니다.</div>`
             : `<div class="promotion-list-grid">
                 ${candidatePromos
                   .map((p) => {
-                    const reqXp = p.level === 2 ? 2 : p.level === 3 ? 5 : p.level === 4 ? 10 : 1;
+                    const reqXp = typeof global.getPromotionXpCost === 'function' ? global.getPromotionXpCost(p.level) : p.level * 3;
                     const canAfford = unitXP >= reqXp;
                     return `
                       <div class="promotion-option-card ${canAfford ? '' : 'disabled'}" data-promo-id="${p.id}">
