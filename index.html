@@ -89,9 +89,9 @@
           </div>
 
           <div class="strat-resources-grid">
-            <div class="strat-res-chip ap" title="통솔력 (AP) - 출격 시 5 소모">
-              <span class="strat-res-lbl">⚡ 통솔력</span>
-              <span class="strat-res-val" id="strat-cmd-ap">24/24</span>
+            <div class="strat-res-chip ap" title="통솔력 - 한 전투에 출전할 수 있는 최대 영웅 수 (지휘관 레벨에 따라 증가)">
+              <span class="strat-res-lbl">👑 통솔력</span>
+              <span class="strat-res-val" id="strat-cmd-ap">4부대</span>
             </div>
             <div class="strat-res-chip gold" title="보유 골드">
               <span class="strat-res-lbl">🪙 골드</span>
@@ -183,7 +183,7 @@
           <div style="display:flex; align-items:center; gap:6px;">
             <button type="button" class="strat-deploy-quick-btn" onclick="setDeploySelectionAll(true)">전체선택</button>
             <button type="button" class="strat-deploy-quick-btn" onclick="setDeploySelectionAll(false)">전체해제</button>
-            <span class="strat-section-sub" id="strat-leadership-limit-sub">통솔력 한도: 최대 24부대</span>
+            <span class="strat-section-sub" id="strat-leadership-limit-sub">통솔력 한도: 최대 4부대</span>
           </div>
         </div>
 
@@ -213,7 +213,7 @@
       <footer class="strat-bottom-action-bar">
         <div class="strat-action-summary">
           <span class="strat-action-dest" id="strat-action-summary-dest">[A-1 벨른 평원] 작전 준비</span>
-          <span class="strat-action-cost" id="strat-action-summary-cost">⚡ 통솔력 -5 AP 소모 | 5 영웅 부대 출동</span>
+          <span class="strat-action-cost" id="strat-action-summary-cost">👑 통솔력 0 / 4 | 0 영웅 부대 출동</span>
         </div>
         <button class="strat-btn-launch-main" id="btn-open-deploy-modal" onclick="openSectorDeployModal()">
           <span>⚔️</span>
@@ -570,7 +570,7 @@
             <!-- Odds and Resource Cost -->
             <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10px; font-weight: 800;">
               <span style="color: #10b981;">🏆 예상 승률: <b>88.5% (압도적 우세)</b></span>
-              <span style="color: #0284c7;">⚡ 소모 AP: <b>5 AP</b></span>
+              <span style="color: #0284c7;">👑 출전: <b id="deploy-sim-leadership">0 / 4부대</b></span>
             </div>
 
             <div class="deploy-launch-countdown-bar">
@@ -704,10 +704,21 @@
           <div class="modal-title">👑 지휘관 — 부관 임명 · 패시브 스킬 (보유: <span id="modal-sp-display">2</span> SP)</div>
           <button class="btn-close" onclick="closeAllModals()">✕</button>
         </div>
-        <!-- 부관 임명/교체/해임 (game.js renderAdjutantPanel) -->
-        <div class="adj-panel" id="modal-adjutant-panel"></div>
-        <div class="skill-grid" id="modal-skill-grid">
-          <!-- Dynamically populated -->
+        <!-- 탭: 부관·스킬 / 보유 유물 (game.js switchCommanderTab) -->
+        <div class="cmd-tabs" role="tablist">
+          <button type="button" class="cmd-tab active" role="tab" aria-selected="true" data-cmd-tab="skills" onclick="switchCommanderTab('skills')">👑 부관 · 스킬</button>
+          <button type="button" class="cmd-tab" role="tab" aria-selected="false" data-cmd-tab="relics" onclick="switchCommanderTab('relics')">💎 보유 유물 <span class="cmd-tab-count" id="cmd-relic-count">0</span></button>
+        </div>
+        <div class="cmd-tab-panel" data-cmd-panel="skills" role="tabpanel">
+          <!-- 부관 임명/교체/해임 (game.js renderAdjutantPanel) -->
+          <div class="adj-panel" id="modal-adjutant-panel"></div>
+          <div class="skill-grid" id="modal-skill-grid">
+            <!-- Dynamically populated -->
+          </div>
+        </div>
+        <div class="cmd-tab-panel" data-cmd-panel="relics" role="tabpanel" hidden>
+          <!-- 보유 유물 (game.js renderCommanderRelics) -->
+          <div id="modal-relic-list"></div>
         </div>
       </div>
     </div>

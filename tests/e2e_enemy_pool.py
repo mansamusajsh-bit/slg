@@ -23,7 +23,7 @@ TPL_JS = """
 
 def enter(page, seed=None):
     if seed: page.evaluate("(s)=>{state.forcedSeed=s}", seed)
-    page.evaluate("()=>{state.strategy.commanderAP=24}"); page.click('#btn-open-deploy-modal'); page.wait_for_selector('#modal-sector-deploy.open', timeout=3000)
+    page.click('#btn-open-deploy-modal'); page.wait_for_selector('#modal-sector-deploy.open', timeout=3000)
     page.click('#modal-sector-deploy .strat-btn-launch-main'); page.wait_for_timeout(700)
 
 def leave(page):
@@ -87,10 +87,10 @@ with sync_playwright() as pw:
     p2.goto(f'http://127.0.0.1:{PORT}/index.html'); p2.wait_for_timeout(1200)
     p2.evaluate(TPL_JS, ['A-1', [[1,1],[3,1]]]); p2.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
     p2.evaluate("(id)=>selectNode(id)", p2.evaluate("state.run.mapState.layers[0][0]"))
-    ap=p2.evaluate("state.strategy.commanderAP"); e2.clear()
+    e2.clear()
     enter(p2)
-    st=p2.evaluate("({b:state.currentBattle,ap:state.strategy.commanderAP,view:state.currentView,avail:RunEngine.isNodeAvailable(state.run,state.selectedNodeId)})")
-    c.ok(st['b'] is None and st['ap']==ap and st['view']=='STRATEGY' and st['avail'],'풀이 비고 고정 적도 없으면 전투를 시작하지 않는다 (AP 환불, 노드 유지)')
+    st=p2.evaluate("({b:state.currentBattle,view:state.currentView,avail:RunEngine.isNodeAvailable(state.run,state.selectedNodeId)})")
+    c.ok(st['b'] is None and st['view']=='STRATEGY' and st['avail'],'풀이 비고 고정 적도 없으면 전투를 시작하지 않는다 (노드 유지)')
     c.ok(any('적으로 쓸 캐릭터가 없습니다' in x for x in e2),'원인 안내: '+(e2[0][:70] if e2 else '없음'))
     b2.close()
 
@@ -108,7 +108,7 @@ with sync_playwright() as pw:
     page.evaluate(POOL_JS, 8); page.evaluate(TPL_JS, ['A-1',[[1,1],[3,1],[5,1]]]); page.evaluate(TPL_JS, ['B-2',[[1,1],[3,1]]])
     page.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
     boss=page.evaluate("""()=>{ for(let i=0;i<10;i++){ const av=RunEngine.getAvailableNodes(state.run); const h=av.find(n=>n.type==='boss'); if(h) return h.id; RunEngine.completeNode(state.run,av[0].id);} }""")
-    page.evaluate("(id)=>{selectNode(id); state.strategy.commanderAP=24;}",boss); enter(page,'B-2-1')
+    page.evaluate("(id)=>{selectNode(id);}",boss); enter(page,'B-2-1')
     eb=page.evaluate("state.enemyUnits")
     # B-2=NIGHTMARE(레벨6, x1.6) + boss(레벨+2, x1.5) → 레벨 8, HP 100*2.4=240
     c.ok(all(e['level']==8 and e['maxHp']==240 for e in eb),f'보스 노드(NIGHTMARE): 레벨 8, HP x2.4 (100→{eb[0]["maxHp"]})')

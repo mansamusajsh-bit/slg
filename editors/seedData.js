@@ -50,7 +50,7 @@ const COMMANDER_RELICS = [
   C('vanguard_standard', '선봉 군기', 'rare', '선봉대의 깃발. 적이 먼저 겁을 먹는다.', ['army', 'atk', 2]),
   C('tower_shield_wall', '탑방패 벽', 'rare', '방패를 겹쳐 세운 진형.', ['army', 'def', 2]),
   C('surveyor_map', '측량사의 지도', 'rare', '모든 언덕과 숲의 위치가 적혀 있다.', ['army', 'terrainDef', 10]),
-  C('relay_riders', '전령 기병대', 'rare', '명령이 빠르게 전달된다.', ['run', 'commanderAP', 1]),
+  C('relay_riders', '전령 기병대', 'rare', '명령이 빠르게 전달되어 한 부대를 더 이끌 수 있다.', ['run', 'leadership', 1]),
   C('field_chapel', '야전 예배당', 'rare', '매 턴 기도가 병사들의 상처를 덮는다.', ['army', 'regen', 2]),
   C('veteran_sergeant', '고참 하사관', 'rare', '신병도 그의 밑에서는 금방 자란다.', ['run', 'expGain', 20]),
   C('mirror_shields', '거울 방패', 'rare', '받은 공격을 날카롭게 되돌린다.', ['army', 'counterDmg', 15]),
@@ -64,7 +64,7 @@ const COMMANDER_RELICS = [
   C('taxman_seal', '징세관의 인장', 'rare', '전리품의 몫을 확실히 받아 낸다.', ['run', 'goldGain', 20], ['army', 'atk', -1]),
   // 영웅 (10)
   C('kings_warhorn', '왕의 뿔나팔', 'epic', '왕가의 뿔나팔. 모든 병사가 한 박자 빨라진다.', ['army', 'ap', 1], ['army', 'def', -1]),
-  C('marshal_baton', '원수의 지휘봉', 'epic', '지휘봉 끝이 가리키는 곳으로 군이 움직인다.', ['run', 'commanderAP', 2]),
+  C('marshal_baton', '원수의 지휘봉', 'epic', '지휘봉 끝이 가리키는 곳으로 군이 움직인다.', ['run', 'leadership', 2]),
   C('siege_engineer', '공성 기술자', 'epic', '사거리를 계산해 한 칸 더 멀리 쏜다.', ['army', 'range', 1], ['army', 'evasion', -5]),
   C('dragon_scale_banner', '용비늘 군기', 'epic', '불길도 이 깃발 아래서는 약해진다.', ['army', 'def', 3], ['battle', 'shield', 10]),
   C('war_council', '작전 회의', 'epic', '전투 전에 세운 계획이 스킬을 빨리 돌게 한다.', ['army', 'skillCooldown', -1]),
@@ -75,7 +75,7 @@ const COMMANDER_RELICS = [
   C('field_hospital', '야전 병원', 'epic', '살아남은 자는 모두 다시 일어선다.', ['battle', 'healAfterBattle', 30]),
   // 전설 (5)
   C('crown_of_conquest', '정복자의 왕관', 'legendary', '모든 군대가 이 왕관의 주인을 따른다.', ['army', 'atk', 3], ['army', 'def', 2]),
-  C('eternal_hourglass', '영원의 모래시계', 'legendary', '시간을 되돌리는 힘이 다시 차오른다.', ['run', 'rewinder', 2], ['run', 'commanderAP', 1]),
+  C('eternal_hourglass', '영원의 모래시계', 'legendary', '시간을 되돌리는 힘이 다시 차오른다.', ['run', 'rewinder', 2], ['run', 'leadership', 1]),
   C('banner_of_dawn', '여명의 군기', 'legendary', '첫 햇살과 함께 전군이 움직인다.', ['battle', 'firstTurnAp', 3], ['army', 'regen', 2]),
   C('emperor_ledger', '황제의 장부', 'legendary', '제국의 모든 상점이 그대의 것이다.', ['run', 'shopDiscount', 30], ['run', 'goldGain', 20]),
   C('legion_eagle', '군단의 독수리', 'legendary', '독수리 아래 군단은 결코 무너지지 않는다.', ['run', 'deploySlots', 1], ['army', 'hp', 15])

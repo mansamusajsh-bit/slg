@@ -989,7 +989,7 @@
       : (safeTileName.includes('에테르니아') ? 3 : (safeTile.isCity ? 2 : 1));
 
     const livingUnits = (state.playerUnits || []).filter(u => !u.isDead);
-    const maxLeadership = state.strategy?.commanderAP || 24;
+    const maxLeadership = typeof global.getLeadership === 'function' ? global.getLeadership() : 4;
     const playerGold = typeof state.gold === 'number' ? state.gold : 0;
 
     const classColors = {

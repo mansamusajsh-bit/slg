@@ -338,20 +338,54 @@
       };
     }
 
-    // 아군 전사 시 지휘관 경험치 획득. 레벨업마다 스킬트리 선택권 1개 지급.
-    function awardCommanderCasualtyExp(unit, amount = 25) {
-      if (!unit || unit.owner !== 'PLAYER' || unit._commanderExpAwarded) return;
-      unit._commanderExpAwarded = true;
+    // 통솔력 = 한 전투에 출전시킬 수 있는 최대 영웅 수. 지휘관 레벨로만 정해지고 소모되지 않는다.
+    // (출격 비용은 따로 없다 — 출전 인원은 통솔력이, 유지 부담은 유닛 유지비가 제한한다)
+    const LEADERSHIP_BASE = 4;               // Lv.1 통솔력
+    const LEADERSHIP_LEVELS_PER_POINT = 2;   // 이 레벨마다 통솔력 +1 (Lv.3, 5, 7 …)
+
+    function getLeadershipForLevel(level) {
+      return LEADERSHIP_BASE + Math.floor(Math.max(0, (Number(level) || 1) - 1) / LEADERSHIP_LEVELS_PER_POINT);
+    }
+
+    // 유물 효과 중 출전 인원을 늘리는 것. commanderAP는 출격 AP가 있던 시절의 유물 데이터(같은 의미로 읽는다).
+    const LEADERSHIP_RELIC_STATS = ['leadership', 'deploySlots', 'commanderAP'];
+
+    function getRelicLeadershipBonus() {
+      return getOwnedRelics()
+        .filter(r => r.kind === 'commander')
+        .reduce((sum, r) => sum + (r.effects || [])
+          .filter(fx => fx && LEADERSHIP_RELIC_STATS.includes(fx.stat))
+          .reduce((acc, fx) => acc + (Number(fx.value) || 0), 0), 0);
+    }
+
+    function getLeadership() {
+      return getLeadershipForLevel(state && state.commander ? state.commander.level : 1) + getRelicLeadershipBonus();
+    }
+    window.getLeadership = getLeadership;
+
+    // 지휘관 경험치는 모두 여기로 준다. 레벨업마다 스킬 선택권 +1, 레벨에 따라 통솔력이 오른다.
+    function grantCommanderExp(amount, reason) {
       const commander = state.commander;
+      if (!commander || !(amount > 0)) return;
       commander.exp = (commander.exp || 0) + amount;
-      addLog(`👑 아군 ${unit.name} 전사: 지휘관 경험치 +${amount} EXP`, 'gold');
+      if (reason) addLog(`👑 ${reason}: 지휘관 경험치 +${amount} EXP`, 'gold');
       while (commander.exp >= commander.maxExp) {
+        const leadershipBefore = getLeadership();
         commander.exp -= commander.maxExp;
         commander.level += 1;
         commander.maxExp = Math.round(commander.maxExp * 1.4);
         commander.skillPoints = (commander.skillPoints || 0) + 1;
-        addLog(`👑 지휘관 레벨업! Lv.${commander.level} — 스킬 선택권 +1`, 'gold');
+        const leadershipAfter = getLeadership();
+        const leadershipText = leadershipAfter > leadershipBefore ? ` · 통솔력 ${leadershipBefore} → ${leadershipAfter}부대` : '';
+        addLog(`👑 지휘관 레벨업! Lv.${commander.level} — 스킬 선택권 +1${leadershipText}`, 'gold');
       }
+    }
+
+    // 아군 전사 시 지휘관 경험치 획득.
+    function awardCommanderCasualtyExp(unit, amount = 25) {
+      if (!unit || unit.owner !== 'PLAYER' || unit._commanderExpAwarded) return;
+      unit._commanderExpAwarded = true;
+      grantCommanderExp(amount, `아군 ${unit.name} 전사`);
       saveGameState(true);
     }
 
@@ -462,6 +496,9 @@
       run.campaign = createCampaignState();
       // 부관: 회차마다 작전지도에서 새로 임명한다 ({ characterId, name }). 지휘력 카드의 방어 보정도 부관이 받는다.
       run.adjutant = null;
+      // 보유 유물 (회귀하면 사라진다). 보스 유물 3택1을 고르는 중이면 pendingRelicChoice에 후보가 남는다.
+      run.relics = [];
+      run.pendingRelicChoice = null;
       // 진행 중인 전술 전투. run 아래에 있으므로 회귀(새 run)와 함께 사라진다.
       run.currentBattle = null;
       applyLoopRewardToRun(run, loopReward);
@@ -536,8 +573,6 @@
         isCombatActive: false,
         isCombatPaused: false,
         strategy: {
-          commanderAP: 24,
-          maxCommanderAP: 24,
           selectedSectorId: 'A-1',
           deploySelectedIds: null, // 출전 편성으로 선택된 영웅 id 목록 (null = 최초 진입 시 자동 초기화)
           deployKnownIds: [],
@@ -843,8 +878,6 @@
               turn: state.turn,
               stackMoveEnabled: state.stackMoveEnabled,
               strategy: state.strategy || {
-                commanderAP: 24,
-                maxCommanderAP: 24,
                 selectedSectorId: 'A-1',
                 armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
                 activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
@@ -1011,8 +1044,6 @@
         restoreSavedRun(parsed.roguelikeRun);
         if (parsed.strategy) {
           state.strategy = {
-            commanderAP: (typeof parsed.strategy.commanderAP === 'number') ? parsed.strategy.commanderAP : 24,
-            maxCommanderAP: (typeof parsed.strategy.maxCommanderAP === 'number') ? parsed.strategy.maxCommanderAP : 24,
             selectedSectorId: parsed.strategy.selectedSectorId || 'A-1',
             deploySelectedIds: Array.isArray(parsed.strategy.deploySelectedIds) ? parsed.strategy.deploySelectedIds : null,
             deployKnownIds: Array.isArray(parsed.strategy.deployKnownIds) ? parsed.strategy.deployKnownIds : [],
@@ -1088,6 +1119,8 @@
         // 구버전 기본 3인(u1~u3)·포섭 유닛("포섭된 X") 정리 — 캐릭터 DB가 아직 없으면 연결은 동기화 때 마저 한다
         migrateStarterUnits();
         migrateCapturedUnits();
+        // 보스 유물 3택1을 고르다 나갔으면 다시 띄운다
+        if (state.run && state.run.pendingRelicChoice) setTimeout(() => openRelicChoiceModal(), 0);
 
         if (parsed.selectedUnitId && state.playerUnits.some(u => u.id === parsed.selectedUnitId && !u.isDead)) {
           selectedUnitId = parsed.selectedUnitId;
@@ -1744,13 +1777,9 @@
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
 
-          // 지휘관 & 유닛 경험치
-          let expGain = 25;
+          // 호감도 (지휘관의 통솔: +30%). 병과 경험치 보너스는 awardPromotionXp가 준다.
           let affGain = 5;
-          if (skills.CommanderLeadership) {
-            expGain = Math.round(expGain * 1.3);
-            affGain = Math.round(affGain * 1.3);
-          }
+          if (skills.CommanderLeadership) affGain = Math.round(affGain * 1.3);
           attacker.affection = Math.min(100, attacker.affection + affGain);
           addLog(`⭐ ${attacker.name} 호감도 +${affGain} 획득!`, 'success');
 
@@ -1834,7 +1863,7 @@
           const lootGold = 35 + attacker.level * 10;
           state.gold += lootGold;
           addLog(`🏆 [적 격퇴 전리품] +${lootGold}G 국고 획득!`, 'gold');
-          state.commander.exp += 20;
+          grantCommanderExp(20, '반격 섬멸');
 
           // 반격 승리 시 적 포섭 판정 (50%)
           const canCapture = Math.random() < 0.50;
@@ -3308,7 +3337,6 @@
       state.encounterSeq = 0;
       state.selectedNodeId = null;
       state.currentBattle = null;
-      if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
       ensureNodeSelection();
       addLog(`🧭 [새 런 시작] seed ${state.run.seed} — 작전지도에서 구역을 고르세요.`, 'gold');
       state.currentView = 'CAMPAIGN';
@@ -3518,6 +3546,7 @@
 
       // 11단계: 전투는 전략맵의 "노드"를 통해서만 들어갈 수 있다. sectorId만으로 전술맵에 들어가는 길은 없다.
       if (isRunBlocked()) return reportRunBlocked();
+      ensureRewardDataLoaded(); // 전투가 끝날 때 유물 보상을 굴릴 수 있게 미리 불러 둔다 (기다리지 않는다)
       const requestedNodeId = String(nodeId || state?.selectedNodeId || '');
       const node = getCurrentNode(requestedNodeId);
       if (!node) return reportError(`노드 '${requestedNodeId}'를 찾을 수 없습니다. 전투는 전략맵의 노드를 통해서만 시작할 수 있습니다.`);
@@ -4158,7 +4187,6 @@
 
     function renderStrategyHeader() {
       if (!state) return;
-      const strat = state.strategy || { commanderAP: 24, maxCommanderAP: 24 };
       const cmdName = document.getElementById('strat-cmd-name');
       const cmdLvl = document.getElementById('strat-cmd-level');
       const cmdExpFill = document.getElementById('strat-cmd-exp-fill');
@@ -4173,7 +4201,7 @@
         const pct = Math.min(100, Math.round((state.commander.exp / (state.commander.maxExp || 100)) * 100));
         cmdExpFill.style.width = `${pct}%`;
       }
-      if (cmdAP) cmdAP.textContent = `${strat.commanderAP}/${strat.maxCommanderAP}`;
+      if (cmdAP) cmdAP.textContent = `${getLeadership()}부대`;
       if (stratGold) stratGold.textContent = `${state.gold}G`;
       if (stratRewind) stratRewind.textContent = `${state.rewinders}/3`;
       if (stratGuestId && state.guest) {
@@ -4187,8 +4215,6 @@
       refreshWorldSectorNodes();
       if (!state) return;
       const strat = state.strategy || {
-        commanderAP: 24,
-        maxCommanderAP: 24,
         selectedSectorId: 'A-1',
         armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
         activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
@@ -4262,7 +4288,7 @@
       const activeUnits = (state.playerUnits || []).filter(u => !u.isDead);
       const selectedIds = ensureDeploySelectionInit();
       const totalUnits = selectedIds.length;
-      const maxLeadership = (typeof strat.commanderAP === 'number') ? strat.commanderAP : (strat.maxCommanderAP || 24);
+      const maxLeadership = getLeadership();
 
       let totalPower = 0;
       let totalUpkeep = 0;
@@ -4348,8 +4374,8 @@
       const actionCostEl = document.getElementById('strat-action-summary-cost');
       if (actionCostEl) {
         actionCostEl.textContent = selNodeIsBattle
-          ? `⚡ 통솔력 -5 AP 소모 | ${totalUnits} 영웅 부대 출동`
-          : '⚡ AP 소모 없음 | 전투 없는 노드';
+          ? `👑 통솔력 ${totalUnits} / ${maxLeadership} | ${totalUnits} 영웅 부대 출동`
+          : '전투 없는 노드';
       }
 
       // 출격 버튼: 런 상태/노드 상태에 따라 문구와 활성 여부가 바뀐다.
@@ -4387,8 +4413,7 @@
     // state.strategy.deploySelectedIds = 출전 선택 영웅 id 목록
     // ------------------------------------------------------------------------
     function getDeployLeadershipLimit() {
-      const st = state.strategy || {};
-      return (typeof st.commanderAP === 'number') ? st.commanderAP : (st.maxCommanderAP || 24);
+      return getLeadership();
     }
 
     function ensureDeploySelectionInit() {
@@ -4411,6 +4436,9 @@
         });
         // 사망/이탈한 영웅은 선택 목록에서 제거
         st.deploySelectedIds = st.deploySelectedIds.filter(id => aliveIds.includes(id));
+        // 통솔력 한도보다 많이 골라 둔 명단(예전 세이브 등)은 앞에서부터 한도만큼만 남긴다
+        const limit = getDeployLeadershipLimit();
+        if (st.deploySelectedIds.length > limit) st.deploySelectedIds = st.deploySelectedIds.slice(0, limit);
       }
       return st.deploySelectedIds;
     }
@@ -4496,7 +4524,7 @@
       // 총 부대 수 및 전투력 계산 (1편성부대 = 1캐릭터)
       const activeUnits = getSelectedDeployUnits();
       const totalUnits = activeUnits.length;
-      const maxLeadership = (typeof strat?.commanderAP === 'number') ? strat.commanderAP : 24;
+      const maxLeadership = getLeadership();
       let myPower = 0;
       activeUnits.forEach(u => {
         myPower += Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
@@ -4515,6 +4543,8 @@
       if (descEl) descEl.textContent = `${curSec.terrainDesc} 아군 선봉 ${totalUnits}개 영웅 부대가 전술 필드로 워프 전개합니다.`;
       if (myPowerEl) myPowerEl.textContent = `${myPower} PWR`;
       if (myUnitsEl) myUnitsEl.textContent = `${totalUnits}개 부대 (${totalUnits}명) 편성 완료`;
+      const leadershipEl = document.getElementById('deploy-sim-leadership');
+      if (leadershipEl) leadershipEl.textContent = `${totalUnits} / ${maxLeadership}부대`;
       if (enemyPowerEl) enemyPowerEl.textContent = `${curSec.recPower} PWR`;
       if (enemyNameEl) enemyNameEl.textContent = curSec.enemyForce;
       if (diffEl) {
@@ -4548,15 +4578,8 @@
         closeSectorDeployModal();
         return;
       }
-      if (state.strategy.commanderAP < 5) {
-        const msg = '⚡ 통솔력(AP)이 부족합니다! (출격 필요: 5 AP)';
-        addLog(msg, 'warning');
-        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
-        return;
-      }
-
       const activeUnits = getSelectedDeployUnits();
-      const maxLeadership = state.strategy.commanderAP;
+      const maxLeadership = getLeadership();
       if (activeUnits.length === 0) {
         const msg = '⚠️ 출전할 영웅이 편성되지 않았습니다. 출전 부대 편성에서 영웅을 선택하세요.';
         addLog(msg, 'warning');
@@ -4580,11 +4603,10 @@
       // 이번 전투에 실제로 투입될 영웅 id를 전투 진입 전에 확정한다 (enterEncounter가 이 값으로 배치).
       state.currentDeployedUnitIds = activeUnits.map(u => u.id);
 
-      state.strategy.commanderAP -= 5;
       closeSectorDeployModal();
 
       const curSec = WORLD_SECTORS[activeSectorId] || { id: activeSectorId, name: activeSectorId };
-      addLog(`🚀 [작전 개시] ${launchNode.id} · [${curSec.id} ${curSec.name}] 전장으로 아군 선봉 ${activeUnits.length}개 부대가 출격했습니다! (-5 AP 소모)`, 'gold');
+      addLog(`🚀 [작전 개시] ${launchNode.id} · [${curSec.id} ${curSec.name}] 전장으로 아군 선봉 ${activeUnits.length}개 부대가 출격했습니다!`, 'gold');
 
       // 전술 전장 상태 초기화 및 전투 활성화 플래그 설정
       if (typeof window.resetTacticalBattleState === 'function') {
@@ -4619,7 +4641,6 @@
       if (!encounterReady) {
         // 맵 로드 실패 시 전투를 시작한 것으로 남기지 않는다.
         state.isCombatActive = false;
-        state.strategy.commanderAP += 5;
         state.currentView = 'STRATEGY';
         renderStrategyView();
         saveGameState(true);
@@ -4803,9 +4824,51 @@
 
     window.openSkillsModal = openSkillsModal;
 
+    // 지휘관 창 탭 (부관·스킬 / 보유 유물)
+    function switchCommanderTab(tab) {
+      document.querySelectorAll('#modal-skills .cmd-tab').forEach(btn => {
+        const on = btn.dataset.cmdTab === tab;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('#modal-skills .cmd-tab-panel').forEach(panel => {
+        panel.hidden = panel.dataset.cmdPanel !== tab;
+      });
+      if (tab === 'relics') renderCommanderRelics();
+    }
+    window.switchCommanderTab = switchCommanderTab;
+
+    function renderCommanderRelics() {
+      const relics = getOwnedRelics();
+      const countEl = document.getElementById('cmd-relic-count');
+      if (countEl) countEl.textContent = relics.length;
+      const list = document.getElementById('modal-relic-list');
+      if (!list) return;
+      const levelPart = getLeadershipForLevel(state.commander ? state.commander.level : 1);
+      const relicPart = getRelicLeadershipBonus();
+      const summary = `
+        <div class="relic-summary">
+          <span>👑 통솔력 <b>${levelPart + relicPart}부대</b></span>
+          <small>지휘관 Lv.${state.commander ? state.commander.level : 1} ${levelPart}부대${relicPart ? ` + 유물 ${relicPart}부대` : ''}</small>
+        </div>
+        <div class="relic-note">유물은 전투 승리 보상으로 얻습니다 (보스는 3개 중 1개 선택). 지금은 통솔력 효과만 게임에 적용되고, 나머지 효과는 준비 중입니다. 회귀하면 유물은 사라집니다.</div>`;
+      const pending = state.run && state.run.pendingRelicChoice
+        ? `<button type="button" class="adj-btn relic-pending-btn" onclick="openRelicChoiceModal()">👑 보스 유물 선택이 남아 있습니다 — 고르기</button>` : '';
+      const section = (title, items) => items.length
+        ? `<div class="relic-section-title">${title} <small>${items.length}</small></div><div class="relic-grid">${items.map(r => relicCardHtml(r)).join('')}</div>` : '';
+      const commander = relics.filter(r => r.kind !== 'gift');
+      const gifts = relics.filter(r => r.kind === 'gift');
+      list.innerHTML = summary + pending + (relics.length
+        ? section('지휘관 유물', commander) + section('선물 유물 (보관 중)', gifts)
+        : '<div class="adj-empty">아직 가진 유물이 없습니다.</div>');
+      // 효과 이름표(RewardEngine)가 아직 없으면 불러온 뒤 다시 그린다
+      if (!window.RewardEngine && relics.length) ensureRewardDataLoaded().then(data => { if (data) renderCommanderRelics(); });
+    }
+
     function openSkillsModal() {
       const modal = document.getElementById('modal-skills');
       renderAdjutantPanel();
+      renderCommanderRelics();
       const grid = document.getElementById('modal-skill-grid');
       document.getElementById('modal-sp-display').textContent = state.commander.skillPoints;
 
@@ -7544,7 +7607,7 @@
       saveHistorySnapshot();
       state.commander.level += 1;
       state.commander.skillPoints += 2;
-      addLog(`👑 [디버그 치트] 지휘관 레벨업! Lv.${state.commander.level} (SP +2 지급)`, 'gold');
+      addLog(`👑 [디버그 치트] 지휘관 레벨업! Lv.${state.commander.level} (SP +2 지급 · 통솔력 ${getLeadership()}부대)`, 'gold');
       renderAll();
       syncDebugInputsFromState();
     }
@@ -7842,11 +7905,25 @@
       return xp;
     }
 
+    // 소수점 아래를 확률로 올린다 (1.3 → 30% 확률로 2). 작은 정수에 배율을 걸어도 평균이 정확히 맞는다.
+    function roundStochastic(value) {
+      const base = Math.floor(value);
+      return base + (Math.random() < value - base ? 1 : 0);
+    }
+
+    const LEADERSHIP_XP_BONUS = 0.3; // 지휘관 패시브 "지휘관의 통솔": 아군 병과 경험치 +30%
+
     function awardPromotionXp(unit, amount, reason) {
       if (!unit || unit.isDead || !(amount > 0)) return;
-      unit.xp = (unit.xp || 0) + amount;
-      if (unit.owner === 'PLAYER' || !unit.owner) {
-        addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${amount} XP (보유 ${unit.xp} XP)`, 'gold');
+      const isPlayer = unit.owner === 'PLAYER' || !unit.owner;
+      let gained = amount;
+      if (isPlayer && state.commander?.unlockedSkills?.CommanderLeadership) {
+        gained = roundStochastic(amount * (1 + LEADERSHIP_XP_BONUS));
+      }
+      unit.xp = (unit.xp || 0) + gained;
+      if (isPlayer) {
+        const bonusText = gained > amount ? ` (통솔 +${gained - amount})` : '';
+        addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${gained} XP${bonusText} (보유 ${unit.xp} XP)`, 'gold');
       }
     }
 
@@ -8937,7 +9014,7 @@
 
       // 지휘관 통솔력 제한 확인
       const activeCount = (state.playerUnits || []).filter(u => !u.isDead).length;
-      const maxLeadership = state.strategy?.commanderAP || 24;
+      const maxLeadership = getLeadership();
       if (activeCount >= maxLeadership) {
         const errorMsg = `⚠️ 최대 통솔력 한도(${maxLeadership}부대)에 도달하여 추가 유닛을 편성할 수 없습니다!`;
         addLog(errorMsg, 'warning');
@@ -9463,7 +9540,6 @@
       campaign.regions[regionId].nodeGraphSeed = seed;
       campaign.lastSecured = null;
       state.selectedNodeId = null;
-      if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
       ensureNodeSelection();
       addLog(`🗺️ [작전지도] ${region.title.ko} 진입 — 위협도 ${region.threat}, 노드 ${mapState.nodes.length}개`, 'gold');
       saveGameState(true);
@@ -9732,7 +9808,6 @@
         state.isWipedOut = false;
         state.inactivated = false;
         if (state.strategy) {
-          state.strategy.commanderAP = state.strategy.maxCommanderAP;
           state.strategy.deploySelectedIds = null;
           state.strategy.deployKnownIds = [];
         }
@@ -10181,6 +10256,188 @@
     }
     window.openLoopRewardSelect = openLoopRewardSelect;
 
+    // ------------------------------------------------------------------------
+    // 유물: 전투에서 이기면 DB 보상 풀(rewardPools)을 굴려 나온 유물을 얻는다.
+    //   일반 전투 `${섹터}-battle`, 정예 `${섹터}-elite` → 나온 유물을 바로 지급
+    //   보스 `${섹터}-boss-relic` → 후보 3개 중 1개 선택 (run.pendingRelicChoice — 새로고침해도 남는다)
+    //   골드는 기존 전투 보상(battle.rewards)이 주고, 아이템은 아직 쓰는 곳이 없어 이 풀에서는 버린다.
+    //   보유 유물은 run.relics에 이름·효과까지 스냅샷으로 남긴다 (DB가 바뀌어도 그대로, 회귀하면 사라진다).
+    // ------------------------------------------------------------------------
+    const RELIC_POOL_SUFFIX = { battle: 'battle', elite: 'elite', boss: 'boss-relic' };
+    const RELIC_RARITY_META = {
+      common: { label: '일반', color: '#64748b' },
+      rare: { label: '희귀', color: '#0284c7' },
+      epic: { label: '영웅', color: '#9333ea' },
+      legendary: { label: '전설', color: '#d97706' }
+    };
+    let rewardDataCache = null;   // { relics: Map<id, relic>, pools: Map<id, pool> }
+    let rewardDataPromise = null;
+
+    function ensureRewardDataLoaded() {
+      if (rewardDataCache) return Promise.resolve(rewardDataCache);
+      if (!rewardDataPromise) {
+        rewardDataPromise = (async () => {
+          if (!window.RewardEngine) await import('./rewardEngine.js');
+          if (!window.SlgStore) throw new Error('SlgStore가 아직 준비되지 않았습니다.');
+          const [relics, pools] = await Promise.all([window.SlgStore.list('relics'), window.SlgStore.list('rewardPools')]);
+          rewardDataCache = {
+            relics: new Map((relics || []).map(r => [String(r.id), RewardEngine.normalizeRelic(r)])),
+            pools: new Map((pools || []).map(pl => [String(pl.id), pl]))
+          };
+          return rewardDataCache;
+        })().catch(err => {
+          rewardDataPromise = null; // 다음에 다시 시도
+          console.warn('[유물] 보상 데이터 로드 실패:', err);
+          return null;
+        });
+      }
+      return rewardDataPromise;
+    }
+
+    function getOwnedRelics() {
+      return state && state.run && Array.isArray(state.run.relics) ? state.run.relics : [];
+    }
+
+    function grantRelic(relicId, source) {
+      const def = rewardDataCache && rewardDataCache.relics.get(String(relicId));
+      if (!def || !state.run) return null;
+      if (!Array.isArray(state.run.relics)) state.run.relics = [];
+      const leadershipBefore = getLeadership();
+      const entry = {
+        instanceId: `relic_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        id: String(def.id),
+        name: def.name,
+        kind: def.kind,
+        rarity: def.rarity,
+        description: def.description || '',
+        ...(def.imageUrl ? { imageUrl: def.imageUrl } : {}),
+        effects: JSON.parse(JSON.stringify(def.effects || [])),
+        source: source || null,
+        acquiredAt: new Date().toISOString()
+      };
+      state.run.relics.push(entry);
+      const rarity = RELIC_RARITY_META[entry.rarity] || RELIC_RARITY_META.common;
+      const leadershipAfter = getLeadership();
+      const leadershipText = leadershipAfter !== leadershipBefore ? ` · 통솔력 ${leadershipBefore} → ${leadershipAfter}부대` : '';
+      addLog(`💎 [유물 획득] [${rarity.label}] ${entry.name} — ${describeRelicEffects(entry)}${leadershipText}`, 'gold');
+      return entry;
+    }
+
+    // 전투 승리 보상 유물. finishEncounter가 부른다 (데이터 로드를 기다려야 하므로 비동기).
+    async function awardBattleRelics(battle, node) {
+      const suffix = RELIC_POOL_SUFFIX[node && node.type];
+      if (!suffix || !battle) return;
+      const data = await ensureRewardDataLoaded();
+      if (!data) return;
+      const pool = data.pools.get(`${battle.sectorId}-${suffix}`);
+      if (!pool) { console.warn(`[유물] 보상 풀 ${battle.sectorId}-${suffix}이 없어 유물을 주지 않습니다.`); return; }
+      let results;
+      try {
+        // 같은 전투(seed)는 항상 같은 결과. 이미 가진 지휘관 유물은 RewardEngine이 후보에서 뺀다.
+        results = RewardEngine.rollRewardPool(pool, SeedEngine.createRNG(`${battle.seed}|relics`), {
+          pools: data.pools,
+          ownedCommanderRelicIds: getOwnedRelics().filter(r => r.kind === 'commander').map(r => r.id)
+        });
+      } catch (err) {
+        console.warn('[유물] 보상 풀 뽑기 실패:', err);
+        return;
+      }
+      const relicIds = results.filter(r => r.type === 'relic' && data.relics.has(String(r.id))).map(r => String(r.id));
+      if (!relicIds.length) return;
+      const source = { nodeId: battle.nodeId, sectorId: battle.sectorId, type: node.type };
+      if (node.type === 'boss') {
+        state.run.pendingRelicChoice = { ...source, options: relicIds };
+        saveGameState(true);
+        openRelicChoiceModal();
+        return;
+      }
+      const granted = relicIds.map(id => grantRelic(id, source)).filter(Boolean);
+      if (granted.length && typeof window.UI?.showToast === 'function') {
+        window.UI.showToast(`💎 유물 획득: ${granted.map(r => r.name).join(', ')}`, 'success');
+      }
+      saveGameState(true);
+      renderAll();
+    }
+
+    function relicStatText(fx) {
+      const label = (window.RewardEngine && RewardEngine.RELIC_STAT_LABELS[fx.stat]) || fx.stat;
+      const name = label.replace(/\s*\(.*\)\s*$/, '');
+      // 단위는 이름표 괄호 안에서만 읽는다 ('턴 시작 HP 회복 (+)'의 '턴'은 단위가 아니다)
+      const hint = (label.match(/\(([^)]*)\)\s*$/) || [])[1] || '';
+      const unit = ['%p', '%', '칸', '턴', '개'].find(u => hint.includes(u)) || '';
+      const value = Number(fx.value) || 0;
+      return `${name} ${value > 0 ? '+' : ''}${value}${unit}`;
+    }
+
+    function describeRelicEffects(relic) {
+      return (relic.effects || []).map(relicStatText).join(', ') || '효과 없음';
+    }
+
+    function relicCardHtml(relic, opts = {}) {
+      const rarity = RELIC_RARITY_META[relic.rarity] || RELIC_RARITY_META.common;
+      const kindLabel = relic.kind === 'gift' ? '선물' : '지휘관';
+      const effects = (relic.effects || []).map(fx => {
+        const active = relic.kind === 'commander' && LEADERSHIP_RELIC_STATS.includes(fx.stat);
+        return `<li class="relic-fx${active ? ' active' : ''}">${escapeGachaHtml(relicStatText(fx))}${active ? ' <b>적용 중</b>' : ''}</li>`;
+      }).join('');
+      return `
+        <div class="relic-card" style="--relic-color:${rarity.color}">
+          <div class="relic-card-head">
+            <span class="relic-icon">${relic.imageUrl ? `<img src="${escapeGachaHtml(relic.imageUrl)}" alt="">` : '💎'}</span>
+            <span class="relic-title"><b>${escapeGachaHtml(relic.name)}</b><small>${rarity.label} · ${kindLabel} 유물</small></span>
+          </div>
+          ${relic.description ? `<div class="relic-desc">${escapeGachaHtml(relic.description)}</div>` : ''}
+          <ul class="relic-fx-list">${effects}</ul>
+          ${opts.button || ''}
+        </div>`;
+    }
+
+    // 보스 유물 3택1
+    function openRelicChoiceModal(retries = 3) {
+      const pending = state.run && state.run.pendingRelicChoice;
+      if (!pending || !Array.isArray(pending.options) || !pending.options.length) return;
+      ensureRewardDataLoaded().then(data => {
+        // 불러오기 직후에는 Supabase가 아직 준비 중일 수 있다 → 잠시 뒤 다시 시도
+        if (!data) { if (retries > 0) setTimeout(() => openRelicChoiceModal(retries - 1), 2000); return; }
+        if (state.run.pendingRelicChoice !== pending) return;
+        document.getElementById('modal-relic-choice')?.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'modal-relic-choice';
+        overlay.className = 'relic-choice-overlay';
+        const cards = pending.options.map((id, i) => {
+          const relic = data.relics.get(String(id));
+          if (!relic) return '';
+          return relicCardHtml(relic, { button: `<button type="button" class="relic-pick-btn" data-relic-index="${i}">이 유물 선택</button>` });
+        }).join('');
+        overlay.innerHTML = `
+          <div class="relic-choice-window" role="dialog" aria-label="보스 유물 선택">
+            <div class="relic-choice-title">👑 보스 격파 — 유물 1개를 고르세요</div>
+            <div class="relic-choice-sub">고르지 않은 유물은 사라집니다.</div>
+            <div class="relic-choice-grid">${cards}</div>
+          </div>`;
+        overlay.querySelectorAll('.relic-pick-btn').forEach(btn => {
+          btn.onclick = () => chooseRelicReward(Number(btn.dataset.relicIndex));
+        });
+        document.body.appendChild(overlay);
+      });
+    }
+    window.openRelicChoiceModal = openRelicChoiceModal;
+
+    function chooseRelicReward(index) {
+      const pending = state.run && state.run.pendingRelicChoice;
+      if (!pending) return;
+      const relicId = pending.options[index];
+      if (relicId == null) return;
+      state.run.pendingRelicChoice = null;
+      const { options, ...source } = pending;
+      const relic = grantRelic(relicId, source);
+      document.getElementById('modal-relic-choice')?.remove();
+      if (relic && typeof window.UI?.showToast === 'function') window.UI.showToast(`💎 유물 획득: ${relic.name}`, 'success');
+      saveGameState(true);
+      renderAll();
+    }
+    window.chooseRelicReward = chooseRelicReward;
+
     /**
      * 12단계: 전투 결과 처리의 단일 진입점.
      *
@@ -10252,10 +10509,6 @@
         }
       }
       RunEngine.recordEncounter(run, battle, victory, { reason, casualties: casualties.map(c => c.id), rewards });
-      if (victory) {
-        // 노드가 하나 끝났으니 지휘 AP를 회복한다 (AP는 "한 전투 출격 비용"이라 전투 사이에 채워져야 런이 이어진다).
-        if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
-      }
 
       // 5) 전투 인스턴스 정리: 결과는 run.encounters에 요약으로 남고, 맵/적 데이터는 버린다.
       battle.status = victory ? 'won' : 'lost';
@@ -10307,6 +10560,8 @@
       [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = nextView; });
       switchGameView(nextView);
       saveGameState();
+      // 7-1) 유물 보상 (보상 데이터를 불러온 뒤 지급하므로 비동기 — 보스는 3택1 창이 뜬다)
+      if (victory && node) awardBattleRelics(battle, node);
       // 8) 2차: 생존 유닛 0이면 골드에 따라 사망회귀 / 긴급 모집 (회귀 판정은 여기와 긴급 모집 화면에서만 한다)
       finished.survival = resolveRunSurvival();
       return finished;

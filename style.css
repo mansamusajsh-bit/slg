@@ -5605,3 +5605,43 @@
 .dlg-group{margin-top:6px;border:1px solid #fde68a;border-radius:10px;padding:6px 8px;background:#fffdf5}
 .dlg-group>summary{cursor:pointer;font-size:11px;font-weight:800;color:#92400e}
 .dlg-group[open]>summary{margin-bottom:4px}
+
+/* 지휘관 창 — 탭 (부관·스킬 / 보유 유물) */
+.cmd-tabs{display:flex;gap:6px;border-bottom:1.5px solid #e2e8f0;padding-bottom:6px}
+.cmd-tab{flex:1;padding:7px 10px;border-radius:10px;border:1.5px solid #e2e8f0;background:#f8fafc;color:#475569;font:inherit;font-size:12px;font-weight:900;cursor:pointer}
+.cmd-tab:hover{border-color:#bae6fd;color:#0369a1}
+.cmd-tab.active{background:#0284c7;border-color:#0284c7;color:#fff}
+.cmd-tab-count{display:inline-block;min-width:18px;padding:0 5px;margin-left:2px;border-radius:999px;background:rgba(15,23,42,.08);font-size:10px;line-height:16px}
+.cmd-tab.active .cmd-tab-count{background:rgba(255,255,255,.25)}
+.cmd-tab-panel{display:flex;flex-direction:column;gap:12px}
+.cmd-tab-panel[hidden]{display:none}
+
+/* 보유 유물 목록 · 보스 유물 3택1 (game.js renderCommanderRelics / openRelicChoiceModal) */
+.relic-summary{display:flex;align-items:baseline;justify-content:space-between;gap:8px;background:#f0f9ff;border:1.5px solid #bae6fd;border-radius:12px;padding:8px 10px;font-size:12px;color:#0f172a}
+.relic-summary b{color:#0369a1}
+.relic-summary small{font-size:10px;font-weight:800;color:#64748b}
+.relic-note{font-size:10px;color:#64748b;line-height:1.45}
+.relic-pending-btn{align-self:flex-start}
+.relic-section-title{font-size:12px;font-weight:900;color:#0f172a}
+.relic-section-title small{font-size:10px;color:#64748b}
+.relic-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}
+.relic-card{background:#fff;border:1.5px solid #e2e8f0;border-left:4px solid var(--relic-color,#64748b);border-radius:12px;padding:9px 10px;display:flex;flex-direction:column;gap:5px;color:#0f172a;min-width:0}
+.relic-card-head{display:flex;align-items:center;gap:8px;min-width:0}
+.relic-icon{flex:none;width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;font-size:16px;overflow:hidden}
+.relic-icon img{width:100%;height:100%;object-fit:cover}
+.relic-title{display:flex;flex-direction:column;min-width:0}
+.relic-title b{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relic-title small{font-size:9.5px;font-weight:800;color:var(--relic-color,#64748b)}
+.relic-desc{font-size:10px;color:#64748b;line-height:1.4}
+.relic-fx-list{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:2px}
+.relic-fx{font-size:10.5px;font-weight:800;color:#475569}
+.relic-fx::before{content:'• ';color:#94a3b8}
+.relic-fx.active{color:#0369a1}
+.relic-fx.active b{font-size:9px;padding:0 5px;border-radius:999px;background:#e0f2fe;color:#0369a1}
+.relic-choice-overlay{position:fixed;inset:0;z-index:99990;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,.75);backdrop-filter:blur(6px)}
+.relic-choice-window{width:100%;max-width:640px;max-height:90vh;overflow-y:auto;background:#fff;border:2px solid #f59e0b;border-radius:18px;padding:16px;display:flex;flex-direction:column;gap:8px;box-shadow:0 20px 40px rgba(0,0,0,.4)}
+.relic-choice-title{font-size:15px;font-weight:900;color:#0f172a;text-align:center}
+.relic-choice-sub{font-size:11px;color:#64748b;text-align:center}
+.relic-choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+.relic-pick-btn{margin-top:auto;padding:7px 10px;border-radius:999px;border:none;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;font:inherit;font-size:11.5px;font-weight:900;cursor:pointer}
+.relic-pick-btn:hover{filter:brightness(1.08)}

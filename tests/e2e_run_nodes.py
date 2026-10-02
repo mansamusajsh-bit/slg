@@ -51,19 +51,18 @@ with sync_playwright() as pw:
     page.evaluate("(id)=>{ RunEngine.getNode(state.run,id).type='event'; selectNode(id); }",evn)
     c.ok('이벤트' in page.evaluate("document.querySelector('#btn-open-deploy-modal').innerText"),'이벤트 노드 선택 → 버튼 문구 "이벤트 진행"')
     c.ok('AP 소모 없음' in page.evaluate("document.getElementById('strat-action-summary-cost').textContent"),'AP 소모 없음 표기')
-    g0=page.evaluate("state.gold"); r0=page.evaluate("state.rewinders"); ap0=page.evaluate("state.strategy.commanderAP")
+    g0=page.evaluate("state.gold"); r0=page.evaluate("state.rewinders")
     page.evaluate("()=>{ const u=state.playerUnits[0]; u.hp=10; }")
     ev=page.evaluate("(id)=>RunEngine.rollEvent(state.run,RunEngine.getNode(state.run,id))",evn)
     page.click('#btn-open-deploy-modal'); page.wait_for_timeout(200)
     c.ok(page.is_visible('#modal-run-node') and not page.evaluate("document.getElementById('modal-sector-deploy').classList.contains('open')"),'이벤트 전용 창이 뜨고 출전 편성 모달은 안 뜬다: '+ev['title'])
     page.evaluate("()=>{ const b=document.querySelector('#modal-run-node button'); b.click(); b.click(); }")  # 이중 클릭
     page.wait_for_timeout(200)
-    st=page.evaluate("({g:state.gold,r:state.rewinders,ap:state.strategy.commanderAP,hp:state.playerUnits[0].hp,max:state.playerUnits[0].maxHp,done:state.run.completedNodes,last:state.run.encounters.slice(-1)[0],modal:!!document.getElementById('modal-run-node')})")
+    st=page.evaluate("({g:state.gold,r:state.rewinders,hp:state.playerUnits[0].hp,max:state.playerUnits[0].maxHp,done:state.run.completedNodes,last:state.run.encounters.slice(-1)[0],modal:!!document.getElementById('modal-run-node')})")
     eff=ev['effects'][0]
     exp_ok={'gold':st['g']==g0+eff['amount'],'rewinder':st['r']==r0+1,'heal_all':st['hp']==st['max']}[eff['type']]
     c.ok(exp_ok,f"이벤트 효과 정확히 1회 적용 ({eff['type']}) — 이중 클릭에도 중복 없음")
     c.ok(evn in st['done'] and st['last']['reason']=='node' and not st['modal'],'노드 완료 + encounters 기록 + 창 닫힘')
-    c.ok(st['ap']==ap0,'AP 변화 없음')
     c.ok(page.evaluate("RunEngine.getAvailableNodes(state.run).length")>=1,'다음 노드 해금')
 
     print('\n=== 상점 노드 ===')
@@ -89,11 +88,11 @@ with sync_playwright() as pw:
     print('\n=== 보스: 템플릿 없는 섹터 → 실패 경로 → 클리어 ===')
     boss=advance_to(page,"n.type==='boss'")
     c.ok(boss is not None and page.evaluate("(id)=>RunEngine.getNode(state.run,id).sectorId",boss)=='B-2','보스 노드가 열림 (섹터 B-2)')
-    page.evaluate("(id)=>selectNode(id)",boss); page.evaluate("()=>{ state.strategy.commanderAP=24; state.gold=500; }")
+    page.evaluate("(id)=>selectNode(id)",boss); page.evaluate("()=>{ state.gold=500; }")
     errors.clear()
     launch_selected(page)
-    st=page.evaluate("({battle:state.currentBattle,ap:state.strategy.commanderAP,view:state.currentView,avail:RunEngine.isNodeAvailable(state.run,state.selectedNodeId)})")
-    c.ok(st['battle'] is None and st['ap']==24 and st['view']=='STRATEGY' and st['avail'],'B-2 템플릿이 없으면 전투가 만들어지지 않고 AP 환불, 노드는 그대로 열려 있음 (기본맵으로 대체하지 않는다)')
+    st=page.evaluate("({battle:state.currentBattle,view:state.currentView,avail:RunEngine.isNodeAvailable(state.run,state.selectedNodeId)})")
+    c.ok(st['battle'] is None and st['view']=='STRATEGY' and st['avail'],'B-2 템플릿이 없으면 전투가 만들어지지 않고 노드는 그대로 열려 있음 (기본맵으로 대체하지 않는다)')
     c.ok(any('B-2' in e and '템플릿' in e for e in errors),'사용자에게 원인 전달(콘솔/로그): '+(errors[0][:60] if errors else ''))
     errors.clear()  # 위 오류는 의도된 실패 경로
     page.evaluate(TEMPLATE_JS,'B-2')
@@ -113,9 +112,9 @@ with sync_playwright() as pw:
     print('\n=== 새 런 ===')
     seed_old=page.evaluate("state.run.seed"); g=page.evaluate("state.gold")
     page.click('#btn-new-run'); page.wait_for_timeout(300)
-    st=page.evaluate("({seed:state.run.seed,status:state.run.status,done:state.run.completedNodes,seq:state.encounterSeq,g:state.gold,ap:state.strategy.commanderAP,avail:RunEngine.getAvailableNodes(state.run).length})")
+    st=page.evaluate("({seed:state.run.seed,status:state.run.status,done:state.run.completedNodes,seq:state.encounterSeq,g:state.gold,avail:RunEngine.getAvailableNodes(state.run).length})")
     c.ok(st['seed']!=seed_old and st['status']=='active' and st['done']==[] and st['seq']==0 and st['avail']==1,'새 런: 새 seed, 진행도/encounterSeq 초기화, 시작 노드 열림')
-    c.ok(st['g']==g and st['ap']==24,'캐릭터/골드는 유지')
+    c.ok(st['g']==g,'캐릭터/골드는 유지')
     # 전투 중에는 새 런 불가
     fresh_run(page,'RUN-LOCK'); page.evaluate("(id)=>selectNode(id)",page.evaluate("state.run.mapState.layers[0][0]")); launch_selected(page)
     c.ok(page.evaluate("startNewRun()")==False and page.evaluate("state.currentBattle!==null"),'전투 중에는 새 런 시작 차단')

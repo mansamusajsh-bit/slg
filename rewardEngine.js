@@ -37,14 +37,15 @@
     gift: Object.freeze(['self']),
     commander: Object.freeze(['army', 'battle', 'run'])
   });
-  // 유물 효과 어휘. 값의 의미(단위)는 RELIC_STAT_LABELS에 적는다. 실제 적용 로직은 아직 없다(데이터만).
+  // 유물 효과 어휘. 값의 의미(단위)는 RELIC_STAT_LABELS에 적는다.
+  // 게임에 실제로 적용되는 것은 통솔력(leadership, deploySlots)뿐이다 (game.js getRelicLeadershipBonus). 나머지는 데이터만 있다.
   const RELIC_STAT_LABELS = Object.freeze({
     atk: '공격력 (+)', def: '방어력 (+)', hp: '최대 HP (+)', mobility: '이동력 (+)', ap: '행동력 AP (+)',
     critRate: '치명타율 (%p)', evasion: '회피율 (%p)', lifesteal: '흡혈 (피해의 %)', counterDmg: '반격 피해 (%)',
     terrainDef: '지형 방어 보너스 (%p)', range: '사거리 (+칸)', regen: '턴 시작 HP 회복 (+)', shield: '전투 시작 보호막 (+)',
     firstTurnAp: '첫 턴 추가 AP (+)', healAfterBattle: '전투 후 HP 회복 (최대 HP의 %)', skillCooldown: '스킬 재사용 대기 (턴, 음수=감소)',
     goldGain: '골드 획득 (%)', expGain: '경험치 획득 (%)', spGain: '승리 시 SP (+)', affection: '호감도 (+)',
-    shopDiscount: '상점 할인 (%)', commanderAP: '지휘 AP 최대치 (+)', rewinder: '시공간 리와인더 (+개)', deploySlots: '출전 슬롯 (+)'
+    shopDiscount: '상점 할인 (%)', leadership: '통솔력 (+출전 인원)', rewinder: '시공간 리와인더 (+개)', deploySlots: '출전 슬롯 (+, 통솔력과 같음)'
   });
   const RELIC_STATS = Object.freeze(Object.keys(RELIC_STAT_LABELS));
   const ITEM_CATEGORIES = Object.freeze({
@@ -110,6 +111,9 @@
     };
   }
 
+  // 출격 AP가 없어지면서 지휘 AP 효과(commanderAP)는 통솔력(leadership)이 됐다. 예전 레코드도 같은 효과로 읽는다.
+  const LEGACY_RELIC_STATS = Object.freeze({ commanderAP: 'leadership' });
+
   function normalizeRelic(raw) {
     const r = raw || {};
     return {
@@ -120,7 +124,7 @@
       description: r.description ?? '',
       ...(hasValue(r.imageUrl) ? { imageUrl: r.imageUrl } : {}),
       effects: Array.isArray(r.effects)
-        ? r.effects.map(fx => ({ scope: fx?.scope, stat: fx?.stat, value: fx?.value }))
+        ? r.effects.map(fx => ({ scope: fx?.scope, stat: LEGACY_RELIC_STATS[fx?.stat] || fx?.stat, value: fx?.value }))
         : r.effects
     };
   }
