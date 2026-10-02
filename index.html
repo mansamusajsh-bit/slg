@@ -32,17 +32,26 @@
   <main id="mobile-app">
 
     <!-- ======================================================================
+         [ 작전지도 (Campaign Map) ] — 전략맵에 들어가기 전 단계
+         구역 선택 + 부관 브리핑. 내용은 campaignMap.js가 그린다.
+         ====================================================================== -->
+    <div id="view-campaign-map" class="game-view-layer">
+      <div id="campaign-map-body" class="cmp-body"></div>
+    </div>
+
+    <!-- ======================================================================
          [ 1단계: 월드맵 / 전략 메인 화면 (Strategy Main View) ]
          서브컬처 육성/경주 시뮬레이션 (우마무스메풍) 라이트 블루 & 화이트 글래스모피즘
          ====================================================================== -->
     <div id="view-strategy-main" class="game-view-layer active">
 
       <!-- 1. Header Zone: 지휘관 프로필 및 자원 헤더 -->
-      <header class="strat-header-zone">
+      <!-- 공용 헤더: 작전지도/전략맵 중 보이는 화면 맨 위로 옮겨 붙는다 (game.js mountSharedHeader) -->
+      <header class="strat-header-zone" id="shared-strat-header">
         <div class="strat-top-strip">
           <div class="strat-mode-pill">
             <span class="strat-mode-dot"></span>
-            <span>STRATEGY COMMAND CENTER</span>
+            <span id="strat-mode-label">STRATEGY COMMAND CENTER</span>
           </div>
           <div class="guest-info-badge" onclick="openDebugModal('create-char')" role="button" tabindex="0" title="관리자 DEV 및 게스트 설정">
             <span class="guest-status-dot"></span>
@@ -114,6 +123,7 @@
 
           <div class="strat-run-hud" id="strat-run-hud">
             <span id="strat-run-hud-text">RUN --</span>
+            <button type="button" id="btn-open-campaign" class="strat-run-hud-btn" title="작전지도로 돌아갑니다 (진행 중인 구역 작전은 유지)" onclick="openCampaignMap()">🗺️ 작전지도</button>
             <button type="button" id="btn-new-run" class="strat-run-hud-btn" title="새 로그라이크 런을 시작합니다" onclick="startNewRun()">🔄 새 런</button>
           </div>
         </div>
@@ -220,7 +230,7 @@
     <div id="view-character-gacha" class="game-view-layer">
       <header class="gacha-header-zone">
         <div class="gacha-topbar">
-          <button class="gacha-back-btn" onclick="closeCharacterGacha()">← 전략 창</button>
+          <button class="gacha-back-btn" onclick="closeCharacterGacha()">← 돌아가기</button>
           <div class="gacha-title-wrap">
             <div class="gacha-title">MERCENARY HIRE</div>
             <div class="gacha-subtitle">용병 고용소</div>
@@ -691,9 +701,11 @@
     <div class="modal-backdrop" id="modal-skills">
       <div class="modal-window">
         <div class="modal-header">
-          <div class="modal-title">⭐ 지휘관 패시브 스킬 트리 (보유: <span id="modal-sp-display">2</span> SP)</div>
+          <div class="modal-title">👑 지휘관 — 부관 임명 · 패시브 스킬 (보유: <span id="modal-sp-display">2</span> SP)</div>
           <button class="btn-close" onclick="closeAllModals()">✕</button>
         </div>
+        <!-- 부관 임명/교체/해임 (game.js renderAdjutantPanel) -->
+        <div class="adj-panel" id="modal-adjutant-panel"></div>
         <div class="skill-grid" id="modal-skill-grid">
           <!-- Dynamically populated -->
         </div>
@@ -1375,6 +1387,7 @@
   <script src="ui.js"></script>
   <script src="audio/returnByDeath.js"></script>
   <script src="game.js"></script>
+  <script src="campaignMap.js"></script>
   <script src="civ4-editor.js"></script>
 </body>
 </html>

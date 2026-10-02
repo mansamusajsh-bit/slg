@@ -497,6 +497,8 @@
       run.echo = null;
       // 작전지도: 지도 형태(campaignRegions.js)는 고정, 회차별 구역 상태만 여기 둔다. 시작 구역 하나만 available.
       run.campaign = createCampaignState();
+      // 부관: 회차마다 작전지도에서 새로 임명한다 ({ characterId, name }). 지휘력 카드의 방어 보정도 부관이 받는다.
+      run.adjutant = null;
       // 진행 중인 전술 전투. run 아래에 있으므로 회귀(새 run)와 함께 사라진다.
       run.currentBattle = null;
       applyLoopRewardToRun(run, loopReward);
@@ -536,8 +538,13 @@
         if (!Array.isArray(nextRun.characterCollection)) nextRun.characterCollection = Array.isArray(prev.characterCollection) ? prev.characterCollection : [];
         if (!nextRun.nodeAttempts) nextRun.nodeAttempts = {};
       }
-      // 작전지도 이전 세이브의 런: 구역 상태를 새로 만든다. 전투는 restoreSavedBattle()이 따로 채운다.
-      if (!nextRun.campaign) nextRun.campaign = createCampaignState();
+      // 작전지도 이전 세이브의 런: 구역 상태를 새로 만들고, 진행 중이던 노드 그래프는 시작 구역의 작전으로 이어 간다.
+      // 전투는 restoreSavedBattle()이 따로 채운다.
+      if (!nextRun.campaign) {
+        nextRun.campaign = createCampaignState();
+        if (nextRun.status === 'active') nextRun.campaign.currentRegionId = CAMPAIGN_MAP.startRegionId;
+      }
+      if (!('adjutant' in nextRun)) nextRun.adjutant = null;
       if (!('currentBattle' in nextRun)) nextRun.currentBattle = null;
       state.run = nextRun;
       return nextRun;
@@ -552,7 +559,7 @@
           createdAt: new Date().toISOString(),
           lastSavedAt: new Date().toISOString()
         },
-        currentView: 'STRATEGY', // 'STRATEGY' (월드맵/전략 메인) | 'SECTOR_MAP' (8x14 전술 필드)
+        currentView: 'CAMPAIGN', // 'CAMPAIGN' (작전지도) | 'STRATEGY' (구역 노드맵/전략 메인) | 'SECTOR_MAP' (8x14 전술 필드)
         currentSector: 'A-1',
         selectedSectorId: 'A-1',
         editingSectorId: 'A-1',
@@ -1128,7 +1135,7 @@
         const restoredBattle = restoreSavedBattle(parsed.currentBattle);
         if (!restoredBattle) {
           state.enemyUnits = [];
-          state.currentView = 'STRATEGY';
+          state.currentView = getIdleView();
         }
 
         updateGuestSaveIndicator(false);
@@ -3348,7 +3355,7 @@
       const prevRun = state.run;
       const nextRun = createInitialRun(customSeed, null);
       if (prevRun) {
-        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo']
+        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo', 'adjutant']
           .forEach(k => { if (k in prevRun) nextRun[k] = prevRun[k]; });
       }
       state.run = nextRun;
@@ -3357,7 +3364,8 @@
       state.currentBattle = null;
       if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
       ensureNodeSelection();
-      addLog(`🧭 [새 런 시작] seed ${state.run.seed} — 노드 ${state.run.mapState.nodes.length}개`, 'gold');
+      addLog(`🧭 [새 런 시작] seed ${state.run.seed} — 작전지도에서 구역을 고르세요.`, 'gold');
+      state.currentView = 'CAMPAIGN';
       renderAll();
       saveGameState();
       return true;
@@ -3738,8 +3746,10 @@
         finishEncounter({ victory: true });
         return;
       }
+      // 구역 작전을 시작하기 전에는 전략맵(노드 그래프)이 없다 → 작전지도로.
+      if (targetView === 'STRATEGY' && !getCurrentRegionId() && !state.currentBattle) targetView = 'CAMPAIGN';
       // 11단계: 진행 중인 전투(currentBattle) 없이 전술 화면으로 들어가는 길은 없다. 섹터 id로 몰래 전투를 만들지 않는다.
-      if (targetView !== 'STRATEGY' && targetView !== 'GACHA' && !(state.currentBattle && state.currentBattle.map && state.currentBattle.map.tiles && state.currentBattle.map.tiles.length)) {
+      if (targetView !== 'STRATEGY' && targetView !== 'GACHA' && targetView !== 'CAMPAIGN' && !(state.currentBattle && state.currentBattle.map && state.currentBattle.map.tiles && state.currentBattle.map.tiles.length)) {
         const msg = '⚠️ 진행 중인 전투가 없습니다. 전략맵에서 노드를 선택해 출격하세요.';
         addLog(msg, 'warning');
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
@@ -3760,10 +3770,16 @@
       const viewStrat = document.getElementById('view-strategy-main');
       const viewSector = document.getElementById('view-sector-field');
       const viewGacha = document.getElementById('view-character-gacha');
+      const viewCampaign = document.getElementById('view-campaign-map');
 
       if (viewGacha) viewGacha.classList.toggle('active', targetView === 'GACHA');
+      if (viewCampaign) viewCampaign.classList.toggle('active', targetView === 'CAMPAIGN');
 
-      if (targetView === 'GACHA') {
+      if (targetView === 'CAMPAIGN') {
+        if (viewStrat) viewStrat.classList.remove('active');
+        if (viewSector) viewSector.classList.remove('active');
+        renderCampaignView();
+      } else if (targetView === 'GACHA') {
         if (viewStrat) viewStrat.classList.remove('active');
         if (viewSector) viewSector.classList.remove('active');
         renderCharacterGacha();
@@ -3949,7 +3965,9 @@
       }
     }
 
+    let gachaReturnView = 'STRATEGY';
     async function openCharacterGacha() {
+      if (state && state.currentView !== 'GACHA') gachaReturnView = state.currentView === 'CAMPAIGN' ? 'CAMPAIGN' : 'STRATEGY';
       switchGameView('GACHA');
       const status = document.getElementById('gacha-status');
       const pool = getCharacterGachaPool();
@@ -3973,7 +3991,7 @@
     window.openCharacterGacha = openCharacterGacha;
 
     function closeCharacterGacha() {
-      switchGameView('STRATEGY');
+      switchGameView(gachaReturnView);
     }
     window.closeCharacterGacha = closeCharacterGacha;
 
@@ -4168,26 +4186,33 @@
 
       const hud = document.getElementById('strat-run-hud-text');
       if (hud) {
+        const regionId = getCurrentRegionId(run);
+        const where = regionId && typeof REGIONS !== 'undefined' && REGIONS[regionId] ? REGIONS[regionId].title.ko : run.seed;
         hud.textContent = run.status === 'won'
-          ? `🏆 런 클리어 · ${run.seed}`
-          : `🧭 ${run.seed} · ${run.completedNodes.length}/${layers.length}층`;
+          ? `🏆 런 클리어 · ${where}`
+          : `🧭 ${where} · ${run.completedNodes.length}/${layers.length}층`;
       }
     }
     window.refreshWorldSectorNodes = refreshWorldSectorNodes;
 
-    function renderStrategyView() {
-      if (!state?.worldSectorsLoaded) { ensureWorldSectorsLoaded().then(() => { state.worldSectorsLoaded = true; renderStrategyView(); }); }
-      refreshWorldSectorNodes();
-      if (!state) return;
-      const strat = state.strategy || {
-        commanderAP: 24,
-        maxCommanderAP: 24,
-        selectedSectorId: 'A-1',
-        armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
-        activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
-      };
+    /**
+     * 공용 상단 헤더 (게스트 id · 지휘관 · 용병 고용/명부 · 통솔력/골드/리와인더).
+     * 헤더 DOM은 하나뿐이고, 작전지도와 전략맵 중 지금 보이는 화면의 맨 위로 옮겨 붙인다.
+     */
+    const SHARED_HEADER_LABELS = { 'view-strategy-main': 'STRATEGY COMMAND CENTER', 'view-campaign-map': 'OPERATION MAP' };
+    function mountSharedHeader(viewId) {
+      const header = document.getElementById('shared-strat-header');
+      const view = document.getElementById(viewId);
+      if (!header || !view) return;
+      if (header.parentElement !== view) view.insertBefore(header, view.firstChild);
+      const label = document.getElementById('strat-mode-label');
+      if (label) label.textContent = SHARED_HEADER_LABELS[viewId] || SHARED_HEADER_LABELS['view-strategy-main'];
+    }
+    window.mountSharedHeader = mountSharedHeader;
 
-      // Header Elements
+    function renderStrategyHeader() {
+      if (!state) return;
+      const strat = state.strategy || { commanderAP: 24, maxCommanderAP: 24 };
       const cmdName = document.getElementById('strat-cmd-name');
       const cmdLvl = document.getElementById('strat-cmd-level');
       const cmdExpFill = document.getElementById('strat-cmd-exp-fill');
@@ -4208,6 +4233,23 @@
       if (stratGuestId && state.guest) {
         stratGuestId.textContent = state.guest.supabaseUid ? `FB_${state.guest.supabaseUid.substring(0, 5)}` : state.guest.id;
       }
+    }
+    window.renderStrategyHeader = renderStrategyHeader;
+
+    function renderStrategyView() {
+      if (!state?.worldSectorsLoaded) { ensureWorldSectorsLoaded().then(() => { state.worldSectorsLoaded = true; renderStrategyView(); }); }
+      refreshWorldSectorNodes();
+      if (!state) return;
+      const strat = state.strategy || {
+        commanderAP: 24,
+        maxCommanderAP: 24,
+        selectedSectorId: 'A-1',
+        armyDeck: { KNIGHT: 30, MAGE: 15, ARCHER: 25, MELEE: 20, FIREARM: 10 },
+        activeSkills: { RapidAdvance: true, BearDown: true, ShieldWall: true, StrategicDominance: false, Precision: false }
+      };
+
+      mountSharedHeader('view-strategy-main');
+      renderStrategyHeader();
 
       // Selected Node -> Sector Details (11단계: 섹터가 아니라 "선택한 노드"가 기준)
       const selNode = ensureNodeSelection();
@@ -4646,7 +4688,13 @@
     function renderAll() {
       renderLoopCounter();
       renderDeployBanner();
-      if (state && state.currentView === 'STRATEGY') {
+      const viewCampaign = document.getElementById('view-campaign-map');
+      if (viewCampaign) viewCampaign.classList.toggle('active', !!(state && state.currentView === 'CAMPAIGN'));
+      if (state && state.currentView === 'CAMPAIGN') {
+        document.getElementById('view-strategy-main')?.classList.remove('active');
+        document.getElementById('view-sector-field')?.classList.remove('active');
+        renderCampaignView();
+      } else if (state && state.currentView === 'STRATEGY') {
         const viewStrat = document.getElementById('view-strategy-main');
         const viewSector = document.getElementById('view-sector-field');
         if (viewStrat) viewStrat.classList.add('active');
@@ -4811,6 +4859,7 @@
 
     function openSkillsModal() {
       const modal = document.getElementById('modal-skills');
+      renderAdjutantPanel();
       const grid = document.getElementById('modal-skill-grid');
       document.getElementById('modal-sp-display').textContent = state.commander.skillPoints;
 
@@ -6079,6 +6128,7 @@
     function closeCharacterPool() {
       const modal = document.getElementById('modal-character-pool');
       if (modal) modal.style.display = 'none';
+      if (state && state.currentView === 'CAMPAIGN') renderCampaignView();
     }
     window.closeCharacterPool = closeCharacterPool;
 
@@ -9157,37 +9207,280 @@
       }
     }
 
-    /**
-     * 지휘력 보정 대상 선택. 대상은 다음 런 시작 파티(createStartingParty)의 캐릭터. 건너뛰기 없음.
-     * @returns {Promise<string>} 고른 캐릭터 id
-     */
-    function openCommandBonusSelect() {
-      return new Promise(resolve => {
-        const candidates = createStartingParty();
-        const { card } = rbdModal('modal-command-bonus', '#a78bfa');
-        card.innerHTML = `
-          <div class="rbd-icon">🔁</div>
-          <h2 class="rbd-title" style="color:#c4b5fd;">지휘력 보정</h2>
-          <p class="rbd-text">회귀 ${state.player.loopCount}회차. 이번 생에서 곁을 지킬 한 명을 고르세요.<br/>고른 대원은 <b>이번 런 동안</b> 방어력 +1을 얻습니다. (다시 회귀하면 사라집니다)</p>
-          <div class="rbd-list">${candidates.map(u => `
-            <button type="button" class="rbd-row rbd-row-pick" data-char="${getCharacterId(u)}">
-              <span class="rbd-row-avatar">${u.avatar || '👤'}</span>
-              <span class="rbd-row-main"><b>${u.name}</b><small>${u.classType} · Lv.${u.level || 1} · 방어 ${getBaseDef(u)} → <b class="rbd-up">${getBaseDef(u) + 1}</b></small></span>
-            </button>`).join('')}
-          </div>`;
-        card.querySelectorAll('[data-char]').forEach(btn => {
-          btn.onclick = () => {
-            document.getElementById('modal-command-bonus')?.remove();
-            resolve(btn.dataset.char);
-          };
-        });
-      });
-    }
-    window.openCommandBonusSelect = openCommandBonusSelect;
-
     // 저장은 gameState 문서 하나에 player와 run이 함께 들어간다 (Supabase 왕복 1회).
     async function savePlayer() { saveGameState(true); }
     async function saveRun() { saveGameState(true); }
+
+    // ---- 작전지도 (구역) -----------------------------------------------------
+    // 지도 형태와 인접 관계는 campaignRegions.js(고정), 회차별 구역 상태는 run.campaign (회귀 시 함께 초기화).
+    // 구역에 들어가면 그 구역의 노드 그래프를 새로 만들고, 보스를 격파하면 구역 확보 → 작전지도로 돌아온다.
+    function getCurrentRegionId(run = state && state.run) {
+      return (run && run.campaign && run.campaign.currentRegionId) || null;
+    }
+    window.getCurrentRegionId = getCurrentRegionId;
+
+    // 전투가 없을 때 있어야 할 화면: 구역 작전 중이면 전략맵, 아니면 작전지도.
+    function getIdleView() {
+      return getCurrentRegionId() ? 'STRATEGY' : 'CAMPAIGN';
+    }
+
+    // 구역 노드 그래프. 구역마다 같은 섹터(WORLD_SECTORS)로 만들기 때문에 노드 id 앞에 구역 id를 붙여
+    // 예지 기억·전장 seed·도전 횟수(전부 노드 id 기준)가 구역끼리 섞이지 않게 한다.
+    function createRegionNodeGraph(run, regionId) {
+      const seed = `${run.seed}|region|${regionId}`;
+      const mapState = RunEngine.generateRunMap(seed, WORLD_SECTORS);
+      const rename = id => `${regionId}-${id}`;
+      mapState.nodes.forEach(n => { n.id = rename(n.id); n.next = n.next.map(rename); n.regionId = regionId; });
+      mapState.layers = mapState.layers.map(layer => layer.map(rename));
+      return { seed, mapState };
+    }
+
+    async function enterRegion(regionId) {
+      const run = state && state.run;
+      const campaign = run && run.campaign;
+      const region = typeof REGIONS !== 'undefined' ? REGIONS[regionId] : null;
+      if (!campaign || !region || !campaign.regions[regionId]) return false;
+      if (isRunBlocked()) { reportRunBlocked(); return false; }
+      const warn = msg => { addLog(msg, 'warning'); window.UI?.showToast?.(msg, 'warning'); return false; };
+      const current = getCurrentRegionId(run);
+      if (current === regionId) { goToStrategyMap(); return true; }
+      if (current) return warn(`⚠️ ${REGIONS[current].title.ko} 작전이 진행 중입니다. 먼저 구역을 확보하세요.`);
+      if (campaign.regions[regionId].status !== 'available') return warn('🔒 아직 진입할 수 없는 구역입니다.');
+      if (!getAdjutantUnit(run)) return warn('🎖️ 먼저 부관을 임명하세요.');
+
+      await ensureWorldSectorsLoaded();
+      const { seed, mapState } = createRegionNodeGraph(run, regionId);
+      run.mapState = mapState;
+      run.completedNodes = [];
+      run.currentNodeId = null;
+      run.status = 'active';
+      campaign.currentRegionId = regionId;
+      campaign.regions[regionId].nodeGraphSeed = seed;
+      campaign.lastSecured = null;
+      state.selectedNodeId = null;
+      if (state.strategy) state.strategy.commanderAP = state.strategy.maxCommanderAP;
+      ensureNodeSelection();
+      addLog(`🗺️ [작전지도] ${region.title.ko} 진입 — 위협도 ${region.threat}, 노드 ${mapState.nodes.length}개`, 'gold');
+      saveGameState(true);
+      goToStrategyMap();
+      return true;
+    }
+    window.enterRegion = enterRegion;
+
+    // 지금 작전 중인 구역을 확보한다 (finishEncounter에서 보스 격파 시). 구역 작전이 아니면 null.
+    function secureCurrentRegion() {
+      const run = state.run;
+      const regionId = getCurrentRegionId(run);
+      if (!regionId) return null;
+      const unlocked = secureRegion(run.campaign, regionId);
+      const final = regionId === CAMPAIGN_MAP.finalRegionId;
+      run.campaign.currentRegionId = null;
+      run.campaign.lastSecured = { regionId, unlocked, final }; // 작전지도 브리핑이 한 번 읽고 지운다
+      if (final) run.campaign.cleared = true;
+      else run.status = 'active'; // 다음 구역으로 이어지는 런
+      return { regionId, unlocked, final };
+    }
+
+    // 부관 유닛. 임명하지 않았거나 전사했으면 null.
+    function getAdjutantUnit(run = state && state.run) {
+      const a = run && run.adjutant;
+      if (!a) return null;
+      const unit = [...(run.party || []), ...(run.reserve || [])].find(u => getCharacterId(u) === String(a.characterId));
+      return unit && !unit.isDead ? unit : null;
+    }
+    window.getAdjutantUnit = getAdjutantUnit;
+
+    // 부관 호감도: 임명하면 오르고, 해임(교체 포함)하면 그 두 배로 떨어진다. 부관이 전사한 경우는 해임이 아니다.
+    const ADJUTANT_AFFECTION_GAIN = 10;
+    const ADJUTANT_AFFECTION_LOSS = ADJUTANT_AFFECTION_GAIN * 2;
+
+    // 받침이 있으면 첫 번째, 없으면 두 번째 조사 (롤랑을 / 발터를)
+    function withJosa(word, withFinal, withoutFinal) {
+      const text = String(word);
+      const code = text.charCodeAt(text.length - 1) - 0xac00;
+      return text + (code >= 0 && code <= 11171 && code % 28 !== 0 ? withFinal : withoutFinal);
+    }
+
+    function getUnitAffection(unit) {
+      const v = Number(unit && unit.affection);
+      return Number.isFinite(v) ? v : (Number(unit && unit.favorability) || 50);
+    }
+
+    // 전투 코드는 affection, 캐릭터 레코드는 favorability를 읽으므로 둘을 같이 바꾼다.
+    function changeUnitAffection(unit, delta) {
+      const next = Math.max(0, Math.min(100, getUnitAffection(unit) + delta));
+      unit.affection = next;
+      unit.favorability = next;
+      return next;
+    }
+
+    // 전투 중에는 부관을 바꿀 수 없다 (지휘력 보정이 전투 도중 옮겨 가지 않도록).
+    function isAdjutantChangeLocked() {
+      return !!(state.isCombatActive || (state.currentBattle && state.currentBattle.status === 'active'));
+    }
+
+    function applyAdjutantDismissal(run, prev) {
+      const before = getUnitAffection(prev);
+      const after = changeUnitAffection(prev, -ADJUTANT_AFFECTION_LOSS);
+      addLog(`💔 [부관 해임] ${prev.name} — 호감도 -${ADJUTANT_AFFECTION_LOSS} (${before} → ${after})`, 'danger');
+      run.adjutant = null;
+      if (run.loopReward && run.loopReward.type === 'command') run.commandBonus = null;
+    }
+
+    // 부관 임명. 살아 있는 부관이 있으면 교체로 처리한다 (기존 부관 호감도 -LOSS). 새 부관은 호감도 +GAIN.
+    // 지휘력 카드를 골랐다면 방어 보정이 새 부관에게 간다.
+    function appointAdjutant(unitId) {
+      const run = state && state.run;
+      const unit = run && (run.party || []).find(u => u.id === unitId && !u.isDead);
+      if (!unit) return false;
+      if (isAdjutantChangeLocked()) {
+        const msg = '⚔️ 전투 중에는 부관을 바꿀 수 없습니다.';
+        addLog(msg, 'warning');
+        window.UI?.showToast?.(msg, 'warning');
+        return false;
+      }
+      const prev = getAdjutantUnit(run);
+      if (prev && prev.id === unit.id) return true;
+      if (prev) applyAdjutantDismissal(run, prev);
+
+      const characterId = getCharacterId(unit);
+      run.adjutant = { characterId, name: unit.name };
+      if (run.loopReward && run.loopReward.type === 'command') {
+        run.commandBonus = { characterId, def: Number(run.loopReward.def) || 1 };
+      }
+      const before = getUnitAffection(unit);
+      const after = changeUnitAffection(unit, ADJUTANT_AFFECTION_GAIN);
+      const bonusText = run.commandBonus && run.commandBonus.characterId === characterId ? ' · 지휘력: 방어력 +1' : '';
+      addLog(`🎖️ [부관 임명] ${unit.name} — 호감도 +${ADJUTANT_AFFECTION_GAIN} (${before} → ${after})${bonusText}`, 'gold');
+      saveGameState(true);
+      return true;
+    }
+    window.appointAdjutant = appointAdjutant;
+
+    function dismissAdjutant() {
+      const run = state && state.run;
+      const prev = getAdjutantUnit(run);
+      if (!prev || isAdjutantChangeLocked()) return false;
+      applyAdjutantDismissal(run, prev);
+      saveGameState(true);
+      return true;
+    }
+    window.dismissAdjutant = dismissAdjutant;
+
+    // 경고창 (확인/취소). resolve(true)면 진행.
+    function confirmWarning({ title, html, okLabel }) {
+      return new Promise(resolve => {
+        const { card } = rbdModal('modal-adjutant-warning', '#dc2626');
+        card.innerHTML = `
+          <div class="rbd-icon">⚠️</div>
+          <h2 class="rbd-title" style="color:#fca5a5;">${title}</h2>
+          <p class="rbd-text">${html}</p>
+          <div class="adj-warn-actions">
+            <button type="button" class="rbd-btn" data-warn-cancel>취소</button>
+            <button type="button" class="rbd-btn rbd-btn-danger" data-warn-ok>${okLabel}</button>
+          </div>`;
+        const close = ok => { document.getElementById('modal-adjutant-warning')?.remove(); resolve(ok); };
+        card.querySelector('[data-warn-cancel]').onclick = () => close(false);
+        card.querySelector('[data-warn-ok]').onclick = () => close(true);
+      });
+    }
+
+    // 부관 교체/해임 요청 (경고창 → 확인 시 실행). 부관이 없을 때의 임명은 경고 없이 바로 한다.
+    async function requestAdjutantChange(unitId) {
+      const run = state && state.run;
+      const prev = getAdjutantUnit(run);
+      const next = unitId ? (run.party || []).find(u => u.id === unitId && !u.isDead) : null;
+      if (isAdjutantChangeLocked()) { window.UI?.showToast?.('⚔️ 전투 중에는 부관을 바꿀 수 없습니다.', 'warning'); return false; }
+      const name = u => escapeGachaHtml(u.name);
+      const nameObj = u => `<b>${escapeGachaHtml(u.name)}</b>${withJosa(u.name, '을', '를').slice(u.name.length)}`;
+      const drop = u => `${getUnitAffection(u)} → <b style="color:#fca5a5;">${Math.max(0, getUnitAffection(u) - ADJUTANT_AFFECTION_LOSS)}</b>`;
+      const gain = u => `${getUnitAffection(u)} → <b class="rbd-up">${Math.min(100, getUnitAffection(u) + ADJUTANT_AFFECTION_GAIN)}</b>`;
+      const commandNote = run.loopReward && run.loopReward.type === 'command';
+
+      let ok = true;
+      if (prev && next) {
+        ok = await confirmWarning({
+          title: '부관 교체',
+          html: `부관 ${nameObj(prev)} 해임하고 ${nameObj(next)} 임명합니다.<br/><br/>
+            💔 ${name(prev)} 호감도 -${ADJUTANT_AFFECTION_LOSS} (${drop(prev)})<br/>
+            🎖️ ${name(next)} 호감도 +${ADJUTANT_AFFECTION_GAIN} (${gain(next)})
+            ${commandNote ? '<br/>🛡️ 지휘력 보정도 새 부관에게 옮겨 갑니다.' : ''}
+            <br/><br/>해임당한 부관은 지휘관을 원망합니다. 호감도가 30 이하로 떨어지면 명령을 거부할 수 있습니다.`,
+          okLabel: '교체'
+        });
+      } else if (prev && !next) {
+        ok = await confirmWarning({
+          title: '부관 해임',
+          html: `부관 ${nameObj(prev)} 해임합니다.<br/><br/>
+            💔 호감도 -${ADJUTANT_AFFECTION_LOSS} (${drop(prev)})
+            ${commandNote ? '<br/>🛡️ 지휘력 보정(방어 +1)도 사라집니다.' : ''}
+            <br/><br/>부관 자리는 공석이 되며, 새 부관을 임명하기 전에는 새 구역 작전을 시작할 수 없습니다.`,
+          okLabel: '해임'
+        });
+      }
+      if (!ok) return false;
+      const done = next ? appointAdjutant(next.id) : dismissAdjutant();
+      if (done) {
+        renderAdjutantPanel();
+        renderAll();
+      }
+      return done;
+    }
+    window.requestAdjutantChange = requestAdjutantChange;
+
+    // 지휘관 창(지휘관 이름 클릭)의 부관 임명 패널
+    function renderAdjutantPanel() {
+      const el = document.getElementById('modal-adjutant-panel');
+      const run = state && state.run;
+      if (!el || !run) return;
+      const adj = getAdjutantUnit(run);
+      const locked = isAdjutantChangeLocked();
+      const affBar = u => {
+        const v = getUnitAffection(u);
+        const tone = v <= 30 ? 'low' : v >= 70 ? 'high' : 'mid';
+        return `<span class="adj-aff adj-aff-${tone}" title="호감도 ${v}"><span class="adj-aff-fill" style="width:${v}%"></span></span><span class="adj-aff-num">💗 ${v}</span>`;
+      };
+      const candidates = (run.party || []).filter(u => !u.isDead && (!adj || u.id !== adj.id));
+      el.innerHTML = `
+        <div class="adj-panel-head">
+          <b>🎖️ 부관</b>
+          <small>임명 시 호감도 +${ADJUTANT_AFFECTION_GAIN} · 해임·교체 시 -${ADJUTANT_AFFECTION_LOSS}</small>
+        </div>
+        ${adj ? `
+          <div class="adj-current">
+            <span class="adj-portrait">${renderPortrait(adj, { emojiSize: '22px' })}</span>
+            <span class="adj-main"><b>${escapeGachaHtml(adj.name)}</b><span class="adj-meta">${escapeGachaHtml(adj.classType || '')} · Lv.${adj.level || 1}${run.commandBonus && run.commandBonus.characterId === getCharacterId(adj) ? ' · 🛡️ 방어 +1' : ''}</span><span class="adj-aff-row">${affBar(adj)}</span></span>
+            <button type="button" class="adj-btn danger" data-adj-dismiss ${locked ? 'disabled' : ''}>해임</button>
+          </div>` : `<div class="adj-empty">부관이 공석입니다. 아래에서 임명하세요.</div>`}
+        ${locked ? '<div class="adj-locked">⚔️ 전투 중에는 부관을 바꿀 수 없습니다.</div>' : ''}
+        <div class="adj-list">${candidates.map(u => `
+          <div class="adj-row">
+            <span class="adj-portrait">${renderPortrait(u, { emojiSize: '18px' })}</span>
+            <span class="adj-main"><b>${escapeGachaHtml(u.name)}</b><span class="adj-aff-row">${affBar(u)}</span></span>
+            <button type="button" class="adj-btn" data-adj-appoint="${escapeGachaHtml(u.id)}" ${locked ? 'disabled' : ''}>${adj ? '교체' : '임명'}</button>
+          </div>`).join('') || '<div class="adj-empty">임명할 수 있는 대원이 없습니다.</div>'}
+        </div>`;
+      el.querySelector('[data-adj-dismiss]')?.addEventListener('click', () => requestAdjutantChange(null));
+      el.querySelectorAll('[data-adj-appoint]').forEach(btn => {
+        btn.addEventListener('click', () => requestAdjutantChange(btn.dataset.adjAppoint));
+      });
+    }
+    window.renderAdjutantPanel = renderAdjutantPanel;
+
+    function goToCampaignMap() {
+      state.currentView = 'CAMPAIGN';
+      [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = 'CAMPAIGN'; });
+      switchGameView('CAMPAIGN');
+      renderAll();
+    }
+    window.goToCampaignMap = goToCampaignMap;
+
+    // 작전지도 화면은 campaignMap.js가 그린다 (game.js보다 늦게 로드되므로 없으면 건너뛴다).
+    function renderCampaignView() {
+      mountSharedHeader('view-campaign-map');
+      renderStrategyHeader();
+      if (window.CampaignMapView) window.CampaignMapView.render();
+    }
 
     function goToStrategyMap() {
       state.currentView = 'STRATEGY';
@@ -9243,15 +9536,14 @@
         ensureNodeSelection();
         const card = LOOP_REWARD_CARDS[reward.type];
         if (reward.type === 'command') {
-          const picked = state.playerUnits.find(u => getCharacterId(u) === String(reward.characterId));
-          addLog(`🛡️ [지휘력] ${picked ? picked.name : reward.characterId} — 이번 런 동안 방어력 +1`, 'gold');
+          addLog('🛡️ [지휘력] 이번 런에서 임명하는 부관이 방어력 +1을 얻습니다.', 'gold');
         } else {
           addLog(`${card.icon} [${card.name}] ${card.desc} (이번 런 한정)`, 'gold');
         }
         if (state.run.echo) addLog(`🕯️ [잔향] ${state.run.echo.name}이(가) 마지막 순간을 기억한다. 첫 전투 첫 턴에 한 번 더 움직인다.`, 'gold');
         await savePlayer();
         await saveRun();
-        goToStrategyMap();
+        goToCampaignMap();
       } finally {
         returnByDeathRunning = false;
       }
@@ -9306,7 +9598,7 @@
     //   (같은 세계 = 같은 전장). 같은 런에서 다시 도전하면 예전처럼 새 seed로 새 전장이 열린다.
 
     const LOOP_REWARD_CARDS = {
-      command:   { id: 'command',   icon: '🛡️', name: '지휘력', desc: '고른 대원 1명의 방어 +1' },
+      command:   { id: 'command',   icon: '🛡️', name: '지휘력', desc: '이번 런 부관의 방어 +1' },
       foresight: { id: 'foresight', icon: '🔮', name: '예지',   desc: '노드 2개의 적 구성과 보상을 미리 본다' },
       stash:     { id: 'stash',     icon: '💰', name: '비상금', desc: '시작 골드 +100' },
       dejavu:    { id: 'dejavu',    icon: '👁️', name: '기시감', desc: '첫 엘리트 전투에서 아군 배치를 직접 고른다' }
@@ -9332,8 +9624,9 @@
       run.foresight = null;
       run.dejavuEliteFree = false;
       if (!reward) return run;
-      if (reward.type === 'command' && reward.characterId != null) {
-        run.commandBonus = { characterId: String(reward.characterId), def: Number(reward.def) || 1 };
+      if (reward.type === 'command') {
+        // 예전 세이브의 카드는 대상이 정해져 있다. 새 카드는 부관을 임명할 때 대상이 정해진다.
+        if (reward.characterId != null) run.commandBonus = { characterId: String(reward.characterId), def: Number(reward.def) || 1 };
       } else if (reward.type === 'foresight') {
         run.foresight = { charges: FORESIGHT_CHARGES, revealed: [] };
       } else if (reward.type === 'stash') {
@@ -9672,8 +9965,7 @@
             const type = btn.dataset.card;
             document.getElementById('modal-loop-reward')?.remove();
             if (type === 'command') {
-              const characterId = await openCommandBonusSelect();
-              resolve({ type, characterId, def: 1 });
+              resolve({ type, def: 1 }); // 대상은 작전지도에서 임명하는 부관 (appointAdjutant)
             } else {
               resolve({ type });
             }
@@ -9741,11 +10033,14 @@
       // 4) 노드 완료 처리 + 다음 노드 해금
       let unlockedNodes = [];
       let runWon = false;
+      let secured = null;
       if (victory && node) {
         const res = RunEngine.completeNode(run, node.id);
         if (res.ok) {
           unlockedNodes = res.unlockedNodes;
           runWon = res.runWon;
+          // 구역 작전 중이면 보스 격파 = 구역 확보. 최종 구역이 아니면 런은 계속된다.
+          if (runWon) secured = secureCurrentRegion();
         } else {
           console.warn('[finishEncounter] 노드 완료 실패:', res.reason);
         }
@@ -9780,7 +10075,14 @@
         const rewardText = rewards.map(r => r.type === 'gold' ? `+${r.amount}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
         addLog(`🚩 [작전 완수] ${battle.nodeId} (${secLabel}) 클리어 — 보상: ${rewardText || '없음'} · 다음 노드: ${unlockedNodes.join(', ') || '없음'}`, 'gold');
         if (casualties.length) addLog(`🕯️ [사상자] ${casualties.map(c => c.name).join(', ')}`, 'warning');
-        if (runWon) {
+        if (secured) {
+          const name = REGIONS[secured.regionId].title.ko;
+          const opened = secured.unlocked.map(id => getRegionName(id)).join(', ');
+          addLog(secured.final
+            ? `🏆 [작전 완수] 최종 구역 ${name}을(를) 확보했습니다! 대륙 평정.`
+            : `🏴 [구역 확보] ${name} — 새로 열린 구역: ${opened || '없음'}`, 'gold');
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast(secured.final ? '🏆 대륙 평정!' : `🏴 ${name} 확보!`, 'success');
+        } else if (runWon) {
           addLog(`🏆 [런 클리어] 보스를 격파했습니다! (seed ${run.seed}) — "🔄 새 런"으로 다시 도전할 수 있습니다.`, 'gold');
           if (typeof window.UI?.showToast === 'function') window.UI.showToast('🏆 런 클리어! 보스를 격파했습니다.', 'success');
         }
@@ -9794,10 +10096,10 @@
       if (window.UI && typeof window.UI.hidePauseOverlay === 'function') window.UI.hidePauseOverlay();
       const victoryModalEl = document.getElementById('modal-tactical-victory');
       if (victoryModalEl) { victoryModalEl.style.display = 'none'; victoryModalEl.classList.remove('active'); }
-      state.currentView = 'STRATEGY';
-      [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = 'STRATEGY'; });
-      switchGameView('STRATEGY');
-      renderStrategyView();
+      const nextView = getIdleView();
+      state.currentView = nextView;
+      [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = nextView; });
+      switchGameView(nextView);
       saveGameState();
       // 8) 2차: 생존 유닛 0이면 골드에 따라 사망회귀 / 긴급 모집 (회귀 판정은 여기와 긴급 모집 화면에서만 한다)
       finished.survival = resolveRunSurvival();

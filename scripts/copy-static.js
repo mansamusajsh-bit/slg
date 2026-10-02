@@ -19,6 +19,7 @@ const STATIC_FILES = [
   'skill-system.css',
   'ui.js',
   'game.js',
+  'campaignMap.js',
   'civ4-editor.js',
   'supabase-bridge.js',
   'supabase-config.js',
@@ -26,7 +27,7 @@ const STATIC_FILES = [
 ];
 
 // 폴더 단위로 복사 (DEV 에디터 모듈은 import()로 지연 로드)
-const STATIC_DIRS = ['editors', 'audio'];
+const STATIC_DIRS = ['editors', 'audio', 'assets'];
 
 export function copyStaticFiles() {
   if (!existsSync(OUT_DIR)) {

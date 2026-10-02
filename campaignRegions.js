@@ -12,7 +12,7 @@
 const CAMPAIGN_MAP = {
     width: 1041,
     height: 1024,
-    background: null,          // 일러스트 준비되면 "assets/campaign-map.png"
+    background: "assets/campaign-map.webp",  // 배경 일러스트 (1041 x 1024, 구역 path와 같은 좌표)
     startRegionId: "liona",
     finalRegionId: "mor",
 };

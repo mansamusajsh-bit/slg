@@ -19,7 +19,9 @@ const files = [
   'skill-system.css',
   'ui.js',
   'game.js',
+  'campaignMap.js',
   'civ4-editor.js',
+  'assets', // 작전지도 배경 일러스트 등 이미지
   'audio', // 사망회귀 연출 (Web Audio 합성, 외부 음원 없음)
   'supabase-bridge.js', 'supabase-config.js',
   // DEV 데이터 에디터: rewardEngine.js(순수 로직)와 editors/ 폴더는 에디터 탭을 열 때 import()로만 로드된다.
