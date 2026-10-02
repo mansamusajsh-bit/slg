@@ -2997,7 +2997,6 @@
       overflow-y: auto;
       overflow-x: hidden;
       background: linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 30%, #f8fafc 70%, #f1f5f9 100%);
-      padding-bottom: 84px;
       -webkit-overflow-scrolling: touch;
     }
 
@@ -3720,10 +3719,11 @@
 
     /* Sticky Bottom Main Action Bar */
     .strat-bottom-action-bar {
-      position: absolute;
+      /* 스크롤 컨테이너 안에서 absolute면 내용과 함께 밀려 올라가 명단을 덮는다 → sticky */
+      position: sticky;
       bottom: 0;
-      left: 0;
-      right: 0;
+      margin-top: auto;
+      flex-shrink: 0;
       background: rgba(255, 255, 255, 0.94);
       border-top: 1.5px solid rgba(186, 230, 253, 0.95);
       backdrop-filter: blur(12px);
@@ -5597,3 +5597,4 @@
 .adj-empty{font-size:11px;color:#64748b;padding:6px 2px}
 .adj-locked{font-size:10.5px;font-weight:800;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:4px 8px}
 .adj-warn-actions{display:flex;gap:8px}
+.dlg-tone-select{flex:1;min-width:0;font-size:11px;padding:3px 6px}
