@@ -10,4 +10,11 @@ const b=c.generateBattleMap(n1,'SEED-1');
 ok(b.enemies.length===1 && b.enemies[0].id==='e1','generateBattleMap이 에디터 배치 적을 보존 (이미 정규화된 템플릿 입력)');
 const b2=c.generateBattleMap(raw,'SEED-1');
 ok(JSON.stringify(b.enemies)===JSON.stringify(b2.enemies),'원본 입력 / 정규화 입력 결과 동일');
+const bgRaw=MS.createBlankTacticalMapTemplate('BG',8,14); bgRaw.background='assets/tactical/meadow-road.jpg';
+const bgN=MS.normalizeTacticalMapTemplate(bgRaw,'BG');
+ok(bgN.metadata.background===bgRaw.background && MS.normalizeTacticalMapTemplate(bgN,'BG').metadata.background===bgRaw.background,'배경 이미지 경로가 정규화(멱등)에서 보존');
+const bgB=c.generateBattleMap(bgRaw,'SEED-1',{terrainNoiseRate:0.5});
+ok(bgB.background===bgRaw.background,'generateBattleMap 결과에 배경 경로 전달');
+const noiseForest=bgB.tiles.filter(t=>t.terrain==='forest');
+ok(noiseForest.length>0 && noiseForest.every(t=>t.decor==='tree'),'시드 변형 숲 칸에는 나무 스프라이트 표시(decor=tree): '+noiseForest.length+'칸');
 console.log(fail?'실패 '+fail:'모든 검증 통과');process.exit(fail?1:0)

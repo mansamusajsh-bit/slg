@@ -2668,6 +2668,11 @@
         mapEl.classList.remove('grid-8x14');
       }
 
+      // 배경 일러스트가 있는 맵: 그림을 그리드 전체에 깔고 타일은 투명한 격자로만 그린다.
+      const bgUrl = battleMap?.background || null;
+      mapEl.classList.toggle('has-bg', !!bgUrl);
+      mapEl.style.backgroundImage = bgUrl ? `url("${encodeURI(bgUrl)}")` : '';
+
       const selUnit = getSelectedUnit();
       let moveTiles = [];
       let attackTiles = [];
@@ -2748,10 +2753,18 @@
         const structureIcon = structureIcons[t.structure] || '';
         const roadBadge = t.hasRoad ? '<span class="tile-road-dot" title="도로 (AP 할인)">🛣️</span>' : '';
 
+        // 시드 변형으로 생긴 숲은 배경 그림에 없으므로 나무 스프라이트를 덧그린다.
+        if (bgUrl) {
+          const terrainNames = { plain: '평야', forest: '숲', hill: '언덕', mountain: '암벽', river: '강', sea: '바다' };
+          tileDiv.title = `${t.name || terrainNames[terrainType] || terrainType}${defPct ? ` (방어 ${defPct > 0 ? '+' : ''}${defPct}%)` : ''}`;
+        }
+        const decorSprite = (bgUrl && t.decor === 'tree') ? '<span class="tile-decor-tree" aria-hidden="true"></span>' : '';
+
         tileDiv.innerHTML = `
+          ${decorSprite}
           <span class="tile-def-badge">${defPct !== 0 ? (defPct > 0 ? '+' : '') + defPct + '%' : ''}</span>
           ${roadBadge}
-          <span class="tile-terrain-icon">${structureIcon || terrainIcon}</span>
+          ${(bgUrl && !structureIcon) ? '' : `<span class="tile-terrain-icon">${structureIcon || terrainIcon}</span>`}
           ${actionIcon}
         `;
 

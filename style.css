@@ -5645,3 +5645,40 @@
 .relic-choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .relic-pick-btn{margin-top:auto;padding:7px 10px;border-radius:999px;border:none;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;font:inherit;font-size:11.5px;font-weight:900;cursor:pointer}
 .relic-pick-btn:hover{filter:brightness(1.08)}
+
+/* ==========================================================================
+   전술 맵 배경 일러스트 (battleMap.background)
+   그림을 그리드 전체(8x14)에 늘려 깔고, 타일은 투명한 격자선만 남긴다.
+   gap/padding을 0으로 둬야 칸 경계가 그림의 96px 격자와 정확히 맞는다.
+   ========================================================================== */
+#grid-map.has-bg {
+  background-color: #e4d2a0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  gap: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+}
+#grid-map.has-bg .tile,
+#grid-map.has-bg .tile.has-road {
+  background: transparent;
+  background-image: none;
+  border: 0.5px solid rgba(60, 50, 20, 0.16);
+  border-radius: 0;
+  box-shadow: none;
+}
+#grid-map.has-bg .tile:hover {
+  filter: none;
+  background: rgba(255, 255, 255, 0.18);
+}
+#grid-map.has-bg .tile-def-badge {
+  background: rgba(255, 255, 255, 0.72);
+}
+/* 시드 변형 숲: 배경 그림체(납작한 탑다운 덤불)에 맞춘 나무 스프라이트 */
+.tile-decor-tree {
+  position: absolute;
+  inset: 8%;
+  pointer-events: none;
+  background: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cg fill='%233f5d1c' opacity='.28'%3E%3Cellipse cx='34' cy='44' rx='22' ry='19'/%3E%3Cellipse cx='66' cy='36' rx='19' ry='17'/%3E%3Cellipse cx='58' cy='72' rx='23' ry='19'/%3E%3C/g%3E%3Cg fill='%235f8a26'%3E%3Ccircle cx='31' cy='39' r='19'/%3E%3Ccircle cx='64' cy='31' r='16'/%3E%3Ccircle cx='55' cy='66' r='20'/%3E%3C/g%3E%3Cg fill='%237fb236'%3E%3Ccircle cx='27' cy='34' r='12'/%3E%3Ccircle cx='60' cy='27' r='10'/%3E%3Ccircle cx='50' cy='60' r='13'/%3E%3C/g%3E%3Cg fill='%23a6d64a'%3E%3Ccircle cx='23' cy='30' r='5'/%3E%3Ccircle cx='57' cy='23' r='4'/%3E%3Ccircle cx='46' cy='55' r='5'/%3E%3C/g%3E%3C/svg%3E");
+}

@@ -171,6 +171,7 @@
       spawnPoints: { player: playerSpawns.map((p) => ({ ...p })), enemy: enemySpawns.map((p) => ({ ...p })) },
       sectorId: String(sectorId || tpl.id),
       name: tpl.metadata.name,
+      background: tpl.metadata.background,
       roads: tpl.metadata.roads,
       structures: tpl.metadata.structures,
       units: tpl.metadata.units,

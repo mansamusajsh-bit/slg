@@ -350,3 +350,22 @@
   pointer-events: none;
 }
 .civ4-tile { position: relative; }
+
+/* 배경 일러스트 밑그림: 그림 위에 지형색을 반투명으로 얹어 그림과 칠을 동시에 본다 */
+.civ4-editor-grid.has-bg {
+  gap: 0;
+  padding: 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+.civ4-editor-grid.has-bg .civ4-tile {
+  border-radius: 0;
+  outline: 0.5px solid rgba(15, 23, 42, 0.25);
+}
+.civ4-editor-grid.has-bg .civ4-tile.terrain-plain { background: transparent; }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-forest { background: rgba(22, 101, 52, 0.38); }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-hill { background: rgba(120, 53, 15, 0.38); }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-mountain { background: rgba(51, 65, 85, 0.6); }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-river { background: rgba(14, 165, 233, 0.45); }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-sea { background: rgba(37, 99, 235, 0.6); }
+.civ4-editor-grid.has-bg .civ4-tile.terrain-plain .civ4-tile-ico { opacity: 0; }

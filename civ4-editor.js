@@ -155,6 +155,18 @@ const MapEditorController = {
   isLoadingTemplate: false,
   isNewUnsavedTemplate: false,
   testBattle: null, // 마지막으로 만든 '독립 테스트' CurrentBattle. state.currentBattle과 완전히 분리된다.
+  currentBackground: null, // 템플릿 배경 일러스트 경로 (metadata.background). 타일 지형은 이 그림에 맞춰 칠한다.
+
+  // 배경 그림 색 → 지형 추정용 기준 색. 칸 평균 색과 가장 가까운 색의 지형으로 초안을 만든다.
+  // 도로·스폰처럼 색으로 구분할 수 없는 것은 추정하지 않는다 (작가가 직접 칠한다).
+  BACKGROUND_TERRAIN_PALETTE: [
+    { terrain: 'plain',  rgb: [228, 210, 160] }, // 모래빛 맨땅
+    { terrain: 'plain',  rgb: [168, 178, 88] },  // 옅은 풀밭
+    { terrain: 'forest', rgb: [107, 133, 48] },  // 짙은 숲
+    { terrain: 'hill',   rgb: [196, 151, 90] },  // 갈색 고지대
+    { terrain: 'river',  rgb: [110, 170, 210] },
+    { terrain: 'mountain', rgb: [120, 120, 125] }
+  ],
 
   TERRAIN_SPECS: {
     plain:    { name: '평야', apCost: 1, defBonus: MapSchema.TILE_DEFENSE.terrain.plain, icon: '🌱', passable: true },
@@ -283,6 +295,7 @@ const MapEditorController = {
         }, id);
         MapEditorController.currentMapData = blank.tiles;
         MapEditorController.currentTemplateMeta = null;
+        MapEditorController.currentBackground = null;
         MapEditorController.isNewUnsavedTemplate = true;
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(`[${id}] 저장된 템플릿이 없어 기본 타일로 새로 시작합니다. 저장을 눌러야 등록됩니다.`, 'info');
         if (typeof addLog === 'function') addLog(`🆕 [${id}] 저장된 템플릿이 없어 기본 타일(평지)로 시작합니다. "저장"을 눌러야 Supabase에 기록됩니다.`, 'gold');
@@ -295,6 +308,7 @@ const MapEditorController = {
       MapSchema.applySpawnPointsToTiles(template.tiles, template.spawnPoints);
       MapEditorController.currentMapData = template.tiles;
       MapEditorController.currentTemplateMeta = template;
+      MapEditorController.currentBackground = template.metadata.background || null;
       if (typeof addLog === 'function') addLog(`Supabase에서 템플릿 [${id}]을 불러왔습니다.`, 'gold');
       return template;
     } catch (err) {
@@ -306,6 +320,7 @@ const MapEditorController = {
       MapEditorController.isLoadingTemplate = false;
       MapEditorController.renderGrid();
       MapEditorController.syncTemplateIdInputUI();
+      MapEditorController.syncBackgroundInputUI();
     }
   },
 
@@ -338,6 +353,7 @@ const MapEditorController = {
       height: MapEditorController.ROWS,
       tiles,
       spawnPoints,
+      background: MapEditorController.currentBackground,
       name: (MapEditorController.currentTemplateMeta && MapEditorController.currentTemplateMeta.metadata && MapEditorController.currentTemplateMeta.metadata.name)
         || `Sector ${templateId}`
     };
@@ -363,6 +379,7 @@ const MapEditorController = {
       roads: template.metadata.roads,
       structures: template.metadata.structures,
       units: template.metadata.units,
+      background: template.metadata.background,
       updatedAt: new Date().toISOString()
     };
 
@@ -488,6 +505,7 @@ const MapEditorController = {
       height: MapEditorController.ROWS,
       tiles,
       spawnPoints: MapSchema.deriveSpawnPointsFromTiles(tiles),
+      background: MapEditorController.currentBackground,
       name: `${templateId} (테스트 미리보기, 미저장)`
     };
     const template = MapSchema.normalizeTacticalMapTemplate(rawTemplate, templateId);
@@ -693,6 +711,9 @@ const MapEditorController = {
     const gridEl = document.getElementById('civ4-editor-grid-dom') || document.getElementById('civ4-editor-grid-canvas');
     if (!gridEl) return;
     gridEl.innerHTML = '';
+    const bg = MapEditorController.currentBackground;
+    gridEl.classList.toggle('has-bg', !!bg);
+    gridEl.style.backgroundImage = bg ? `url("${encodeURI(bg)}")` : '';
 
     if (MapEditorController.isLoadingTemplate) {
       gridEl.innerHTML = `<div style="grid-column: 1 / -1; padding: 24px; text-align:center; color:#94a3b8; font-size:12px;">⏳ 템플릿을 불러오는 중...</div>`;
@@ -743,6 +764,74 @@ const MapEditorController = {
       tileDiv.onclick = () => MapEditorController.applyBrushToTile(index);
       gridEl.appendChild(tileDiv);
     });
+  },
+
+  syncBackgroundInputUI() {
+    const input = document.getElementById('civ4-editor-bg-input');
+    if (input) input.value = MapEditorController.currentBackground || '';
+  },
+
+  setBackground(path) {
+    MapEditorController.currentBackground = String(path || '').trim() || null;
+    MapEditorController.renderGrid();
+  },
+
+  /**
+   * 배경 그림을 COLS x ROWS 칸으로 나눠 칸마다 가운데 영역의 평균 색을 재고,
+   * BACKGROUND_TERRAIN_PALETTE에서 가장 가까운 색의 지형으로 타일을 칠한다.
+   * 도로/거점/유닛/스폰은 건드리지 않는다. 결과는 초안이므로 작가가 손으로 다듬는다.
+   */
+  async autoTerrainFromBackground() {
+    const toast = (msg, type) => { if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, type); };
+    const bg = MapEditorController.currentBackground;
+    const tiles = Array.isArray(MapEditorController.currentMapData) ? MapEditorController.currentMapData : null;
+    if (!bg) return toast('⚠️ 먼저 배경 이미지 경로를 입력하세요.', 'warning');
+    if (!tiles) return toast('⚠️ 템플릿을 먼저 불러오세요.', 'warning');
+
+    let img;
+    try {
+      img = await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => reject(new Error(`이미지를 불러올 수 없음: ${bg}`));
+        el.src = bg;
+      });
+    } catch (err) {
+      return toast(`❌ ${err.message}`, 'warning');
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const cellW = canvas.width / MapEditorController.COLS;
+    const cellH = canvas.height / MapEditorController.ROWS;
+    const palette = MapEditorController.BACKGROUND_TERRAIN_PALETTE;
+
+    let changed = 0;
+    tiles.forEach((tile) => {
+      // 칸 가장자리는 이웃 지형이 섞이므로 가운데 60%만 잰다.
+      const x0 = Math.floor(tile.x * cellW + cellW * 0.2);
+      const y0 = Math.floor(tile.y * cellH + cellH * 0.2);
+      const w = Math.max(1, Math.floor(cellW * 0.6));
+      const h = Math.max(1, Math.floor(cellH * 0.6));
+      const data = ctx.getImageData(x0, y0, w, h).data;
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < data.length; i += 4) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+      const n = data.length / 4;
+      let best = palette[0];
+      let bestDist = Infinity;
+      palette.forEach((p) => {
+        const d = (p.rgb[0] - r / n) ** 2 + (p.rgb[1] - g / n) ** 2 + (p.rgb[2] - b / n) ** 2;
+        if (d < bestDist) { bestDist = d; best = p; }
+      });
+      if (tile.terrain !== best.terrain) changed++;
+      tile.terrain = best.terrain;
+    });
+
+    MapEditorController.renderGrid();
+    toast(`🎨 배경 그림에서 지형 초안을 만들었습니다 (${changed}칸 변경). 도로·스폰은 직접 칠하세요.`, 'success');
   },
 
   renderCanvas() {
@@ -848,6 +937,20 @@ const MapEditorController = {
         const cleaned = e.target.value.replace(/[\s/\\'"]/g, '');
         if (cleaned !== e.target.value) e.target.value = cleaned;
         MapEditorController.currentTemplateId = cleaned;
+      };
+    }
+
+    const bgInput = document.getElementById('civ4-editor-bg-input');
+    if (bgInput) {
+      bgInput.value = MapEditorController.currentBackground || '';
+      bgInput.onchange = (e) => MapEditorController.setBackground(e.target.value);
+    }
+
+    const btnAutoTerrain = document.getElementById('btn-civ4-auto-terrain');
+    if (btnAutoTerrain) {
+      btnAutoTerrain.onclick = () => {
+        if (bgInput) MapEditorController.setBackground(bgInput.value);
+        MapEditorController.autoTerrainFromBackground();
       };
     }
 
@@ -990,6 +1093,12 @@ const MapEditorController = {
           <span>템플릿 ID:</span>
           <input type="text" id="civ4-editor-template-id-input" class="civ4-auth-input" style="flex:1; padding:4px 6px;" placeholder="예: A-1-forest" autocomplete="off" />
           <button id="btn-civ4-load-template" class="civ4-btn-primary">📂 불러오기</button>
+        </div>
+
+        <div class="civ4-sector-bar">
+          <span>배경 이미지:</span>
+          <input type="text" id="civ4-editor-bg-input" class="civ4-auth-input" style="flex:1; padding:4px 6px;" placeholder="예: assets/tactical/meadow-road.jpg (비우면 배경 없음)" autocomplete="off" />
+          <button id="btn-civ4-auto-terrain" class="civ4-btn-primary" title="배경 그림 색으로 칸별 지형 초안을 만듭니다">🎨 지형 추정</button>
         </div>
 
         <div class="civ4-grid-viewport">

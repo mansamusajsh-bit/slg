@@ -149,6 +149,9 @@
       metadata: {
         name: raw.name || (raw.metadata && raw.metadata.name) || `Sector ${id}`,
         terrain: (raw.metadata && raw.metadata.terrain) || null,
+        // 전술 화면 배경 일러스트 경로 (예: 'assets/tactical/meadow-road.jpg'). 그리드 전체에 늘려 깔고
+        // 타일 지형은 이 그림에 맞춰 에디터에서 칠한다. 없으면 기존처럼 단색 타일로 그린다.
+        background: raw.background || (raw.metadata && raw.metadata.background) || null,
         // 이 함수는 "멱등"이어야 한다: 에디터/DB 원본(raw.roads/structures/units)뿐 아니라
         // 이미 정규화된 템플릿(raw.metadata.roads/structures/units)을 다시 넣어도 같은 결과가 나와야 한다.
         // (enterEncounter가 한 번, generateBattleMap이 한 번 더 정규화한다 — 여기서 units를 잃으면 에디터가 배치한 적이 사라진다.)
@@ -402,6 +405,8 @@
       if (terrainOf(tile) === 'plain' && !tile.hasRoad && !tile.structure
           && !reserved.has(`${tile.x},${tile.y}`) && rng.next() < terrainNoiseRate) {
         setTerrain(tile, 'forest');
+        // 배경 그림에는 없는 숲이므로, 렌더러가 이 칸에 나무 스프라이트를 덧그려 그림과 판정을 맞춘다.
+        tile.decor = 'tree';
       }
     });
 
@@ -587,6 +592,7 @@
         rows: tpl.height,
         sectorId: String(sectorId),
         name: tpl.metadata.name,
+        background: tpl.metadata.background,
         roads: tpl.metadata.roads,
         structures: tpl.metadata.structures,
         units: tpl.metadata.units,
