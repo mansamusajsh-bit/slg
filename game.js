@@ -274,11 +274,13 @@
       const unit = unitOrBase;
       if (!unit || typeof unit !== 'object') return 0;
 
-      // Ensure HP is cleanly clamped between 0 and 100
+      // 전투력은 최대 HP 대비 남은 HP 비율로 깎인다 (최대 HP가 100이 아닌 유닛도 만피면 100%).
+      const maxHp = Number(unit.maxHp) > 0 ? Number(unit.maxHp)
+        : (unit.stats && Number(unit.stats.maxHp) > 0 ? Number(unit.stats.maxHp) : 100);
       const hp = (typeof unit.hp === 'number' && !isNaN(unit.hp))
-        ? Math.min(100, Math.max(0, unit.hp))
-        : (unit.isDead ? 0 : 100);
-      const hpPercentage = hp / 100;
+        ? Math.min(maxHp, Math.max(0, unit.hp))
+        : (unit.isDead ? 0 : maxHp);
+      const hpPercentage = hp / maxHp;
 
       const statType = typeof typeOrHp === 'string' ? typeOrHp.toLowerCase() : 'attack';
       let baseStrength = 10;
@@ -1630,6 +1632,31 @@
       };
     }
 
+    /** 스플래시 피해: HP를 최소 1까지만 깎는다 (전사시키지 않음). 실제로 깎인 양을 돌려준다. */
+    function applySplashDamage(unit, amount) {
+      const before = unit.hp;
+      unit.hp = Math.max(Math.min(1, before), before - amount);
+      if (unit.stats) unit.stats.hp = unit.hp;
+      return before - unit.hp;
+    }
+
+    /**
+     * 한 칸에 겹친 방어자 중 attacker를 상대로 막아낼 확률이 가장 높은 유닛을 고른다.
+     * (공격자 승률이 가장 낮은 유닛. 같으면 HP가 많은 쪽)
+     */
+    function pickBestDefender(attacker, defenders) {
+      let best = null;
+      let bestP = Infinity;
+      defenders.forEach(d => {
+        const p = getCombatOdds(attacker, d)?.P ?? 0.5;
+        if (p < bestP || (p === bestP && (d.hp || 0) > (best.hp || 0))) {
+          best = d;
+          bestP = p;
+        }
+      });
+      return best;
+    }
+
     /* --------------------------------------------------------------------------
        Combat Math & Engine (Civ4 Formula + Affection Check + Permadeath)
        -------------------------------------------------------------------------- */
@@ -1753,15 +1780,9 @@
             );
             if (adjEnemies.length > 0) {
               adjEnemies.forEach(adj => {
-                adj.hp = Math.max(0, adj.hp - splashDamage);
-                if (adj.hp <= 0) {
-                  adj.isDead = true;
-                  if (adj.owner === 'ENEMY') {
-                    window.defeatedEnemyCount = (window.defeatedEnemyCount || 0) + 1;
-                    defeatedEnemyCount = window.defeatedEnemyCount;
-                  }
-                }
-                addLog(`💥 [2차 스플래시 피해] 인접 적 ${adj.name}에게 ${splashDamage} 피해 (${(splashRatio*100).toFixed(0)}%)! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'warning');
+                // 스플래시는 피해만 준다: HP 1 아래로는 깎지 않는다 (스플래시로는 아무도 죽지 않는다).
+                const dealt = applySplashDamage(adj, splashDamage);
+                addLog(`💥 [2차 스플래시 피해] 인접 적 ${adj.name}에게 ${dealt} 피해 (${(splashRatio*100).toFixed(0)}%)! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'warning');
               });
             }
           }
@@ -1820,9 +1841,8 @@
             );
             if (adjPlayers.length > 0) {
               adjPlayers.forEach(adj => {
-                adj.hp = Math.max(0, adj.hp - splashDamage);
-                if (adj.hp <= 0 && !adj.isDead) { adj.isDead = true; awardCommanderCasualtyExp(adj); }
-                addLog(`💥 [적군 스플래시 피해] 인접 아군 ${adj.name}에게 ${splashDamage} 피해! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'danger');
+                const dealt = applySplashDamage(adj, splashDamage);
+                addLog(`💥 [적군 스플래시 피해] 인접 아군 ${adj.name}에게 ${dealt} 피해! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'danger');
               });
             }
           }
@@ -2131,10 +2151,17 @@
         });
 
         if (attackCandidates.length > 0) {
-          // 정렬 기준: 1. 사거리(dist) 오름차순 -> 2. HP 오름차순 (가장 취약한 유닛 우선)
+          // 적은 칸을 고를 뿐, 그 칸의 누가 맞을지는 고르지 못한다 (문명4 방식):
+          // 아군이 겹쳐 있으면 이 적을 상대로 막아낼 확률이 가장 높은 아군이 방어에 나선다.
+          attackCandidates.forEach(c => {
+            const stack = livingPlayers.filter(p => p.x === c.target.x && p.y === c.target.y);
+            c.target = pickBestDefender(enemy, stack);
+            c.winChance = getCombatOdds(enemy, c.target)?.P ?? 0.5;
+          });
+          // 정렬 기준: 1. 사거리(dist) 오름차순 -> 2. 그 칸의 최선 방어자 상대 승률 내림차순 (가장 뚫기 쉬운 칸 우선)
           attackCandidates.sort((a, b) => {
             if (a.dist !== b.dist) return a.dist - b.dist;
-            return a.hp - b.hp;
+            return b.winChance - a.winChance;
           });
 
           const chosen = attackCandidates[0];
