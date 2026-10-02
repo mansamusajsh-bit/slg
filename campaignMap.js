@@ -88,20 +88,31 @@
     });
   }
 
-  function pickLine(key, salt, vars) {
-    const lines = BRIEFING[key] || [];
+  // 부관의 브리핑 대사: 캐릭터 고유 대사(dialogueLines.js의 brief_*) → 그 캐릭터 성격의 기본 대사 → 위 BRIEFING
+  function briefingLines(key, speaker) {
+    const own = speaker && global.DialogueLines ? DialogueLines.linesFor(speaker, `brief_${key}`) : [];
+    return own.length ? own : (BRIEFING[key] || []);
+  }
+
+  function pickLine(key, salt, vars, speaker) {
+    const lines = briefingLines(key, speaker);
     if (!lines.length) return '';
     const loop = Number(state.player && state.player.loopCount) || 0;
-    const rng = global.SeedEngine ? SeedEngine.createRNG(`briefing|${key}|${salt}|${loop}`) : Math.random;
+    const who = speaker ? speaker.id : '';
+    const rng = global.SeedEngine ? SeedEngine.createRNG(`briefing|${key}|${salt}|${loop}|${who}`) : Math.random;
     return fillVars(lines[Math.floor(rng() * lines.length)], vars);
   }
 
-  function loopAwareLine(salt) {
+  // 회귀 반응: 부관 성격별 대사(dialogueLines.js의 brief_loop1/3/6) → 위 BRIEFING.loopAware
+  function loopAwareLine(salt, speaker) {
     const loop = Number(state.player && state.player.loopCount) || 0;
     const tier = BRIEFING.loopAware.filter((t) => loop >= t.min).pop();
     if (!tier) return '';
-    const rng = global.SeedEngine ? SeedEngine.createRNG(`briefing|loop|${salt}|${loop}`) : Math.random;
-    return tier.lines[Math.floor(rng() * tier.lines.length)];
+    const own = speaker && global.DialogueLines ? DialogueLines.linesFor(speaker, `brief_loop${tier.min}`) : [];
+    const lines = own.length ? own : tier.lines;
+    const who = speaker ? speaker.id : '';
+    const rng = global.SeedEngine ? SeedEngine.createRNG(`briefing|loop|${salt}|${loop}|${who}`) : Math.random;
+    return lines[Math.floor(rng() * lines.length)];
   }
 
   function regionStatus(campaign, id) {
@@ -117,7 +128,7 @@
   function buildBriefing(campaign, adjutant) {
     if (!adjutant) return pickLine('noAdjutant', 'none', {});
     const vars = { adjutant: adjutant.name };
-    if (campaign.cleared) return pickLine('cleared', 'end', vars);
+    if (campaign.cleared) return pickLine('cleared', 'end', vars, adjutant);
 
     if (selectedRegionId && REGIONS[selectedRegionId]) {
       const r = REGIONS[selectedRegionId];
@@ -126,17 +137,17 @@
         desc: (r.description.ko || '').replace(/[.。]\s*$/, '')
       });
       const status = regionStatus(campaign, selectedRegionId);
-      if (status === 'secured') return pickLine('secured', selectedRegionId, vars);
-      if (status === 'locked') return pickLine('locked', selectedRegionId, vars);
-      if (status === 'current') return pickLine('inProgress', selectedRegionId, vars);
+      if (status === 'secured') return pickLine('secured', selectedRegionId, vars, adjutant);
+      if (status === 'locked') return pickLine('locked', selectedRegionId, vars, adjutant);
+      if (status === 'current') return pickLine('inProgress', selectedRegionId, vars, adjutant);
       if (campaign.currentRegionId) {
         vars.current = getRegionName(campaign.currentRegionId);
-        return pickLine('busyElsewhere', selectedRegionId, vars);
+        return pickLine('busyElsewhere', selectedRegionId, vars, adjutant);
       }
-      let text = pickLine(r.role === 'final' ? 'final' : 'available', selectedRegionId, vars);
+      let text = pickLine(r.role === 'final' ? 'final' : 'available', selectedRegionId, vars, adjutant);
       const crossesRiver = r.neighbors.some((n) => campaign.regions[n] && campaign.regions[n].status === 'secured' && isRiverCrossing(n, selectedRegionId));
-      if (crossesRiver) text += ' ' + pickLine('river', selectedRegionId, vars);
-      const aware = loopAwareLine(selectedRegionId);
+      if (crossesRiver) text += ' ' + pickLine('river', selectedRegionId, vars, adjutant);
+      const aware = loopAwareLine(selectedRegionId, adjutant);
       return aware ? `${text} ${aware}` : text;
     }
 
@@ -144,10 +155,10 @@
     if (last && REGIONS[last.regionId]) {
       vars.region = getRegionName(last.regionId);
       vars.opened = last.unlocked.map((id) => getRegionName(id)).join(', ');
-      return pickLine(last.unlocked.length ? 'justSecured' : 'justSecuredNone', last.regionId, vars);
+      return pickLine(last.unlocked.length ? 'justSecured' : 'justSecuredNone', last.regionId, vars, adjutant);
     }
-    const welcome = pickLine('welcome', 'welcome', vars);
-    const aware = loopAwareLine('welcome');
+    const welcome = pickLine('welcome', 'welcome', vars, adjutant);
+    const aware = loopAwareLine('welcome', adjutant);
     return aware ? `${welcome} ${aware}` : welcome;
   }
 

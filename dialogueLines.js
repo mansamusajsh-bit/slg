@@ -1,7 +1,8 @@
 // ============================================================================
 // 상황별 캐릭터 대사 (DialogueLines)
 //   - SITUATIONS: 대사가 출력되는 상황 정의 (게임 로직이 이 key로 대사를 요청한다)
-//   - DEFAULT_POOL: 상황별 기본 대사 풀. 캐릭터 생성 시 여기서 랜덤으로 몇 줄을 골라 부여한다.
+//   - TONES: 성격(말투). 랜덤 부여 시 한 캐릭터는 한 성격의 대사로 통일된다.
+//   - DEFAULT_POOL[situation][tone]: 기본 대사 풀. 캐릭터 생성 시 여기서 랜덤으로 몇 줄을 골라 부여한다.
 //   - 캐릭터/유닛은 dialogues: { [situationKey]: string[] } 를 가진다.
 //   - 대사 안의 {target} {hp} {maxHp} {win} {name} 은 출력 시 치환된다.
 // ============================================================================
@@ -10,86 +11,733 @@
   'use strict';
 
   const SITUATIONS = [
-    { key: 'refuse_danger',   icon: '😨', label: '전투 거부 (승률 위험)',   desc: '호감도 30 이하 + 승률이 낮아 공격 명령을 거부할 때' },
-    { key: 'refuse_lowhp',    icon: '🩸', label: '전투 거부 (빈사 상태)',   desc: '호감도 30 이하 + HP 25% 이하라 공격을 거부할 때' },
-    { key: 'refuse_distrust', icon: '💔', label: '전투 거부 (불신)',        desc: '호감도 15 이하라 어떤 공격 명령도 거부할 때' },
-    { key: 'refuse_skill',    icon: '🚫', label: '스킬 명령 거부',          desc: '호감도 30 이하라 공격 스킬 사용을 거부할 때' },
-    { key: 'brave_attack',    icon: '🔥', label: '신뢰의 돌격',             desc: '호감도 70 이상인데 승률 50% 미만인 공격을 받아들일 때' },
-    { key: 'forced_attack',   icon: '😤', label: '광폭화 강제 돌격',        desc: '호감도가 낮지만 지휘관 광폭화로 억지로 공격할 때' },
-    { key: 'enemy_defeated',  icon: '⚔️', label: '적 격파',                desc: '공격으로 적을 쓰러뜨렸을 때 (35% 확률로 출력)' }
+    { key: 'refuse_danger',   icon: '😨', label: '전투 거부 (승률 위험)', desc: '호감도 30 이하 + 승률 50% 미만, 또는 호감도 50 미만 + 승률 35% 미만(50% 확률)일 때' },
+    { key: 'refuse_lowhp',    icon: '🩸', label: '전투 거부 (빈사 상태)', desc: '호감도가 낮은데 HP 25% 이하라 공격을 거부할 때' },
+    { key: 'refuse_distrust', icon: '💔', label: '전투 거부 (불신)',      desc: '호감도 15 이하(항상) 또는 30 이하(40% 확률)라 명령을 거부할 때' },
+    { key: 'refuse_skill',    icon: '🚫', label: '스킬 명령 거부',        desc: '호감도 30 이하라 공격 스킬 사용을 거부할 때' },
+    { key: 'brave_attack',    icon: '🔥', label: '신뢰의 돌격',           desc: '호감도 70 이상인데 승률 50% 미만인 공격을 받아들일 때' },
+    { key: 'forced_attack',   icon: '😤', label: '광폭화 강제 돌격',      desc: '호감도가 낮지만 지휘관 광폭화로 억지로 공격할 때' },
+    { key: 'enemy_defeated',  icon: '⚔️', label: '적 격파',              desc: '공격으로 적을 쓰러뜨렸을 때 (35% 확률로 출력)' },
+    { key: 'adjutant_appointed', icon: '🎖️', label: '부관 임명',          desc: '작전지도/지휘관 창에서 부관으로 임명됐을 때' },
+
+    // 부관 브리핑 (작전지도 말풍선). campaignMap.js가 'brief_' 뒤의 이름으로 요청한다.
+    // 치환: {adjutant} 자기 이름 · {region} 구역 · {title} 작전명 · {threat} 위협도 · {desc} 정찰 내용 · {current} 진행 중 구역 · {opened} 새로 열린 구역
+    //       {region|은/는} 처럼 쓰면 받침에 맞는 조사를 붙인다.
+    { key: 'brief_welcome',         group: 'briefing', icon: '📋', label: '브리핑: 인사',            desc: '작전지도에서 구역을 고르기 전 · {adjutant}' },
+    { key: 'brief_available',       group: 'briefing', icon: '🧭', label: '브리핑: 진입 가능 구역',  desc: '진입할 수 있는 구역을 골랐을 때 · {title} {region} {desc} {threat}' },
+    { key: 'brief_final',           group: 'briefing', icon: '☠️', label: '브리핑: 최종 구역',       desc: '마지막 구역을 골랐을 때 · {title} {region}' },
+    { key: 'brief_locked',          group: 'briefing', icon: '🔒', label: '브리핑: 미확인 구역',     desc: '아직 갈 수 없는 구역을 골랐을 때 · {region}' },
+    { key: 'brief_secured',         group: 'briefing', icon: '🏴', label: '브리핑: 확보한 구역',     desc: '이미 확보한 구역을 골랐을 때 · {region}' },
+    { key: 'brief_inProgress',      group: 'briefing', icon: '⚔️', label: '브리핑: 작전 중 구역',    desc: '진행 중인 구역을 골랐을 때 · {region}' },
+    { key: 'brief_busyElsewhere',   group: 'briefing', icon: '⛔', label: '브리핑: 다른 작전 진행 중', desc: '다른 구역 작전 중에 새 구역을 골랐을 때 · {current} {region}' },
+    { key: 'brief_river',           group: 'briefing', icon: '🌊', label: '브리핑: 도하 경로',       desc: '강을 건너는 구역일 때 진입 브리핑 뒤에 덧붙음' },
+    { key: 'brief_justSecured',     group: 'briefing', icon: '🚩', label: '브리핑: 구역 확보 직후',  desc: '구역을 확보하고 새 길이 열렸을 때 · {region} {opened}' },
+    { key: 'brief_justSecuredNone', group: 'briefing', icon: '🏁', label: '브리핑: 확보(새 길 없음)', desc: '구역을 확보했지만 새로 열린 곳이 없을 때 · {region}' },
+    { key: 'brief_cleared',         group: 'briefing', icon: '🏆', label: '브리핑: 대륙 평정',       desc: '모든 구역을 확보했을 때' },
+    // 회귀 반응: 부관은 처음 보는 지도지만 지휘관은 이미 안다. 인사/진입 가능 구역 브리핑 끝에 덧붙는다.
+    { key: 'brief_loop1', group: 'briefing', icon: '🔁', label: '회귀 반응 (1~2회차)', desc: '사망회귀 1회 이상일 때 브리핑 끝에 덧붙음 · 지휘관의 망설임 없는 태도를 의아해함' },
+    { key: 'brief_loop3', group: 'briefing', icon: '🔁', label: '회귀 반응 (3~5회차)', desc: '사망회귀 3회 이상 · 지휘관이 이 땅을 아는 것 같다고 느낌' },
+    { key: 'brief_loop6', group: 'briefing', icon: '🔁', label: '회귀 반응 (6회차~)',  desc: '사망회귀 6회 이상 · 지휘관이 몇 번이고 반복해 왔음을 눈치챔' }
+  ];
+
+  const TONES = [
+    { key: 'timid',    label: '😰 소심·겁쟁이' },
+    { key: 'cold',     label: '🧊 냉소·시니컬' },
+    { key: 'loyal',    label: '🛡️ 충직·성실' },
+    { key: 'rough',    label: '💢 거친·다혈질' },
+    { key: 'cheerful', label: '🌼 명랑·천진' },
+    { key: 'noble',    label: '👑 기품·귀족' }
   ];
 
   const DEFAULT_POOL = {
-    refuse_danger: [
-      '{target}의 기세가 너무 흉포합니다... 살아서 돌아오지 못할 거예요!',
-      '승산이 {win}%라고요? 이건 작전이 아니라 처형이잖아요!',
-      '죽고 싶지 않아요...! 제발 이번 명령만은...!',
-      '저 녀석한테 덤비라고요? 차라리 절 지금 베세요.',
-      '이런 무모한 사지로는 못 갑니다. 다른 길을 찾으세요.',
-      '지휘관님은 뒤에서 보기만 하시잖아요. 이번엔 못 따릅니다.',
-      '…싫어요. 저도 살아서 집에 가고 싶다고요.',
-      '{target} 앞에 서는 순간 끝이에요. 명령 철회해 주세요!',
-      '계산은 할 줄 아시죠? 이건 그냥 버리는 패예요.',
-      '거절합니다. 제 목숨은 그렇게 싸지 않아요.'
-    ],
-    refuse_lowhp: [
-      '피가 멈추지 않아요... (HP {hp}/{maxHp}) 더 싸우다간 죽고 말 거예요!',
-      '다리가... 움직이질 않아요. 지금은 무리예요.',
-      '이 몸으로 또 싸우라고요? 붕대부터 감게 해주세요...',
-      '시야가 흐려요... 한 번만 더 맞으면 끝이에요.',
-      '숨 쉬는 것조차 버거워요. 제발 물러나게 해주세요.',
-      '검을 쥘 힘도 없어요. 지금 나가면 개죽음이에요.',
-      '…상처가 벌어졌어요. 이대로는 못 갑니다.',
-      '살려주세요... 아직 죽기 싫어요.'
-    ],
-    refuse_distrust: [
-      '지휘관님을 더는 신뢰할 수 없습니다! 이런 자살 특공 명령엔 따를 수 없어요!',
-      '당신 명령엔 이제 안 움직입니다. 알아서 하세요.',
-      '또 저를 소모품 취급하시는군요. 이번엔 사양하죠.',
-      '몇 번이나 버려졌는지 세어보셨나요? 전 세고 있었어요.',
-      '흥. 그 명령, 못 들은 걸로 하겠습니다.',
-      '당신을 위해 피 흘릴 이유가 더는 없어요.',
-      '명령이요? 부탁도 아니고 명령이요? …싫습니다.',
-      '제 충성은 바닥났어요. 다른 사람한테 시키세요.'
-    ],
-    refuse_skill: [
-      '그 힘을 그런 데 쓰라고요? 거절합니다.',
-      '지금 그 기술을 쓰면 제가 먼저 쓰러져요. 못 해요.',
-      '이건 제 기술이에요. 당신 명령으로 쓰는 게 아니라고요.',
-      '…집중이 안 돼요. 지금은 못 씁니다.',
-      '그렇게 함부로 부릴 수 있는 힘이 아니에요.',
-      '싫어요. 그 기술은 믿는 사람을 위해서만 써요.'
-    ],
-    brave_attack: [
-      '승산이 {win}%라도 괜찮아요. 지휘관님이 가라면 갑니다!',
-      '무섭지 않다면 거짓말이지만… 당신을 믿어요.',
-      '{target}이든 뭐든, 길은 제가 열겠습니다!',
-      '이길 확률 따위 상관없어요. 지휘관님 곁이라면.',
-      '맡겨주세요. 반드시 살아서 돌아올게요!',
-      '불리한 싸움일수록 제 진가가 나오는 법이죠!',
-      '지휘관님이 고른 길이라면, 그게 정답이에요.',
-      '각오는 끝났습니다. 뒤는 부탁드려요!',
-      '지켜봐 주세요. 이 정도 역경쯤은 넘어 보일게요.',
-      '당신이 믿어준 만큼, 저도 당신을 믿어요. 갑니다!'
-    ],
-    forced_attack: [
-      '…알았어요, 간다고요! 대신 죽으면 당신 탓이에요!',
-      '이게 지휘관님 방식이군요. 기억해 둘게요.',
-      '억지로 등 떠밀려 가는 건 이번이 마지막이에요.',
-      '크윽… 몸이 멋대로… 좋아요, 가면 되잖아요!',
-      '명령이니까 가는 거예요. 착각하지 마세요.',
-      '살아 돌아오면… 각오하세요.'
-    ],
-    enemy_defeated: [
-      '하나 처리했습니다!',
-      '{target}, 쓰러뜨렸어요!',
-      '보셨죠? 이 정도는 식은 죽 먹기예요.',
-      '다음 상대는 누구죠?',
-      '흥, 별것 아니었네.',
-      '지휘관님, 길이 열렸습니다!',
-      '휴… 이겼다. 다음도 맡겨주세요.',
-      '이 승리는 지휘관님께 바칩니다.'
-    ]
+    refuse_danger: {
+      timid: [
+        '{target}의 기세가 너무 흉포해요... 살아서 돌아오지 못할 거예요!',
+        '죽고 싶지 않아요...! 제발 이번 명령만은...!',
+        '…싫어요. 저도 살아서 집에 가고 싶다고요.',
+        '다, 다리가 떨려서 한 발짝도 못 움직이겠어요...',
+        '저 상대는 무리예요! 제발 다른 사람을 보내주세요!',
+        '승산이 {win}%라니... 그건 그냥 죽으라는 거잖아요...'
+      ],
+      cold: [
+        '승산 {win}%. 이건 작전이 아니라 처형이군요.',
+        '계산은 할 줄 아시죠? 이건 그냥 버리는 패예요.',
+        '거절합니다. 제 목숨은 그렇게 싸지 않아요.',
+        '{target}에게 덤비라고요? 차라리 절 지금 베세요.',
+        '지휘관님은 뒤에서 보기만 하시잖아요. 이번엔 사양하죠.',
+        '숫자를 다시 보세요. 그래도 가라고 하실 건가요?'
+      ],
+      loyal: [
+        '죄송합니다... 이번 명령만은 따를 수 없습니다. 전멸이 뻔합니다.',
+        '지휘관님, 재고해 주십시오. {target}은(는) 지금 상대할 적이 아닙니다.',
+        '명령을 어기는 건 처음입니다. 하지만 이건 무모합니다.',
+        '부대를 지키는 것도 제 임무입니다. 여기서는 물러서겠습니다.',
+        '승률 {win}%로는 돌아올 수 없습니다. 다른 길을 찾아주십시오.',
+        '제 판단을 믿어주십시오. 지금 나가면 개죽음입니다.'
+      ],
+      rough: [
+        '미쳤어? 저딴 놈한테 맨몸으로 덤비라고?!',
+        '이딴 명령은 개나 줘버려! 안 가!',
+        '{target}? 지금 나 죽으라고 등 떠미는 거냐?',
+        '{win}%? 웃기지 마! 내 목은 하나뿐이라고!',
+        '싸움은 좋아하지만 자살은 취미 없어!',
+        '시끄러워! 이번엔 내 마음대로 한다!'
+      ],
+      cheerful: [
+        '에이~ 저건 진짜 무리예요! 저 아직 하고 싶은 게 많다구요!',
+        '으앙, 저 녀석 너무 무섭게 생겼어요! 다음에 해요, 다음에!',
+        '지휘관님~ 이번 건 못 본 척해주시면 안 될까요?',
+        '확률이 {win}%래요! 이건 아무리 저라도 못 웃겠어요...',
+        '앗, 갑자기 배가 아파서... 아니 진짜로요!',
+        '저 오늘은 운이 없는 날이에요. 느낌이 와요!'
+      ],
+      noble: [
+        '품위 있는 죽음과 무의미한 죽음은 다르지요. 거절하겠어요.',
+        '이런 졸렬한 작전에 제 검을 더럽힐 수는 없습니다.',
+        '{target} 따위에게 목숨을 바치는 건 가문의 수치예요.',
+        '지휘관, 귀하의 전술 안목을 의심하게 되는군요.',
+        '승산 {win}%의 싸움은 용맹이 아니라 우둔함이지요.',
+        '물러나겠습니다. 이것은 비겁함이 아니라 분별입니다.'
+      ]
+    },
+    refuse_lowhp: {
+      timid: [
+        '피가 멈추지 않아요... (HP {hp}/{maxHp}) 더 싸우다간 죽고 말 거예요!',
+        '살려주세요... 아직 죽기 싫어요...',
+        '시야가 흐려요... 한 번만 더 맞으면 끝이에요...',
+        '아파요... 너무 아파서 무기도 못 들겠어요...'
+      ],
+      cold: [
+        'HP {hp}. 이 상태로 나가면 결과는 뻔하죠.',
+        '부상병을 전선에 세우는 게 지휘관님 방식인가요?',
+        '죽은 병사는 다음 싸움에 쓸 수 없다는 것쯤은 아시죠?',
+        '치료부터 받겠습니다. 시체가 되는 건 사양이에요.'
+      ],
+      loyal: [
+        '송구합니다... 몸이 따라주지 않습니다. 잠시만 시간을 주십시오.',
+        '상처가 깊습니다. 지금 나가면 오히려 짐이 될 겁니다.',
+        '조금만 회복하면 반드시 다시 서겠습니다. 지금은...',
+        '이 몸으로는 지휘관님을 지켜드릴 수 없습니다.'
+      ],
+      rough: [
+        '크윽... 젠장, 다리가 말을 안 들어!',
+        '피 철철 나는 거 안 보여?! 붕대부터 감게 해!',
+        '지금 나가면 진짜 뒈진다고! 좀 봐줘!',
+        '이 꼴로 싸우라고? 적보다 네가 더 무섭다!'
+      ],
+      cheerful: [
+        '헤헤... 저 지금 좀 많이 아픈 것 같아요...',
+        '으으, 반창고로는 안 될 것 같은데요...?',
+        '잠깐만요! 일 분만 누워 있을게요, 일 분만...',
+        '지휘관님, 저 지금 별이 보여요... 낮인데...'
+      ],
+      noble: [
+        '이런 꼴로 전장에 서는 건 예의가 아니지요. 물러나겠어요.',
+        '상처 입은 몸으로 나서면 적에게도 실례랍니다.',
+        '휴식이 필요해요. 이건 요청이 아니라 통보입니다.',
+        '피투성이로 쓰러지는 건 제 미학이 아니에요.'
+      ]
+    },
+    refuse_distrust: {
+      timid: [
+        '저... 지휘관님을 믿어도 되는 건지 모르겠어요...',
+        '또 저만 버려지는 거죠? 이번엔... 싫어요.',
+        '무서워요... 적보다 지휘관님 명령이 더 무서워요.',
+        '저번에도 괜찮다고 하셨잖아요... 안 괜찮았어요.'
+      ],
+      cold: [
+        '당신 명령엔 이제 안 움직입니다. 알아서 하세요.',
+        '흥. 그 명령, 못 들은 걸로 하겠습니다.',
+        '몇 번이나 버려졌는지 세어보셨나요? 전 세고 있었어요.',
+        '신뢰는 쌓는 거지 명령하는 게 아니에요.'
+      ],
+      loyal: [
+        '지휘관님을 더는 신뢰할 수 없습니다. 이 명령엔 따를 수 없어요.',
+        '충성에도 한계가 있습니다. 오늘이 그날입니다.',
+        '저를 소모품으로 보신다는 걸 이제야 알았습니다.',
+        '한때는 목숨도 바칠 수 있었는데... 지금은 아닙니다.'
+      ],
+      rough: [
+        '내가 왜 네 말을 들어야 하는데?',
+        '또 날 총알받이로 쓰려고? 꿈 깨!',
+        '명령? 웃기고 있네. 네가 직접 가!',
+        '한 번만 더 그딴 소리 하면 너부터 친다.'
+      ],
+      cheerful: [
+        '음~ 이번엔 싫어요! 지휘관님 요즘 좀 너무해요!',
+        '흥, 저 삐졌거든요? 오늘은 말 안 들을 거예요!',
+        '사과부터 하시면 생각해 볼게요~ 아마도요?',
+        '저 요즘 지휘관님 말 들으면 손해만 봐요!'
+      ],
+      noble: [
+        '귀하의 지휘를 받드는 것은 이제 제 명예에 어긋납니다.',
+        '신의를 저버린 자의 명령에는 따르지 않습니다.',
+        '저를 부리고 싶다면 먼저 존중을 배우시지요.',
+        '이 검은 믿을 수 있는 주군을 위해서만 뽑습니다.'
+      ]
+    },
+    refuse_skill: {
+      timid: [
+        '그 기술은... 지금 쓰면 제가 먼저 쓰러질 것 같아요...',
+        '손이 떨려서 집중이 안 돼요... 못 하겠어요...',
+        '실패하면 어떡해요...? 무서워서 못 쓰겠어요...'
+      ],
+      cold: [
+        '이건 제 기술이에요. 당신 명령으로 쓰는 게 아니라고요.',
+        '그런 데 낭비할 힘은 없습니다.',
+        '그 기술, 공짜로 나오는 거 아니에요.'
+      ],
+      loyal: [
+        '지금 그 힘을 쓰는 건 위험합니다. 따를 수 없습니다.',
+        '그 기술은 결정적인 순간을 위해 아껴두겠습니다.',
+        '죄송합니다. 이 상황에선 기술이 오히려 독이 됩니다.'
+      ],
+      rough: [
+        '그딴 데 내 필살기를 쓰라고? 꺼져!',
+        '내 기술은 내가 쓰고 싶을 때 쓴다!',
+        '지금 그거 쓰면 나만 뻗어! 안 해!'
+      ],
+      cheerful: [
+        '에~ 그거 쓰면 엄청 피곤하단 말이에요! 싫어요!',
+        '오늘은 그 기술 쉬는 날이에요! 미안해요~',
+        '그건 비장의 무기니까 아직 비밀이에요!'
+      ],
+      noble: [
+        '그렇게 함부로 부릴 수 있는 힘이 아니랍니다.',
+        '제 비기는 귀하 같은 분의 변덕을 위해 있지 않아요.',
+        '고귀한 힘은 고귀한 목적에만 쓰는 법이지요.'
+      ]
+    },
+    brave_attack: {
+      timid: [
+        '무, 무섭지만... 지휘관님이 믿어주시니까 갈게요!',
+        '떨려요... 그래도 지휘관님을 위해서라면...!',
+        '승률 {win}%... 괜찮아요, 괜찮아... 할 수 있어!',
+        '눈 감고 달려갈게요! 뒤에 계셔 주세요!'
+      ],
+      cold: [
+        '{win}%라... 뭐, 지휘관님이 가라면 가죠.',
+        '어리석은 명령이지만, 당신이니까 따르는 겁니다.',
+        '불리한 싸움이군요. 그래서 더 재밌겠네요.',
+        '이번만 믿어보죠. 실망시키지 마세요.'
+      ],
+      loyal: [
+        '승산이 {win}%라도 괜찮습니다. 명령대로 가겠습니다!',
+        '맡겨주십시오. 반드시 살아서 돌아오겠습니다!',
+        '지휘관님이 고른 길이라면, 그게 정답입니다.',
+        '당신이 믿어준 만큼, 저도 당신을 믿습니다. 갑니다!'
+      ],
+      rough: [
+        '좋아! 불리할수록 피가 끓는다고!',
+        '{target}? 덤벼봐! 내가 박살 내주마!',
+        '확률 따위 개나 줘! 간다아아!',
+        '네가 가라면 간다. 대신 술은 네가 사라!'
+      ],
+      cheerful: [
+        '헤헤, 어려운 싸움일수록 이기면 더 신나잖아요!',
+        '지휘관님 곁이라면 어디든 갈 수 있어요!',
+        '{target}, 기다려라~ 지금 간다!',
+        '이기면 칭찬해 주실 거죠? 약속이에요!'
+      ],
+      noble: [
+        '역경 앞에서 물러서지 않는 것이 기사의 도리지요.',
+        '좋습니다. 이 싸움, 제 이름을 걸고 받아들이겠어요.',
+        '승산이 낮을수록 승리는 더 빛나는 법이랍니다.',
+        '지휘관, 귀하의 신뢰에 제 검으로 답하겠습니다.'
+      ]
+    },
+    forced_attack: {
+      timid: [
+        '으아앙... 싫은데... 몸이 멋대로 움직여요...!',
+        '가, 가요! 가면 되잖아요! 흑...',
+        '저 죽으면... 지휘관님 꿈에 나올 거예요...'
+      ],
+      cold: [
+        '이게 지휘관님 방식이군요. 기억해 두겠습니다.',
+        '명령이니까 가는 거예요. 착각하지 마세요.',
+        '억지로 등 떠밀려 가는 건 이번이 마지막이에요.'
+      ],
+      loyal: [
+        '…알겠습니다. 명령이라면 따르겠습니다. 납득은 못 하지만요.',
+        '이번만은 군율을 따르겠습니다. 다음엔 상의해 주십시오.',
+        '불만은 나중에 말씀드리겠습니다. 지금은 가겠습니다.'
+      ],
+      rough: [
+        '알았어, 간다고! 대신 죽으면 네 탓이야!',
+        '크윽... 젠장, 좋아! 다 쓸어버리면 되잖아!',
+        '살아 돌아오면... 각오해라.'
+      ],
+      cheerful: [
+        '치사해요! 이건 반칙이에요! ...가긴 갈게요!',
+        '에잇, 모르겠다! 될 대로 되라~!',
+        '갔다 와서 맛있는 거 꼭 사주셔야 해요!'
+      ],
+      noble: [
+        '강압으로 얻은 복종은 오래가지 않는다는 걸 아시길.',
+        '불쾌하군요. 하지만 전장에서 등을 보이진 않겠어요.',
+        '이 굴욕, 잊지 않겠습니다.'
+      ]
+    },
+    enemy_defeated: {
+      timid: [
+        '해, 해냈어요...! 제가 이긴 거 맞죠?',
+        '휴우... 심장 터지는 줄 알았어요...',
+        '쓰러뜨렸어요! 다, 다음은 좀 쉬운 상대였으면...',
+        '저 지금 손 떨리는 거 기분 탓이에요...'
+      ],
+      cold: [
+        '하나 처리했습니다.',
+        '흥, 별것 아니었네.',
+        '예상대로군요. 다음.',
+        '{target}, 생각보다 시시했어요.'
+      ],
+      loyal: [
+        '{target} 격파했습니다! 다음 명령을!',
+        '지휘관님, 길이 열렸습니다!',
+        '이 승리는 지휘관님께 바칩니다.',
+        '임무 완수. 계속 전진하겠습니다!'
+      ],
+      rough: [
+        '하하! 이게 다냐?!',
+        '다음 놈 나와! 아직 몸도 안 풀렸다!',
+        '{target}, 꼴좋다!',
+        '역시 싸움은 이 맛이지!'
+      ],
+      cheerful: [
+        '야호~ 이겼다! 보셨어요, 보셨어요?',
+        '헤헤, 저 좀 대단하죠?',
+        '{target} 쓰러뜨렸어요! 칭찬해 주세요!',
+        '다음 상대는 누구예요? 신난다~!'
+      ],
+      noble: [
+        '우아하게 마무리했지요.',
+        '{target}, 좋은 상대였어요. 편히 쉬시길.',
+        '승리는 언제나 준비된 자의 것이랍니다.',
+        '이 정도는 예법을 갖출 필요도 없었네요.'
+      ]
+    },
+    adjutant_appointed: {
+      timid: [
+        '제, 제가 부관이요...? 열심히 할게요! 실망시키지 않을게요...!',
+        '저 같은 사람이 부관이라니... 그래도, 지휘관님이 고르셨으니까요.',
+        '떨려요... 그래도 지휘관님 곁이라면 조금은 덜 무서울 것 같아요.',
+        '부관... 잘할 수 있을까요? 아뇨, 잘할게요!'
+      ],
+      cold: [
+        '부관이라. 뭐, 나쁘지 않은 선택이네요.',
+        '당신 옆자리라... 귀찮겠지만 맡아드리죠.',
+        '사람 보는 눈은 있으시군요. 조금은 다시 봤습니다.',
+        '기대는 하지 마세요. 대신 실망도 안 시킬 테니까.'
+      ],
+      loyal: [
+        '부관 {name}, 명을 받들겠습니다! 이 몸이 다할 때까지 곁을 지키겠습니다.',
+        '영광입니다, 지휘관님. 이 믿음에 반드시 보답하겠습니다.',
+        '오늘부터 지휘관님의 눈과 귀가 되겠습니다.',
+        '부관의 임무, 목숨을 걸고 수행하겠습니다!'
+      ],
+      rough: [
+        '내가 부관? 하, 좋아! 대신 잔소리는 각오해!',
+        '좋아, 맡아주지. 네 등은 내가 지킨다.',
+        '부관이라니 체질엔 안 맞는데... 뭐, 네 부탁이니까.',
+        '이제 네 옆에서 싸우는 거다. 뒤처지지 마라!'
+      ],
+      cheerful: [
+        '와아! 제가 부관이에요? 진짜요? 최고예요!',
+        '헤헤, 이제 지휘관님이랑 매일 같이 다니는 거죠?',
+        '부관 {name}, 출동 준비 완료! 뭐든 시켜주세요!',
+        '저 부관 배지 받는 거예요? 반짝반짝하게 닦아둘게요!'
+      ],
+      noble: [
+        '부관의 자리라... 기꺼이 받들지요. 제 이름에 걸맞게.',
+        '귀하의 안목을 인정하겠어요. 이 자리, 품위 있게 지켜드리지요.',
+        '좋습니다. 지금부터 제 지혜는 귀하의 것입니다.',
+        '부관으로서의 첫 조언입니다. 앞으로 저를 실망시키지 마시길.'
+      ]
+    },
+
+    // ---------------- 부관 브리핑 ----------------
+    brief_welcome: {
+      timid: [
+        '부관 {adjutant}이에요... 지도 준비해 뒀어요. 어, 어디로 갈까요?',
+        '저기... 작전 지역을 골라주시면 제가 정리해 볼게요...',
+        '지도를 보니 좀 무섭네요... 그래도 지휘관님이 고르시면 따라갈게요.'
+      ],
+      cold: [
+        '지도는 펼쳐 뒀습니다. 고르는 건 당신 몫이죠.',
+        '어디로 가든 위험한 건 마찬가지예요. 고르시죠.',
+        '{adjutant}, 대기 중입니다. 오늘은 제대로 된 판단을 기대하죠.'
+      ],
+      loyal: [
+        '부관 {adjutant}, 지휘관님 곁에서 보좌하겠습니다. 작전 지역을 지정해 주십시오.',
+        '지도는 준비됐습니다. 어디부터 치시겠습니까, 지휘관님?',
+        '전 부대 출격 대기 중입니다. 명령만 내려주십시오.'
+      ],
+      rough: [
+        '지도 깔아놨다. 어디 칠지 빨리 정해!',
+        '몸이 근질근질해. 아무 데나 찍어, 다 박살 내줄 테니까.',
+        '{adjutant} 대기 중. 오래 기다리게 하지 마라!'
+      ],
+      cheerful: [
+        '짠~ 지도 준비 완료! 오늘은 어디로 놀러... 아니, 작전 가요?',
+        '부관 {adjutant}, 대기 중이에요! 어디든 콕 찍어주세요!',
+        '지휘관님, 지도 보세요! 가고 싶은 데 엄청 많아요!'
+      ],
+      noble: [
+        '지도는 정돈해 두었습니다. 다음 행보를 정하시지요.',
+        '부관 {adjutant}, 대령했습니다. 귀하의 결단을 기다리지요.',
+        '전장은 체스판과 같지요. 첫 수를 두시겠습니까?'
+      ]
+    },
+    brief_available: {
+      timid: [
+        '{title}이에요... {desc}. 위협도 {threat}이래요... 괜찮을까요?',
+        '{region} 쪽 정찰 보고예요. {desc}. 위, 위협도는 {threat}...',
+        '{title}... {desc}래요. 조심해서 가요, 우리.'
+      ],
+      cold: [
+        '{title}. {desc}. 위협도 {threat}. 판단은 알아서 하시죠.',
+        '{region} 방면 보고입니다. {desc}. 위협도 {threat}이니 각오는 하시고요.',
+        '{title}이라... {desc}. 쉬운 곳은 아니네요. 위협도 {threat}.'
+      ],
+      loyal: [
+        '{title}입니다. {desc}. 위협도는 {threat}로 판단됩니다.',
+        '{region} 방면 정찰 보고입니다. {desc}. 위협도 {threat}.',
+        '{title} 작전 개요입니다. {desc}. 위협도 {threat}, 출격 준비는 끝났습니다.'
+      ],
+      rough: [
+        '{title}! {desc}. 위협도 {threat}? 그래 봤자지!',
+        '{region} 쪽이다. {desc}. 위협도 {threat}. 재밌겠는데?',
+        '{title}이라... {desc}. 싹 쓸어버리자고!'
+      ],
+      cheerful: [
+        '{title}이에요! {desc}. 위협도는 {threat}! 해볼 만해요!',
+        '{region} 소식이에요~ {desc}. 위협도 {threat}래요!',
+        '다음은 {title}! {desc}. 두근두근하네요!'
+      ],
+      noble: [
+        '{title}이지요. {desc}. 위협도 {threat}, 가볍게 볼 곳은 아니랍니다.',
+        '{region} 방면 보고를 올리지요. {desc}. 위협도는 {threat}입니다.',
+        '{title}... {desc}. 우리 이름을 새기기에 나쁘지 않은 무대군요.'
+      ]
+    },
+    brief_final: {
+      timid: [
+        '{title}... 정찰대가 아무도 안 돌아왔대요... 저, 무서워요...',
+        '여기가 마지막이에요... 다 같이 살아서 돌아갈 수 있겠죠...?'
+      ],
+      cold: [
+        '{title}. 돌아온 정찰병은 없습니다. 여기서 끝나든, 끝내든 둘 중 하나죠.',
+        '마지막 무대군요. 지금까지가 연습이었다고 생각하세요.'
+      ],
+      loyal: [
+        '{title}... 정찰대가 돌아오지 않았습니다. 이곳이 마지막이 될 겁니다.',
+        '최종 작전 지역입니다. 지휘관님, 끝까지 함께하겠습니다.'
+      ],
+      rough: [
+        '{title}... 드디어 마지막이군. 여기서 다 끝내버리자!',
+        '정찰병 하나도 안 돌아왔다고? 좋아, 우리가 처음이 되면 되지!'
+      ],
+      cheerful: [
+        '{title}... 여기가 마지막이에요. 끝나면 다 같이 잔치해요, 꼭!',
+        '정찰대가 안 돌아왔대요... 그래도 우리는 돌아올 거예요! 약속!'
+      ],
+      noble: [
+        '{title}. 마지막 막이 오르는군요. 품위 있게 끝을 맺지요.',
+        '돌아온 이가 없는 땅... 역사는 우리를 기억하게 될 겁니다.'
+      ]
+    },
+    brief_locked: {
+      timid: [
+        '{region|은/는} 아직 아무것도 몰라요... 옆 구역부터 가야 할 것 같아요.',
+        '거긴 정보가 하나도 없어요... 가까운 곳부터 확보해요, 네?'
+      ],
+      cold: [
+        '{region|은/는} 정보가 없습니다. 눈 감고 뛰어들 생각은 아니시죠?',
+        '거긴 아직이에요. 인접 구역부터 차근차근 하시죠.'
+      ],
+      loyal: [
+        '{region|은/는} 아직 정찰 정보가 없습니다. 인접한 구역을 먼저 확보해야 합니다.',
+        '{region} 방면은 접근로가 막혀 있습니다. 주변부터 확보하겠습니다.'
+      ],
+      rough: [
+        '{region}? 아직 길이 안 뚫렸어. 옆부터 부수고 가자.',
+        '거긴 아직 못 가! 순서대로 해, 순서대로!'
+      ],
+      cheerful: [
+        '{region|은/는} 아직 비밀의 땅이에요! 옆 동네부터 가봐요~',
+        '거긴 아직 안개가 잔뜩이에요! 가까운 데부터 정복해요!'
+      ],
+      noble: [
+        '{region|은/는} 아직 베일에 싸여 있지요. 순서를 지키시길.',
+        '서두르지 마시지요. {region} 쪽 길은 이웃 땅에서 열린답니다.'
+      ]
+    },
+    brief_secured: {
+      timid: [
+        '{region|은/는} 이제 우리 땅이에요... 다행이다...',
+        '거긴 벌써 확보했어요. 그때 정말 무서웠는데...'
+      ],
+      cold: [
+        '{region|은/는} 이미 끝난 곳입니다. 다른 데를 보시죠.',
+        '확보 완료된 구역이에요. 추억 여행이라도 하시게요?'
+      ],
+      loyal: [
+        '{region|은/는} 우리 깃발 아래 있습니다.',
+        '{region} 확보 상태 양호합니다. 주둔 병력 이상 없습니다.'
+      ],
+      rough: [
+        '{region|은/는} 우리가 접수했지! 다음 거 보자.',
+        '거긴 이미 박살 냈잖아. 딴 데 골라!'
+      ],
+      cheerful: [
+        '{region|은/는} 우리 거예요! 깃발 펄럭펄럭~',
+        '거긴 벌써 이겼어요! 헤헤, 우리 대단하죠?'
+      ],
+      noble: [
+        '{region|은/는} 이미 우리의 영토지요.',
+        '그곳엔 이미 우리 문장이 휘날리고 있답니다.'
+      ]
+    },
+    brief_inProgress: {
+      timid: [
+        '{region} 작전이 아직 안 끝났어요... 돌아가야 하죠...?',
+        '{region}에 다들 기다리고 있어요. 빨리 돌아가요...'
+      ],
+      cold: [
+        '{region} 작전 중입니다. 설마 잊으신 건 아니죠?',
+        '{region}, 아직 끝나지 않았어요. 복귀하시죠.'
+      ],
+      loyal: [
+        '{region} 작전이 진행 중입니다. 복귀하시겠습니까?',
+        '{region} 전선이 지휘관님의 귀환을 기다리고 있습니다.'
+      ],
+      rough: [
+        '{region} 아직 정리 안 됐다! 돌아가서 마저 끝내자!',
+        '{region}에서 싸우다 말았잖아. 가자!'
+      ],
+      cheerful: [
+        '{region} 작전 아직 진행 중이에요! 얼른 돌아가요~',
+        '{region}에서 친구들이 기다려요! 출발!'
+      ],
+      noble: [
+        '{region}에서의 일이 아직 남았지요. 돌아가시겠습니까?',
+        '마무리 짓지 못한 무대가 {region}에 있답니다.'
+      ]
+    },
+    brief_busyElsewhere: {
+      timid: [
+        '{current} 작전부터 끝내야 해요... 둘 다는 무리예요...',
+        '저, 저기... {current}에 아직 사람들이 있어요...'
+      ],
+      cold: [
+        '{current}도 못 끝냈는데 벌써 딴 데요? 욕심이 과하시네요.',
+        '병력은 하나뿐입니다. {current}부터 정리하시죠.'
+      ],
+      loyal: [
+        '{current} 작전부터 끝내셔야 합니다. 병력을 둘로 나눌 수는 없습니다.',
+        '지휘관님, {current} 전선이 아직 열려 있습니다. 그쪽이 먼저입니다.'
+      ],
+      rough: [
+        '야, {current}부터 끝내! 두 마리 토끼 쫓다 다 놓친다!',
+        '{current} 아직이잖아. 하나씩 해!'
+      ],
+      cheerful: [
+        '앗, {current}부터 끝내야 해요! 한 번에 하나씩~',
+        '욕심쟁이 지휘관님! {current} 먼저예요!'
+      ],
+      noble: [
+        '{current}의 일을 마치기 전에 다른 곳을 탐하는 건 경솔하지요.',
+        '한 번에 두 무대에 설 수는 없답니다. {current}부터.'
+      ]
+    },
+    brief_river: {
+      timid: [
+        '가, 강을 건너야 해요... 저 수영 잘 못하는데...',
+        '강을 건너는 길이에요... 발 조심해요...'
+      ],
+      cold: [
+        '강을 건너야 하는 경로입니다. 물에 빠져 죽는 건 사양이에요.',
+        '도하 경로예요. 준비 없이 가면 강이 적보다 무섭죠.'
+      ],
+      loyal: [
+        '강을 건너야 하는 경로입니다. 도하 준비가 필요합니다.',
+        '도하 작전이 포함됩니다. 장비 점검을 마쳐두겠습니다.'
+      ],
+      rough: [
+        '강? 헤엄쳐서라도 건넌다!',
+        '강 하나쯤이야! 젖는 거 무서우면 집에 가!'
+      ],
+      cheerful: [
+        '강을 건너요! 물놀이... 아니, 도하 작전이에요!',
+        '강이다~! 발 젖는 건 각오해야겠네요!'
+      ],
+      noble: [
+        '강을 건너는 길이군요. 옷자락이 젖는 건 감수하지요.',
+        '도하가 필요합니다. 강은 서두르는 자를 삼키는 법이지요.'
+      ]
+    },
+    brief_justSecured: {
+      timid: [
+        '{region} 확보했어요...! 살았다... {opened} 쪽 길이 열렸대요.',
+        '해냈어요, {region}! 다음은... {opened} 쪽이에요...',
+        '{region}에 깃발 꽂았어요! 이제 {opened} 쪽으로 갈 수 있어요.'
+      ],
+      cold: [
+        '{region} 확보. {opened} 방면이 열렸습니다. 쉬는 건 나중에.',
+        '{region}, 끝. 다음은 {opened}입니다.',
+        '예상보다 오래 걸렸지만 {region} 확보했습니다. {opened|이/가} 열렸어요.'
+      ],
+      loyal: [
+        '{region} 확보 완료. {opened} 방면이 열렸습니다.',
+        '{region}에 깃발을 꽂았습니다. 다음은 {opened} 쪽입니다.',
+        '지휘관님, {region} 확보입니다! {opened} 방면 정찰을 시작하겠습니다.'
+      ],
+      rough: [
+        '{region} 접수 완료! 다음은 {opened}다, 가자!',
+        '하하! {region} 먹었다! {opened}도 금방이야!',
+        '{region} 쓸어버렸지! {opened} 놈들 떨고 있겠군!'
+      ],
+      cheerful: [
+        '{region} 확보! 야호~ {opened} 쪽 길도 열렸어요!',
+        '{region} 우리 거예요! 다음은 {opened}! 신난다!',
+        '해냈어요, 지휘관님! {region} 클리어! 다음은 {opened} 쪽이에요!'
+      ],
+      noble: [
+        '{region|은/는} 이제 우리 것이지요. {opened} 쪽 길이 열렸습니다.',
+        '{region}에 우리 문장을 세웠습니다. 다음 무대는 {opened}.',
+        '훌륭한 승리였어요. {region} 확보, {opened} 방면이 우릴 기다리지요.'
+      ]
+    },
+    brief_justSecuredNone: {
+      timid: [
+        '{region} 확보했어요... 근데 새로 열린 길은 없대요...',
+        '{region} 끝났어요. 다른 곳은... 아직이에요.'
+      ],
+      cold: [
+        '{region} 확보. 새로 열린 길은 없습니다. 아쉽네요.',
+        '{region|은/는} 끝났지만 막다른 길이었군요.'
+      ],
+      loyal: [
+        '{region} 확보 완료. 새로 열린 길은 없습니다.',
+        '{region} 확보했습니다. 다음 진로는 다른 방면에서 찾겠습니다.'
+      ],
+      rough: [
+        '{region} 먹었는데 막다른 길이네. 쳇.',
+        '{region} 끝! 새 길은 없지만, 뭐 다른 데 치면 되지!'
+      ],
+      cheerful: [
+        '{region} 클리어! 새 길은 없지만 그래도 이겼어요!',
+        '{region} 확보~ 막다른 길이지만 경치는 좋네요!'
+      ],
+      noble: [
+        '{region} 확보. 새 길은 없으나 승리는 승리지요.',
+        '{region|은/는} 막다른 땅이었군요. 그래도 의미 있는 한 수였어요.'
+      ]
+    },
+    brief_cleared: {
+      timid: [
+        '끝났어요... 정말 끝났어요... 저, 살아남았어요, 지휘관님...!',
+        '대륙 전부가 우리 거래요... 믿기지 않아요...'
+      ],
+      cold: [
+        '끝났습니다. …솔직히, 여기까지 올 줄은 몰랐어요.',
+        '대륙 평정. 당신을 조금은 인정해야겠네요.'
+      ],
+      loyal: [
+        '…끝났습니다, 지휘관님. 대륙 전체가 우리 손에 있습니다.',
+        '모든 작전 완수. 지휘관님을 모실 수 있어 영광이었습니다.'
+      ],
+      rough: [
+        '끝났다! 대륙 전부 우리 거다! 술 가져와!',
+        '하하하! 우리가 이겼다고! 다 이겼어!'
+      ],
+      cheerful: [
+        '해냈어요! 대륙 전부 우리 거예요! 축제다~!',
+        '지휘관님, 우리가 이겼어요! 꿈 아니죠? 꼬집어 볼까요?'
+      ],
+      noble: [
+        '대륙의 평정이로군요. 역사는 오늘을 기억할 겁니다.',
+        '긴 무대가 막을 내렸습니다. 귀하와 함께여서 영광이었지요.'
+      ]
+    },
+    brief_loop1: {
+      timid: [
+        '…어? 지휘관님, 처음 보는 지도인데 하나도 안 망설이시네요...?',
+        '저, 저는 아직 지도 읽는 중인데... 벌써 정하신 거예요?'
+      ],
+      cold: [
+        '처음 보는 지도인데 고민도 안 하시네요. 이상하군요.',
+        '…꼭 답을 알고 있는 사람처럼 보시네요.'
+      ],
+      loyal: [
+        '…지휘관님? 처음 보는 지도인데 망설임이 없으시네요.',
+        '정찰 보고도 드리기 전에 판단을 끝내셨군요. 놀랍습니다.'
+      ],
+      rough: [
+        '어라? 처음 보는 땅인데 왜 이렇게 잘 알아?',
+        '뭐야, 지도 한 번 보고 바로 찍네? 감 하나는 좋은데?'
+      ],
+      cheerful: [
+        '와, 지휘관님 지도 엄청 빨리 보시네요! 처음 보는 거 맞죠?',
+        '헤에~ 망설임이 하나도 없으시네요! 혹시 여기 와보셨어요?'
+      ],
+      noble: [
+        '초행길치고는 발걸음에 망설임이 없으시군요.',
+        '마치 이 지도를 오래 들여다본 사람 같으시네요. 흥미롭군요.'
+      ]
+    },
+    brief_loop3: {
+      timid: [
+        '지휘관님... 여기 아시는 거죠? 그런 얼굴이세요...',
+        '제가 보고 드리기도 전에 다 아시는 것 같아서... 조금 무서워요.'
+      ],
+      cold: [
+        '제 보고, 필요 없으시죠? 이미 다 아시는 눈치인데.',
+        '이 지역을 아시는군요. 언제, 어떻게 알았는지는 묻지 않겠습니다.'
+      ],
+      loyal: [
+        '지휘관님, 이 지역을 아시는 것 같군요.',
+        '제 보고보다 먼저 아시는 눈치입니다.'
+      ],
+      rough: [
+        '야, 너 여기 와봤지? 거짓말하지 마, 다 티 나.',
+        '내가 보고하기도 전에 고개 끄덕이는 거 뭐냐? 기분 이상하네.'
+      ],
+      cheerful: [
+        '지휘관님, 여기 와보신 적 있죠? 다 알고 계신 표정이에요!',
+        '이상하다~ 제가 말하기도 전에 다 아시네요? 독심술이에요?'
+      ],
+      noble: [
+        '귀하는 이 땅을 이미 알고 계시는군요. 숨기실 필요는 없어요.',
+        '제 보고가 귀하에겐 복습인 모양이지요.'
+      ]
+    },
+    brief_loop6: {
+      timid: [
+        '지휘관님... 몇 번째예요? 눈이... 너무 지쳐 보이세요...',
+        '저, 왠지 지휘관님을 전에도 이렇게 본 것 같아요... 이상하죠...?'
+      ],
+      cold: [
+        '…몇 번째입니까. 그런 눈을 하고 계십니다.',
+        '같은 길을 몇 번이나 걸어온 사람의 얼굴이군요.'
+      ],
+      loyal: [
+        '…몇 번째입니까, 지휘관님. 그런 눈을 하고 계십니다.',
+        '무엇을 겪으셨든, 이번에도 곁에 있겠습니다. 몇 번이 되더라도.'
+      ],
+      rough: [
+        '…너, 대체 몇 번이나 이 짓을 반복한 거야?',
+        '그 눈 뭐야. 지옥을 몇 번은 갔다 온 놈 눈이잖아.'
+      ],
+      cheerful: [
+        '지휘관님... 오늘은 웃음이 안 나오네요. 많이 힘드셨죠?',
+        '왠지 우리 전에도 이 얘기 했던 것 같아요... 기분 탓이겠죠? 그쵸?'
+      ],
+      noble: [
+        '몇 번째 막인가요, 지휘관. 같은 대본을 여러 번 읽은 배우의 눈이군요.',
+        '반복되는 운명이라 해도, 이번 막은 다르게 끝내 보지요.'
+      ]
+    }
   };
 
   const AUTO_ASSIGN_COUNT = 3;
@@ -103,24 +751,35 @@
     return a;
   }
 
-  /** 한 상황에 대해 기본 풀에서 n줄을 랜덤으로 뽑는다. */
-  function randomLines(key, n = AUTO_ASSIGN_COUNT) {
-    return shuffle(DEFAULT_POOL[key] || []).slice(0, n);
+  function randomTone() {
+    return TONES[Math.floor(Math.random() * TONES.length)].key;
   }
 
-  /** 모든 상황에 대해 랜덤 대사 세트를 만든다. */
-  function randomDialogues(n = AUTO_ASSIGN_COUNT) {
+  /** 상황의 대사 풀. tone을 주면 그 성격만, 없으면 전체 성격을 합친 풀. */
+  function poolOf(key, tone) {
+    const byTone = DEFAULT_POOL[key] || {};
+    if (tone && byTone[tone]) return byTone[tone];
+    return Object.values(byTone).flat();
+  }
+
+  /** 한 상황에 대해 기본 풀에서 n줄을 랜덤으로 뽑는다. */
+  function randomLines(key, tone, n = AUTO_ASSIGN_COUNT) {
+    return shuffle(poolOf(key, tone)).slice(0, n);
+  }
+
+  /** 모든 상황에 대해 한 성격으로 통일된 랜덤 대사 세트를 만든다. (tone 생략 시 성격도 랜덤) */
+  function randomDialogues(tone = randomTone(), n = AUTO_ASSIGN_COUNT) {
     const out = {};
-    SITUATIONS.forEach(s => { out[s.key] = randomLines(s.key, n); });
+    SITUATIONS.forEach(s => { out[s.key] = randomLines(s.key, tone, n); });
     return out;
   }
 
   /** 비어 있는 상황만 랜덤 대사로 채운다. */
-  function fillMissing(dialogues, n = AUTO_ASSIGN_COUNT) {
+  function fillMissing(dialogues, tone = randomTone(), n = AUTO_ASSIGN_COUNT) {
     const out = {};
     SITUATIONS.forEach(s => {
       const lines = Array.isArray(dialogues?.[s.key]) ? dialogues[s.key].filter(l => String(l).trim()) : [];
-      out[s.key] = lines.length ? lines : randomLines(s.key, n);
+      out[s.key] = lines.length ? lines : randomLines(s.key, tone, n);
     });
     return out;
   }
@@ -130,12 +789,29 @@
   }
 
   /**
-   * 유닛의 상황별 대사를 하나 고른다. 유닛 고유 대사 → 기본 풀 순으로 찾는다.
+   * 유닛의 성격. 생성 때 정한 dialogueTone이 없으면(구버전 캐릭터) 캐릭터 id로 고정된 성격을 고른다.
+   * → 고유 대사가 없는 상황에서도 한 캐릭터는 늘 같은 말투로 말한다.
+   */
+  function toneOf(unit) {
+    if (unit?.dialogueTone && TONES.some(t => t.key === unit.dialogueTone)) return unit.dialogueTone;
+    const seed = String(unit?.sourceCharacterId || unit?.characterId || unit?.id || unit?.name || '');
+    let h = 0;
+    for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    return TONES[h % TONES.length].key;
+  }
+
+  /** 유닛이 이 상황에서 쓸 대사 목록: 고유 대사 → 그 유닛 성격의 기본 풀. */
+  function linesFor(unit, key) {
+    const own = Array.isArray(unit?.dialogues?.[key]) ? unit.dialogues[key].filter(l => String(l).trim()) : [];
+    return own.length ? own : poolOf(key, toneOf(unit));
+  }
+
+  /**
+   * 유닛의 상황별 대사를 하나 고른다.
    * vars: { target, hp, maxHp, win, name }
    */
   function pick(unit, key, vars = {}) {
-    const own = Array.isArray(unit?.dialogues?.[key]) ? unit.dialogues[key].filter(l => String(l).trim()) : [];
-    const pool = own.length ? own : (DEFAULT_POOL[key] || []);
+    const pool = linesFor(unit, key);
     if (!pool.length) return '';
     const line = pool[Math.floor(Math.random() * pool.length)];
     return fillVars(line, {
@@ -144,6 +820,10 @@
       maxHp: unit?.maxHp,
       ...vars
     });
+  }
+
+  function countLines() {
+    return SITUATIONS.reduce((sum, s) => sum + poolOf(s.key).length, 0);
   }
 
   // --------------------------------------------------------------------------
@@ -157,26 +837,45 @@
    * container 안에 상황별 대사 textarea 묶음을 그린다. (한 줄 = 대사 하나)
    * 반환값: { getDialogues(), setDialogues(d), randomizeAll() }
    */
-  function mountEditor(container, initial) {
+  function rowHtml(s) {
+    return `
+      <div class="dlg-editor-row" data-key="${s.key}">
+        <div class="dlg-editor-row-head">
+          <span class="dlg-editor-label">${s.icon} ${esc(s.label)}</span>
+          <button type="button" class="btn-cheat dlg-btn-one" title="이 상황만 랜덤 부여">🎲</button>
+        </div>
+        <div class="dlg-editor-desc">${esc(s.desc)}</div>
+        <textarea class="dbg-form-control dlg-editor-text" rows="3" spellcheck="false"></textarea>
+      </div>`;
+  }
+
+  function mountEditor(container, initial, initialTone) {
     if (!container) return null;
     container.innerHTML = `
       <div class="dlg-editor-toolbar">
-        <span class="dlg-editor-hint">한 줄에 대사 하나. 상황이 오면 이 중 하나가 랜덤으로 나옵니다.<br/>치환: <code>{target}</code> 적 이름 · <code>{win}</code> 승률% · <code>{hp}</code>/<code>{maxHp}</code> 체력</span>
+        <span class="dlg-editor-hint">한 줄에 대사 하나. 상황이 오면 이 중 하나가 랜덤으로 나옵니다. (기본 대사 ${countLines()}종)<br/>치환: <code>{target}</code> 적 이름 · <code>{win}</code> 승률% · <code>{hp}</code>/<code>{maxHp}</code> 체력 · <code>{name}</code> 자기 이름</span>
+      </div>
+      <div class="dlg-editor-toolbar">
+        <select class="dbg-form-control dlg-tone-select" title="랜덤 부여할 성격(말투)">
+          <option value="">🎲 성격 랜덤</option>
+          ${TONES.map(t => `<option value="${t.key}">${esc(t.label)}</option>`).join('')}
+        </select>
         <button type="button" class="btn-cheat purple dlg-btn-all">🎲 전체 랜덤 부여</button>
       </div>
-      ${SITUATIONS.map(s => `
-        <div class="dlg-editor-row" data-key="${s.key}">
-          <div class="dlg-editor-row-head">
-            <span class="dlg-editor-label">${s.icon} ${esc(s.label)}</span>
-            <button type="button" class="btn-cheat dlg-btn-one" title="이 상황만 랜덤 부여">🎲</button>
-          </div>
-          <div class="dlg-editor-desc">${esc(s.desc)}</div>
-          <textarea class="dbg-form-control dlg-editor-text" rows="3" spellcheck="false"></textarea>
-        </div>
-      `).join('')}
+      ${SITUATIONS.filter(s => !s.group).map(rowHtml).join('')}
+      <details class="dlg-group">
+        <summary>📋 부관 브리핑 대사 (${SITUATIONS.filter(s => s.group === 'briefing').length}종 상황) — 부관일 때 작전지도에서 말합니다</summary>
+        <div class="dlg-editor-hint" style="margin:6px 0;">치환: <code>{region}</code> 구역 · <code>{title}</code> 작전명 · <code>{desc}</code> 정찰 내용 · <code>{threat}</code> 위협도 · <code>{current}</code> 진행 중 구역 · <code>{opened}</code> 새로 열린 구역 · <code>{adjutant}</code> 자기 이름<br/><code>{region|은/는}</code>처럼 쓰면 받침에 맞는 조사가 붙습니다.</div>
+        ${SITUATIONS.filter(s => s.group === 'briefing').map(rowHtml).join('')}
+      </details>
     `;
 
     const areaOf = (key) => container.querySelector(`.dlg-editor-row[data-key="${key}"] textarea`);
+    const toneSelect = container.querySelector('.dlg-tone-select');
+    // '성격 랜덤'이면 전체 랜덤 부여 때 성격 하나를 뽑아 기억해 두고, 개별 🎲도 같은 성격을 쓴다.
+    if (initialTone && TONES.some(t => t.key === initialTone)) toneSelect.value = initialTone;
+    let lastTone = toneSelect.value || randomTone();
+    const currentTone = () => toneSelect.value || lastTone;
 
     function setDialogues(d) {
       SITUATIONS.forEach(s => {
@@ -194,26 +893,35 @@
       return out;
     }
 
-    function randomizeAll() { setDialogues(randomDialogues()); }
+    function randomizeAll() {
+      lastTone = toneSelect.value || randomTone();
+      setDialogues(randomDialogues(lastTone));
+    }
 
     container.querySelector('.dlg-btn-all').onclick = randomizeAll;
+    toneSelect.onchange = () => { if (toneSelect.value) randomizeAll(); };
     container.querySelectorAll('.dlg-editor-row').forEach(row => {
       row.querySelector('.dlg-btn-one').onclick = () => {
-        row.querySelector('textarea').value = randomLines(row.dataset.key).join('\n');
+        row.querySelector('textarea').value = randomLines(row.dataset.key, currentTone()).join('\n');
       };
     });
 
-    setDialogues(initial || randomDialogues());
-    return { getDialogues, setDialogues, randomizeAll };
+    setDialogues(initial || randomDialogues(lastTone));
+    return { getDialogues, setDialogues, randomizeAll, getTone: currentTone };
   }
 
   global.DialogueLines = {
     SITUATIONS,
+    TONES,
     DEFAULT_POOL,
+    randomTone,
+    toneOf,
+    linesFor,
     randomLines,
     randomDialogues,
     fillMissing,
     pick,
+    countLines,
     mountEditor
   };
 })(typeof window !== 'undefined' ? window : this);

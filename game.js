@@ -1454,7 +1454,7 @@
       let source = unit;
       if (!unit?.dialogues && unit?.sourceCharacterId) {
         const record = getStoredCustomCharacters().find(c => String(c.id) === String(unit.sourceCharacterId));
-        if (record?.dialogues) source = { ...unit, dialogues: record.dialogues };
+        if (record?.dialogues) source = { ...unit, dialogues: record.dialogues, dialogueTone: unit.dialogueTone || record.dialogueTone };
       }
       return DialogueLines.pick(source, situation, vars);
     }
@@ -1470,55 +1470,66 @@
     /* --------------------------------------------------------------------------
        Command Interception & Refusal Guard Logic
        -------------------------------------------------------------------------- */
+    // 호감도별 공격 명령 거부 확률. Berserk(광폭화) 지휘관 패시브가 있으면 거부하지 않는다.
+    //   호감도 15 이하            → 무조건 거부 (불신)
+    //   호감도 30 이하            → HP 25% 이하 또는 승률 50% 미만이면 거부, 그 외에도 40% 확률로 거부
+    //   호감도 50 미만            → 승률 35% 미만 또는 HP 25% 이하이면 50% 확률로 거부
+    function getRefusalRisk(unit, winChance = 1.0) {
+      const none = { chance: 0, situation: null };
+      if (!unit || unit.owner === 'ENEMY') return none;
+      if (state?.commander?.unlockedSkills?.Berserk) return none;
+      const affection = unit.affection ?? 50;
+      const isCriticalHp = unit.hp / (unit.maxHp || 100) <= 0.25;
+      if (affection <= 15) return { chance: 1, situation: 'refuse_distrust' };
+      if (affection <= 30) {
+        if (isCriticalHp) return { chance: 1, situation: 'refuse_lowhp' };
+        if (winChance < 0.50) return { chance: 1, situation: 'refuse_danger' };
+        return { chance: 0.40, situation: 'refuse_distrust' };
+      }
+      if (affection < 50) {
+        if (isCriticalHp) return { chance: 0.50, situation: 'refuse_lowhp' };
+        if (winChance < 0.35) return { chance: 0.50, situation: 'refuse_danger' };
+      }
+      return none;
+    }
+
+    // 거부 주사위는 유닛별로 턴당 한 번만 굴린다 (같은 턴에 공격을 연타해서 거부를 뚫지 못하게).
+    function getTurnRefusalRoll(unit) {
+      const turn = state.turn ?? 0;
+      if (!unit._refusalRoll || unit._refusalRoll.turn !== turn) {
+        unit._refusalRoll = { turn, value: Math.random() };
+      }
+      return unit._refusalRoll.value;
+    }
+
     function checkCommandRefusal(unit, target, winChance = 1.0) {
-      if (!unit || unit.owner === 'ENEMY') return false;
+      const risk = getRefusalRisk(unit, winChance);
+      if (risk.chance <= 0) return false;
+      if (risk.chance < 1 && getTurnRefusalRoll(unit) >= risk.chance) return false;
 
-      // 1. 지휘관 패시브 광폭화(Berserk) 활성화 시 공포/거부 무시
-      const commanderSkills = state?.commander?.unlockedSkills || {};
-      if (commanderSkills.Berserk) {
-        return false;
-      }
-
-      // 2. 충성도 / 호감도 (Loyalty/Affection) 임계치 검사 (30 이하)
-      const currentLoyalty = unit.loyalty ?? unit.affection ?? 50;
-      const isLowLoyalty = currentLoyalty <= 30;
-
-      // 3. 체력(HP) 치명적 상태 검사 (최대 체력의 25% 이하)
       const maxHp = unit.maxHp || 100;
-      const hpRatio = unit.hp / maxHp;
-      const isCriticalHp = hpRatio <= 0.25;
+      const fearDialogue = pickUnitLine(unit, risk.situation, { target: target?.name || '적군', win: Math.round(winChance * 100) });
 
-      // 4. 위험 교전 여부 (승률 35% 미만)
-      const isDangerousBattle = winChance < 0.35;
-      const isTerrified = (isLowLoyalty && isDangerousBattle) || (isLowLoyalty && isCriticalHp) || (currentLoyalty <= 15);
-
-      if (isTerrified) {
-        const situation = isCriticalHp ? 'refuse_lowhp' : (currentLoyalty <= 15 ? 'refuse_distrust' : 'refuse_danger');
-        const fearDialogue = pickUnitLine(unit, situation, { target: target?.name || '적군', win: Math.round(winChance * 100) });
-
-        // a. 공포 비주얼 & 심장박동 사운드 효과 + 일러스트/말풍선 발동
-        const speech = { unit, imageUrl: getUnitIllustration(unit) };
-        if (typeof window.triggerFearFX === 'function') {
-          window.triggerFearFX(unit.id, fearDialogue, undefined, speech);
-        } else if (typeof window.UI?.triggerFearFX === 'function') {
-          window.UI.triggerFearFX(unit.id, fearDialogue, undefined, speech);
-        }
-
-        // b. 방어 태세(Defensive Stance / Guard)로 자동 전환
-        unit.stance = 'GUARD';
-        unit.isGuarding = true;
-        unit.guardBonusDef = 0.30; // 방어력 +30% 보너스
-
-        // c. 이벤트 로그 출력
-        addLog(`🛡️ [명령 거부 및 방어 태세] ${unit.name}(충성/호감 ${currentLoyalty}, HP ${unit.hp}/${maxHp})이(가) 공포에 질려 명령을 거부하고 [방어 태세]로 전환했습니다! (방어력 +30%)`, 'danger');
-
-        // d. UI 갱신
-        renderAll();
-
-        return true; // 명령 차단 및 취소
+      // a. 공포 비주얼 & 심장박동 사운드 효과 + 일러스트/말풍선 발동
+      const speech = { unit, imageUrl: getUnitIllustration(unit) };
+      if (typeof window.triggerFearFX === 'function') {
+        window.triggerFearFX(unit.id, fearDialogue, undefined, speech);
+      } else if (typeof window.UI?.triggerFearFX === 'function') {
+        window.UI.triggerFearFX(unit.id, fearDialogue, undefined, speech);
       }
 
-      return false;
+      // b. 방어 태세(Defensive Stance / Guard)로 자동 전환
+      unit.stance = 'GUARD';
+      unit.isGuarding = true;
+      unit.guardBonusDef = 0.30; // 방어력 +30% 보너스
+
+      // c. 이벤트 로그 출력
+      addLog(`🛡️ [명령 거부 및 방어 태세] ${unit.name}(호감 ${unit.affection ?? 50}, HP ${unit.hp}/${maxHp}, 승률 ${Math.round(winChance * 100)}%)이(가) 명령을 거부하고 [방어 태세]로 전환했습니다! (방어력 +30%, AP 미소모)`, 'danger');
+
+      // d. UI 갱신
+      renderAll();
+
+      return true; // 명령 차단 및 취소
     }
 
     function executeAttack(attacker, defender) {
@@ -1603,7 +1614,8 @@
       }
 
       const winPercent = (P * 100).toFixed(1);
-      const isDangerAffection = isPlayerAttacker && (attacker.affection <= 30 && P < 0.30 && !skills.Berserk);
+      // 확정 거부 상황 (승률 창 '거부위험' 표시용)
+      const isDangerAffection = isPlayerAttacker && getRefusalRisk(attacker, P).chance >= 1;
 
       return {
         attacker,
@@ -1629,7 +1641,7 @@
       const odds = getCombatOdds(attacker, defender);
       if (!odds) return;
 
-      const { finalAtk, finalDef, tileDefBonus, weightedAtk, weightedDef, P, winPercent, isDangerAffection } = odds;
+      const { finalAtk, finalDef, tileDefBonus, weightedAtk, weightedDef, P, winPercent } = odds;
       const skills = state.commander.unlockedSkills;
       const isPlayerAttacker = (attacker.owner === 'PLAYER' || !attacker.owner);
 
@@ -1641,14 +1653,9 @@
         return; // 전투 취소 및 AP 보존 상태로 방어 태세 전환 완료
       }
       const lineVars = { target: defender.name, win: Math.round(P * 100) };
-      if (isPlayerAttacker && isDangerAffection) {
-        addLog(`❌ [전투 거부!] ${attacker.name}의 호감도가 ${attacker.affection}이며 승률이 ${winPercent}%로 극히 위험합니다! (AP/턴 미소모)`, 'danger');
-        speakUnitLine(attacker, 'refuse_danger', 'refuse', lineVars);
-        return;
-      }
       // 이번 교전에서 이미 대사가 나왔으면 격파 대사로 덮어쓰지 않는다
       let spokeThisCombat = false;
-      if (isPlayerAttacker && attacker.affection <= 30 && P < 0.30 && skills.Berserk) {
+      if (isPlayerAttacker && attacker.affection < 50 && P < 0.50 && skills.Berserk) {
         addLog(`🔥 [지휘관 패시브: 광폭화] 호감도 저하(${attacker.affection})를 무시하고 강제 전투 돌입!`, 'warning');
         spokeThisCombat = !!speakUnitLine(attacker, 'forced_attack', 'forced', lineVars);
       } else if (isPlayerAttacker && attacker.affection >= 70 && P < 0.50) {
@@ -5670,7 +5677,9 @@
 
       // 상황별 대사: 편집기 입력값, 비어 있는 상황은 기본 풀에서 랜덤 부여
       const dialogues = window.DialogueLines
-        ? DialogueLines.fillMissing(createCharDialogueEditor ? createCharDialogueEditor.getDialogues() : null)
+        ? (createCharDialogueEditor
+          ? DialogueLines.fillMissing(createCharDialogueEditor.getDialogues(), createCharDialogueEditor.getTone())
+          : DialogueLines.randomDialogues())
         : undefined;
 
       // 생성 위치 선정 (왕도 x:3, y:4 또는 인접 빈 타일)
@@ -5735,6 +5744,7 @@
         imageUrl: finalImageUrl,
         portraitFocus: createCharPortraitFocus || undefined,
         dialogues: dialogues,
+        dialogueTone: createCharDialogueEditor ? createCharDialogueEditor.getTone() : undefined,
         isInactivated: false,
         isDead: false,
         promotions: { combatRank: 0 },
@@ -5928,6 +5938,7 @@
         imageUrl: target.imageUrl || '',
         portraitFocus: target.portraitFocus ? clone(target.portraitFocus) : undefined,
         dialogues: target.dialogues ? clone(target.dialogues) : undefined,
+        dialogueTone: target.dialogueTone,
         isInactivated: false,
         isDead: false,
         promotions: { combatRank: 0 },
@@ -6283,14 +6294,18 @@
       const close = () => overlay.remove();
       overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
       overlay.onclick = (e) => { if (e.target === overlay) close(); };
-      const editor = DialogueLines.mountEditor(overlay.querySelector('[data-editor]'), DialogueLines.fillMissing(record.dialogues));
+      const tone = DialogueLines.toneOf(record);
+      const editor = DialogueLines.mountEditor(overlay.querySelector('[data-editor]'), DialogueLines.fillMissing(record.dialogues, tone), tone);
       overlay.querySelector('[data-save]').onclick = () => {
-        const dialogues = DialogueLines.fillMissing(editor.getDialogues());
+        const dialogueTone = editor.getTone();
+        const dialogues = DialogueLines.fillMissing(editor.getDialogues(), dialogueTone);
         record.dialogues = dialogues;
+        record.dialogueTone = dialogueTone;
         if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
         (state.playerUnits || []).forEach(u => {
           if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
           u.dialogues = JSON.parse(JSON.stringify(dialogues));
+          u.dialogueTone = dialogueTone;
         });
         saveGameState(true);
         addLog(`💬 [대사 저장] ${record.name}의 상황별 대사를 저장했습니다.`, 'gold');
@@ -9415,6 +9430,7 @@
       const after = changeUnitAffection(unit, ADJUTANT_AFFECTION_GAIN);
       const bonusText = run.commandBonus && run.commandBonus.characterId === characterId ? ' · 지휘력: 방어력 +1' : '';
       addLog(`🎖️ [부관 임명] ${unit.name} — 호감도 +${ADJUTANT_AFFECTION_GAIN} (${before} → ${after})${bonusText}`, 'gold');
+      speakUnitLine(unit, 'adjutant_appointed', 'adjutant');
       saveGameState(true);
       return true;
     }
