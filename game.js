@@ -360,91 +360,54 @@
     // ========================================================================
     const START_GOLD = 450;
 
+    // 기본 3인(롤랑·발터·리리아)도 다른 캐릭터처럼 캐릭터 풀(Supabase characters)의 레코드다.
+    // 고정 id로 풀에 시드하고(ensureStarterCharacterRecords), 시작 파티는 그 레코드로 만든다.
+    // 레코드가 아직 안 들어왔으면(첫 로드 전) 아래 기본값으로 만든다. unitId는 예전 세이브와 맞춘 인스턴스 id.
+    const STARTER_CHARACTERS = [
+      { id: 'starter_roland', unitId: 'u1', name: '성기사 롤랑', classType: 'KNIGHT', avatar: '🐴', level: 2,
+        stats: { hp: 100, maxHp: 100, atk: 48, def: 38, mobility: 3 }, favorability: 85, upkeep: 12, x: 3, y: 4, combatRank: 1 },
+      { id: 'starter_walter', unitId: 'u2', name: '용병대장 발터', classType: 'MELEE', avatar: '⚔️', level: 1,
+        stats: { hp: 85, maxHp: 85, atk: 35, def: 30, mobility: 2 }, favorability: 40, upkeep: 8, x: 2, y: 3, combatRank: 0 },
+      // 호감도 30 이하 (전투 거부 테스트용)
+      { id: 'starter_lilia', unitId: 'u3', name: '명사수 리리아', classType: 'ARCHER', avatar: '🏹', level: 1,
+        stats: { hp: 70, maxHp: 70, atk: 42, def: 20, mobility: 2 }, favorability: 28, upkeep: 8, x: 1, y: 3, combatRank: 0 }
+    ];
+
+    // In-memory cache for Supabase 'characters' collection (Zero LocalStorage)
+    // createInitialState()가 스크립트 초기화 중에 시작 파티를 만들므로 여기서 먼저 선언한다.
+    let customCharactersCloudCache = [];
+
+    function starterTemplateToRecord(t) {
+      return {
+        id: t.id,
+        owner: 'PLAYER',
+        name: t.name,
+        unitClass: t.classType,
+        classType: t.classType,
+        avatar: t.avatar,
+        stats: { ...t.stats },
+        favorability: t.favorability,
+        upkeep: t.upkeep,
+        imageUrl: '',
+        customSkill: DEFAULT_CLASS_SKILLS[t.classType] ? JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS[t.classType])) : undefined,
+        isStarter: true,
+        createdAt: '2000-01-01T00:00:00.000Z' // 목록(최신순) 맨 아래에 둔다
+      };
+    }
+
     // 런 시작 파티. 런 초기값은 createInitialRun() 한 곳에서만 만들고, 파티는 항상 이 함수로 새로 만든다.
     function createStartingParty() {
-      return [
-        {
-          id: 'u1',
-          owner: 'PLAYER',
-          name: '성기사 롤랑',
-          unitClass: 'KNIGHT',
-          classType: 'KNIGHT',
-          avatar: '🐴',
-          level: 2,
-          stats: { hp: 100, maxHp: 100, atk: 48, def: 38, mobility: 3 },
-          hp: 100,
-          maxHp: 100,
-          atk: 48,
-          def: 38,
-          baseAP: 3,
-          ap: 3,
-          favorability: 85,
-          affection: 85,
-          upkeep: 12,
-          x: 3,
-          y: 4, // 왕도 에테르니아 내 배치
-          imageUrl: '',
-          isInactivated: false,
-          isDead: false,
-          promotions: { combatRank: 1 },
-          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.KNIGHT)),
-          customSkillCooldown: 0
-        },
-        {
-          id: 'u2',
-          owner: 'PLAYER',
-          name: '용병대장 발터',
-          unitClass: 'MELEE',
-          classType: 'MELEE',
-          avatar: '⚔️',
-          level: 1,
-          stats: { hp: 85, maxHp: 85, atk: 35, def: 30, mobility: 2 },
-          hp: 85,
-          maxHp: 85,
-          atk: 35,
-          def: 30,
-          baseAP: 2,
-          ap: 2,
-          favorability: 40,
-          affection: 40,
-          upkeep: 8,
-          x: 2,
-          y: 3, // 평지
-          imageUrl: '',
-          isInactivated: false,
-          isDead: false,
-          promotions: { combatRank: 0 },
-          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.MELEE)),
-          customSkillCooldown: 0
-        },
-        {
-          id: 'u3',
-          owner: 'PLAYER',
-          name: '명사수 리리아',
-          unitClass: 'ARCHER',
-          classType: 'ARCHER',
-          avatar: '🏹',
-          level: 1,
-          stats: { hp: 70, maxHp: 70, atk: 42, def: 20, mobility: 2 },
-          hp: 70,
-          maxHp: 70,
-          atk: 42,
-          def: 20,
-          baseAP: 2,
-          ap: 2,
-          favorability: 28,
-          affection: 28, // 호감도 30 이하 (전투 거부 테스트용)
-          upkeep: 8,
-          x: 1,
-          y: 3, // 숲 속
-          imageUrl: '',
-          isInactivated: false,
-          isDead: false,
-          promotions: { combatRank: 0 },
-          customSkill: JSON.parse(JSON.stringify(DEFAULT_CLASS_SKILLS.ARCHER)),
-          customSkillCooldown: 0
+      return STARTER_CHARACTERS.map(t => {
+        const record = findCharacterRecord(t.id) || starterTemplateToRecord(t);
+        const unit = characterRecordToUnit(record, { id: t.unitId, x: t.x, y: t.y, level: t.level, fullHp: true });
+        // 트리를 따로 만들지 않은 캐릭터는 병과 추천 트리를 쓴다 (SkillEngine.ensureUnitSkillState)
+        if (!(Array.isArray(record.skillTree) && record.skillTree.length)) {
+          delete unit.skillTree;
+          unit.skillTreeCustomized = false;
         }
-      ];
+        unit.promotions = { combatRank: t.combatRank || 0 };
+        return unit;
+      });
     }
 
     function createInitialCommander() {
@@ -1102,10 +1065,8 @@
             }
             if (typeof u.customSkillCooldown !== 'number') u.customSkillCooldown = 0;
             if (typeof u.imageUrl !== 'string') u.imageUrl = '';
-            // 병과 이미지가 등록되어 있다면 자동 복원
-            if (!u.imageUrl && customClassImages[u.classType]) {
-              u.imageUrl = customClassImages[u.classType];
-            }
+            // 병과 이미지는 렌더 시 폴백으로만 쓴다 — 예전에 박아 넣은 병과 이미지는 걷어낸다
+            if (isClassImageUrl(u.imageUrl)) u.imageUrl = '';
           });
         }
         if (Array.isArray(parsed.enemyUnits)) {
@@ -1124,7 +1085,8 @@
         // 불러온 모든 활성 유닛 체력 100-Point 정규화 자동 실행
         normalizeAllUnitsHP(state);
 
-        // 구버전 포섭 유닛("포섭된 X") 정리 — 캐릭터 DB가 아직 없으면 연결은 동기화 때 마저 한다
+        // 구버전 기본 3인(u1~u3)·포섭 유닛("포섭된 X") 정리 — 캐릭터 DB가 아직 없으면 연결은 동기화 때 마저 한다
+        migrateStarterUnits();
         migrateCapturedUnits();
 
         if (parsed.selectedUnitId && state.playerUnits.some(u => u.id === parsed.selectedUnitId && !u.isDead)) {
@@ -3893,7 +3855,7 @@
       return `${title}무명 ${i}`;
     }
 
-    // 시작 파티(u1~u3)처럼 DB id가 없는 유닛도 있으므로 이름이 같은 전사자도 같은 사람으로 본다.
+    // 캐릭터 id가 없는 구버전 유닛도 있으므로 이름이 같은 전사자도 같은 사람으로 본다.
     function getHireAlias(record) {
       const fallenNames = new Set((state.playerUnits || []).filter(u => u && !isUnitAlive(u)).map(u => u.name));
       const fallen = getFallenCharacterIds().has(String(record.id)) || fallenNames.has(record.name);
@@ -5140,16 +5102,26 @@
       // Pure Cloud Storage architecture - No local storage quota needed
     }
 
+    // 병과 공통 이미지는 렌더 시점 폴백(getUnitIllustration 등)으로만 쓴다. 유닛 imageUrl에 굳혀 넣으면
+    // 캐릭터 고유 이미지를 덮어쓰고, 병과 이미지가 바뀌어도 예전 그림이 남는다.
+    function isClassImageUrl(url) {
+      if (!url) return false;
+      if (Object.values(customClassImages || {}).includes(url)) return true;
+      return typeof SAMPLE_CLASS_IMAGES !== 'undefined' && Object.values(SAMPLE_CLASS_IMAGES).includes(url);
+    }
+
+    // 예전 코드가 유닛에 박아 넣은 병과 이미지를 걷어낸다 (캐릭터 고유 이미지는 그대로 둔다)
+    function stripBakedClassImages() {
+      [...(state.playerUnits || []), ...(state.reserveUnits || [])]
+        .forEach(u => { if (u && isClassImageUrl(u.imageUrl)) u.imageUrl = ''; });
+    }
+
     function applyStoredCustomImages() {
       if (typeof window.loadGameConfigFromCloud === 'function') {
         window.loadGameConfigFromCloud('unit_images').then(data => {
           if (data && data.customClassImages) {
             customClassImages = { ...customClassImages, ...data.customClassImages };
-            state.playerUnits.forEach(u => {
-              if (customClassImages[u.classType]) {
-                u.imageUrl = customClassImages[u.classType];
-              }
-            });
+            stripBakedClassImages();
             renderAll();
             updateFullShotOverlay();
           }
@@ -5161,11 +5133,7 @@
         window.subscribeGameConfig('unit_images', (data) => {
           if (data && data.customClassImages) {
             customClassImages = { ...customClassImages, ...data.customClassImages };
-            state.playerUnits.forEach(u => {
-              if (customClassImages[u.classType]) {
-                u.imageUrl = customClassImages[u.classType];
-              }
-            });
+            stripBakedClassImages();
             renderAll();
             updateFullShotOverlay();
           }
@@ -5180,12 +5148,8 @@
       if (imgSource && imgSource.startsWith('data:') && typeof window.uploadCharacterAvatar === 'function') {
         addLog(`☁️ [Supabase Storage] ${meta.name} 이미지를 클라우드 스토리지에 전송 중...`, 'system');
         window.uploadCharacterAvatar(imgSource, `class_${classType}`).then(downloadUrl => {
+          stripBakedClassImages();
           customClassImages[classType] = downloadUrl;
-          state.playerUnits.forEach(u => {
-            if (u.classType === classType) {
-              u.imageUrl = downloadUrl;
-            }
-          });
           if (typeof window.saveGameConfigToCloud === 'function') {
             window.saveGameConfigToCloud('unit_images', { customClassImages });
           }
@@ -5196,10 +5160,8 @@
           saveGameState(true);
         }).catch(err => {
           console.error("Storage upload failed, saving directly:", err);
+          stripBakedClassImages();
           customClassImages[classType] = imgSource;
-          state.playerUnits.forEach(u => {
-            if (u.classType === classType) u.imageUrl = imgSource;
-          });
           if (typeof window.saveGameConfigToCloud === 'function') {
             window.saveGameConfigToCloud('unit_images', { customClassImages });
           }
@@ -5209,12 +5171,8 @@
           saveGameState(true);
         });
       } else {
+        stripBakedClassImages();
         customClassImages[classType] = imgSource;
-        state.playerUnits.forEach(u => {
-          if (u.classType === classType) {
-            u.imageUrl = imgSource;
-          }
-        });
         if (typeof window.saveGameConfigToCloud === 'function') {
           window.saveGameConfigToCloud('unit_images', { customClassImages });
         }
@@ -5227,13 +5185,8 @@
     }
 
     function resetClassImage(classType) {
+      stripBakedClassImages();
       customClassImages[classType] = '';
-
-      state.playerUnits.forEach(u => {
-        if (u.classType === classType) {
-          u.imageUrl = '';
-        }
-      });
 
       if (typeof window.saveGameConfigToCloud === 'function') {
         window.saveGameConfigToCloud('unit_images', { customClassImages });
@@ -5249,14 +5202,9 @@
     }
 
     function applySamplePresetImages() {
+      stripBakedClassImages();
       Object.keys(SAMPLE_CLASS_IMAGES).forEach(cls => {
-        const sampleUrl = SAMPLE_CLASS_IMAGES[cls];
-        customClassImages[cls] = sampleUrl;
-        state.playerUnits.forEach(u => {
-          if (u.classType === cls) {
-            u.imageUrl = sampleUrl;
-          }
-        });
+        customClassImages[cls] = SAMPLE_CLASS_IMAGES[cls];
       });
 
       if (typeof window.saveGameConfigToCloud === 'function') {
@@ -5271,13 +5219,9 @@
     }
 
     function resetAllClassImages() {
+      stripBakedClassImages();
       Object.keys(CLASS_META).forEach(cls => {
         customClassImages[cls] = '';
-        state.playerUnits.forEach(u => {
-          if (u.classType === cls) {
-            u.imageUrl = '';
-          }
-        });
       });
 
       if (typeof window.saveGameConfigToCloud === 'function') {
@@ -5738,9 +5682,6 @@
       addLog(`🌳 [스킬트리] ${skillTree.length}개 노드 · 시작 습득: ${startNames.join(', ') || '없음'} · SP ${initialSkillPoints}`, 'system');
     }
 
-    // In-memory cache for Supabase 'characters' collection (Zero LocalStorage)
-    let customCharactersCloudCache = [];
-
     function getStoredCustomCharacters() {
       return customCharactersCloudCache;
     }
@@ -5752,9 +5693,14 @@
         customCharactersCloudCache = [...cloudCharacters];
         // 최신 생성일자 순 정렬
         customCharactersCloudCache.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+        ensureStarterCharacterRecords();
         renderCustomCharactersList();
-        // 캐릭터 DB가 들어왔으니 구버전 포섭 유닛을 원본 캐릭터와 연결한다 (저장은 다음 저장 때 같이 된다)
-        if (state && migrateCapturedUnits()) renderAll();
+        // 캐릭터 DB가 들어왔으니 구버전 유닛을 원본 캐릭터와 연결한다 (저장은 다음 저장 때 같이 된다)
+        if (state) {
+          const starters = migrateStarterUnits();
+          const captured = migrateCapturedUnits();
+          if (starters || captured) renderAll();
+        }
       } catch (e) {
         console.warn("Global characters sync error:", e);
       }
@@ -5883,7 +5829,7 @@
         ap,
         favorability: target.favorability || 75,
         affection: target.favorability || 75,
-        upkeep: 10,
+        upkeep: Number(target.upkeep) || 10,
         x: o.x,
         y: o.y,
         imageUrl: target.imageUrl || '',
@@ -5949,7 +5895,7 @@
       return pool.find(c => c && String(c.id) === String(charId)) || (name ? pool.find(c => c && c.name === name) : null) || null;
     }
 
-    // 시작 파티(u1~u3)는 DB id가 없으므로 이름이 같아도 같은 캐릭터로 본다.
+    // 캐릭터 id가 없는 구버전 유닛도 있으므로 이름이 같아도 같은 캐릭터로 본다.
     function findOwnedSameCharacter(charId, name, exceptUnit = null) {
       return [...(state.playerUnits || []), ...(state.reserveUnits || [])]
         .find(u => u && u !== exceptUnit && isUnitAlive(u) && (getCharacterId(u) === String(charId) || (name && u.name === name))) || null;
@@ -6024,6 +5970,70 @@
       return true;
     }
 
+    // 기본 3인 레코드가 풀에 없으면 기본값으로 만든다. 세션당 한 번만 시도한다
+    // (저장 직후 동기화가 다시 들어와도 중복 저장하지 않도록).
+    let starterSeedAttempted = false;
+    function ensureStarterCharacterRecords() {
+      if (starterSeedAttempted) return;
+      starterSeedAttempted = true;
+      STARTER_CHARACTERS.forEach(t => {
+        if (findCharacterRecord(t.id)) return;
+        saveCustomCharacterRecord(starterTemplateToRecord(t));
+        console.log(`[캐릭터 풀] 기본 캐릭터 ${t.name} 레코드를 생성했습니다 (${t.id})`);
+      });
+    }
+
+    // 원본 레코드에만 있는 꾸밈 정보(일러스트·얼굴 위치·대사)를 유닛에 채운다. 유닛에 이미 있는 값은 그대로 둔다.
+    // 병과 공통 이미지가 박혀 있던 유닛은 고유 일러스트를 잃은 것이므로 원본 이미지로 되돌린다.
+    function fillUnitFromSourceRecord(u) {
+      const record = findCharacterRecord(u.sourceCharacterId, u.name);
+      if (!record) return false;
+      let changed = false;
+      if ((!u.imageUrl || isClassImageUrl(u.imageUrl)) && record.imageUrl && !isClassImageUrl(record.imageUrl) && u.imageUrl !== record.imageUrl) {
+        u.imageUrl = record.imageUrl;
+        changed = true;
+      }
+      if (!u.portraitFocus && record.portraitFocus) { u.portraitFocus = JSON.parse(JSON.stringify(record.portraitFocus)); changed = true; }
+      if (!u.dialogues && record.dialogues) { u.dialogues = JSON.parse(JSON.stringify(record.dialogues)); changed = true; }
+      if (!u.dialogueTone && record.dialogueTone) { u.dialogueTone = record.dialogueTone; changed = true; }
+      return changed;
+    }
+
+    // 예전 세이브의 기본 3인은 풀 레코드가 없어 캐릭터 id가 인스턴스 id('u1'~'u3')였다.
+    // 원본 레코드(starter_*)와 연결하고, 캐릭터 id로 묶인 것들(부관, 지휘력, 잔영, 기억 계승 재료, 해금 목록)도 옮긴다.
+    function migrateStarterUnits() {
+      let changed = false;
+      const legacyToStarter = Object.fromEntries(STARTER_CHARACTERS.map(t => [t.unitId, t.id]));
+      [...(state.playerUnits || []), ...(state.reserveUnits || [])].forEach(u => {
+        if (!u) return;
+        if (!u.sourceCharacterId) {
+          const t = STARTER_CHARACTERS.find(t => u.id === t.unitId || u.name === t.name);
+          if (!t) return;
+          u.sourceCharacterId = t.id;
+          changed = true;
+        }
+        if (STARTER_CHARACTERS.some(t => t.id === u.sourceCharacterId) && fillUnitFromSourceRecord(u)) changed = true;
+      });
+
+      const remap = (holder) => {
+        if (!holder || holder.characterId == null) return;
+        const next = legacyToStarter[String(holder.characterId)];
+        if (next) { holder.characterId = next; changed = true; }
+      };
+      const run = state.run;
+      if (run) [run.adjutant, run.commandBonus, run.echo, run.lastStanding, run.loopReward].forEach(remap);
+      (state.characterCollection || []).forEach(remap);
+      if (state.player && Array.isArray(state.player.unlockedCharacters)) {
+        const ids = state.player.unlockedCharacters.map(id => legacyToStarter[String(id)] || String(id));
+        const deduped = [...new Set(ids)];
+        if (deduped.join('|') !== state.player.unlockedCharacters.map(String).join('|')) {
+          state.player.unlockedCharacters = deduped;
+          changed = true;
+        }
+      }
+      return changed;
+    }
+
     // 구버전 세이브의 포섭 유닛 정리: 이름에서 접두어를 떼고, 원본 캐릭터와 연결하고, 해금권을 레벨에 맞춘다.
     // 같은 캐릭터가 이미 있으면 레벨이 낮은 쪽을 기억 계승 재료로 바꾼다 (전투 중에는 명단을 건드리지 않는다).
     function migrateCapturedUnits() {
@@ -6043,7 +6053,10 @@
 
       // 2. 원본 캐릭터 레코드와 연결 (캐릭터 DB가 로드된 뒤에만 가능)
       captured().forEach(u => {
-        if (u.sourceCharacterId) return;
+        if (u.sourceCharacterId) {
+          if (fillUnitFromSourceRecord(u)) changed = true;
+          return;
+        }
         const record = findCharacterRecord(null, u.name);
         if (!record) return;
         const oldId = getCharacterId(u);
@@ -6060,7 +6073,7 @@
         }
         if (!u.dialogues && record.dialogues) u.dialogues = JSON.parse(JSON.stringify(record.dialogues));
         if (!u.dialogueTone && record.dialogueTone) u.dialogueTone = record.dialogueTone;
-        if (!u.imageUrl && record.imageUrl) u.imageUrl = record.imageUrl;
+        if ((!u.imageUrl || isClassImageUrl(u.imageUrl)) && record.imageUrl) u.imageUrl = record.imageUrl;
         // 캐릭터 id로 묶인 것들(부관, 지휘력 보정, 기억 계승 재료)을 새 id로 옮긴다
         if (run && run.adjutant && String(run.adjutant.characterId) === oldId) run.adjutant = { characterId: newId, name: u.name };
         if (run && run.commandBonus && String(run.commandBonus.characterId) === oldId) run.commandBonus.characterId = newId;
