@@ -1124,6 +1124,9 @@
         // 불러온 모든 활성 유닛 체력 100-Point 정규화 자동 실행
         normalizeAllUnitsHP(state);
 
+        // 구버전 포섭 유닛("포섭된 X") 정리 — 캐릭터 DB가 아직 없으면 연결은 동기화 때 마저 한다
+        migrateCapturedUnits();
+
         if (parsed.selectedUnitId && state.playerUnits.some(u => u.id === parsed.selectedUnitId && !u.isDead)) {
           selectedUnitId = parsed.selectedUnitId;
         } else {
@@ -1772,34 +1775,7 @@
           const canCapture = Math.random() < 0.50;
           if (canCapture) {
             const initAffection = skills.StrategicDominance ? 50 : 25;
-            const newUnitId = 'cap_' + Date.now();
-            const capturedUnit = {
-              id: newUnitId,
-              owner: 'PLAYER',
-              name: '포섭된 ' + defender.name,
-              classType: defender.classType,
-              avatar: defender.avatar,
-              level: defender.level,
-              hp: 70,
-              maxHp: 100,
-              stats: { hp: 70, maxHp: 100, atk: defender.atk, def: defender.def, mobility: 2 },
-              atk: defender.atk,
-              def: defender.def,
-              baseAP: 2,
-              ap: 0,
-              affection: initAffection,
-              upkeep: 8,
-              x: defender.x,
-              y: defender.y,
-              imageUrl: defender.imageUrl || '',
-              portraitFocus: defender.portraitFocus,
-              dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
-              isInactivated: false,
-              isDead: false,
-              promotions: { combatRank: 0 }
-            };
-            state.playerUnits.push(capturedUnit);
-            addLog(`🎉 [야생 유닛 포섭 성공!] ${defender.name}을(를) 아군 부대로 영입했습니다! (초기 호감도: ${initAffection})`, 'capture');
+            captureEnemyUnit(defender, initAffection, defender.x, defender.y);
           } else {
             const lootGold = 35 + defender.level * 10;
             state.gold += lootGold;
@@ -1902,34 +1878,7 @@
           const canCapture = Math.random() < 0.50;
           if (canCapture) {
             const initAffection = skills.StrategicDominance ? 50 : 25;
-            const newUnitId = 'cap_' + Date.now();
-            const capturedUnit = {
-              id: newUnitId,
-              owner: 'PLAYER',
-              name: '포섭된 ' + attacker.name,
-              classType: attacker.classType,
-              avatar: attacker.avatar,
-              level: attacker.level,
-              hp: 70,
-              maxHp: 100,
-              stats: { hp: 70, maxHp: 100, atk: attacker.atk, def: attacker.def, mobility: 2 },
-              atk: attacker.atk,
-              def: attacker.def,
-              baseAP: 2,
-              ap: 0,
-              affection: initAffection,
-              upkeep: 8,
-              x: defender.x,
-              y: defender.y,
-              imageUrl: defender.imageUrl || '',
-              portraitFocus: defender.portraitFocus,
-              dialogues: defender.dialogues || (window.DialogueLines ? DialogueLines.randomDialogues() : undefined),
-              isInactivated: false,
-              isDead: false,
-              promotions: { combatRank: 0 }
-            };
-            state.playerUnits.push(capturedUnit);
-            addLog(`🎉 [적 유닛 포섭 성공!] 항복한 ${attacker.name}을(를) 아군 부대로 영입했습니다! (초기 호감도: ${initAffection})`, 'capture');
+            captureEnemyUnit(attacker, initAffection, defender.x, defender.y);
           }
         }
       }
@@ -5804,6 +5753,8 @@
         // 최신 생성일자 순 정렬
         customCharactersCloudCache.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
         renderCustomCharactersList();
+        // 캐릭터 DB가 들어왔으니 구버전 포섭 유닛을 원본 캐릭터와 연결한다 (저장은 다음 저장 때 같이 된다)
+        if (state && migrateCapturedUnits()) renderAll();
       } catch (e) {
         console.warn("Global characters sync error:", e);
       }
@@ -5982,6 +5933,176 @@
       return { ok: true, level: unit.level };
     }
     window.absorbDuplicateCharacter = absorbDuplicateCharacter;
+
+    // ------------------------------------------------------------------------
+    // 포섭: 적 유닛은 캐릭터 레코드로 만들어지므로(buildEnemyPool) 포섭한 유닛도 같은 캐릭터로 연결한다.
+    //   - 같은 캐릭터가 이미 출전 명단/예비에 살아 있으면 → 기억 계승 재료(characterCollection 사본) +1
+    //   - 처음 얻는 캐릭터면 → 원본 레코드로 유닛을 만든다. 적일 때의 레벨을 유지하고,
+    //     레벨 1에서 오른 만큼 스킬 해금권을 준다 (기억 계승 1회 = 레벨 +1 · 해금권 +1 과 같은 비율)
+    // ------------------------------------------------------------------------
+    // 구버전 포섭 유닛: 전투 포섭 "포섭된 X"(id cap_…), 설득 영입 "[포섭] X"(id recruited_…)
+    const CAPTURED_NAME_PREFIX = /^(포섭된 |\[포섭\] )/;
+    const isCapturedUnitId = (id) => /^(cap_|recruited_)/.test(String(id));
+
+    function findCharacterRecord(charId, name) {
+      const pool = getStoredCustomCharacters();
+      return pool.find(c => c && String(c.id) === String(charId)) || (name ? pool.find(c => c && c.name === name) : null) || null;
+    }
+
+    // 시작 파티(u1~u3)는 DB id가 없으므로 이름이 같아도 같은 캐릭터로 본다.
+    function findOwnedSameCharacter(charId, name, exceptUnit = null) {
+      return [...(state.playerUnits || []), ...(state.reserveUnits || [])]
+        .find(u => u && u !== exceptUnit && isUnitAlive(u) && (getCharacterId(u) === String(charId) || (name && u.name === name))) || null;
+    }
+
+    function addAbsorbMaterial(ownedUnit, source) {
+      if (!Array.isArray(state.characterCollection)) state.characterCollection = [];
+      state.characterCollection.push({
+        instanceId: `${source}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        characterId: ownedUnit.sourceCharacterId || ownedUnit.id, // getAbsorbMaterials와 같은 키
+        source,
+        acquiredAt: new Date().toISOString()
+      });
+    }
+
+    function capturedSkillPoints(level, base = 0) {
+      return Math.max(0, Number(base) || 0) + Math.max(0, (Number(level) || 1) - 1);
+    }
+
+    function captureEnemyUnit(enemy, initAffection, x, y) {
+      const charId = getCharacterId(enemy);
+      const record = findCharacterRecord(charId, enemy.name);
+      const baseName = record ? record.name : enemy.name;
+
+      const owned = findOwnedSameCharacter(record ? record.id : charId, baseName);
+      if (owned) {
+        addAbsorbMaterial(owned, 'capture');
+        addLog(`🧬 [포섭 → 기억 계승 재료] ${baseName}은(는) 이미 부대에 있습니다. ${owned.name}의 기억 계승 재료 +1 (용병 명부에서 계승)`, 'capture');
+        return null;
+      }
+
+      const level = Number(enemy.level) || 1;
+      const id = 'cap_' + Date.now();
+      let unit;
+      if (record) {
+        const alias = getHireAlias(record); // 전사한 캐릭터는 다른 이름의 사람으로 들어온다 (고용과 같은 규칙)
+        unit = characterRecordToUnit(alias ? { ...record, name: alias } : record, { id, owner: 'PLAYER', x, y, level });
+      } else {
+        // DB 레코드가 없는 적(구버전 적 등): 적 유닛을 그대로 복제해 아군으로
+        const clone = JSON.parse(JSON.stringify(enemy));
+        unit = {
+          ...clone,
+          id, owner: 'PLAYER', x, y, level,
+          sourceCharacterId: clone.sourceCharacterId || null,
+          stats: { ...(clone.stats || {}), hp: clone.maxHp || 100, maxHp: clone.maxHp || 100, atk: clone.atk, def: clone.def, mobility: clone.baseAP || 2 },
+          isDead: false, isInactivated: false, statuses: [], skillCooldowns: {}
+        };
+      }
+      unit.hp = Math.max(1, Math.round((unit.maxHp || 100) * 0.7));
+      if (unit.stats) unit.stats.hp = unit.hp;
+      unit.ap = 0;
+      unit.affection = initAffection;
+      unit.favorability = initAffection;
+      unit.skillPoints = capturedSkillPoints(level, record ? record.initialSkillPoints : 0);
+      unit.skillUnlockMode = 'absorb';
+      if (!unit.dialogues && window.DialogueLines) unit.dialogues = DialogueLines.randomDialogues(DialogueLines.toneOf(unit));
+      state.playerUnits.push(unit);
+      addLog(`🎉 [포섭 성공!] ${unit.name} Lv.${level}이(가) 아군으로 합류했습니다! (초기 호감도 ${initAffection}, 스킬 해금권 ${unit.skillPoints}장)`, 'capture');
+      return unit;
+    }
+    window.captureEnemyUnit = captureEnemyUnit;
+
+    // 포섭 유닛의 해금권 보정: 레벨 1에서 오른 만큼(이미 해금권으로 익힌 스킬 수 제외) 해금권을 갖게 한다.
+    function topUpCapturedSkillPoints(u) {
+      const tree = Array.isArray(u.skillTree) ? u.skillTree : [];
+      const startIds = new Set(tree.filter(n => n && n.startsLearned).map(n => n.id));
+      const spent = (Array.isArray(u.learnedSkills) ? u.learnedSkills : []).filter(id => !startIds.has(id)).length;
+      const owed = Math.max(0, capturedSkillPoints(u.level) - spent);
+      u.skillUnlockMode = 'absorb'; // 구버전 방식이면 SkillEngine이 해금권을 0으로 회수하므로 먼저 표시해 둔다
+      if ((Number(u.skillPoints) || 0) >= owed) return false;
+      u.skillPoints = owed;
+      return true;
+    }
+
+    // 구버전 세이브의 포섭 유닛 정리: 이름에서 접두어를 떼고, 원본 캐릭터와 연결하고, 해금권을 레벨에 맞춘다.
+    // 같은 캐릭터가 이미 있으면 레벨이 낮은 쪽을 기억 계승 재료로 바꾼다 (전투 중에는 명단을 건드리지 않는다).
+    function migrateCapturedUnits() {
+      const lists = [state.playerUnits, state.reserveUnits].filter(Array.isArray);
+      const captured = () => lists.flatMap(l => l.filter(u => u && isCapturedUnitId(u.id)));
+      const run = state.run;
+      let changed = false;
+
+      // 1. 이름 접두어 제거
+      captured().forEach(u => {
+        if (typeof u.name !== 'string' || !CAPTURED_NAME_PREFIX.test(u.name)) return;
+        const oldName = u.name;
+        u.name = u.name.replace(CAPTURED_NAME_PREFIX, '');
+        if (run && run.adjutant && run.adjutant.name === oldName) run.adjutant.name = u.name;
+        changed = true;
+      });
+
+      // 2. 원본 캐릭터 레코드와 연결 (캐릭터 DB가 로드된 뒤에만 가능)
+      captured().forEach(u => {
+        if (u.sourceCharacterId) return;
+        const record = findCharacterRecord(null, u.name);
+        if (!record) return;
+        const oldId = getCharacterId(u);
+        const newId = String(record.id);
+        u.sourceCharacterId = record.id;
+        // 병과 기본 트리가 붙어 있던 유닛은 캐릭터 고유 스킬트리로 바꾼다 (익힌 스킬 중 새 트리에 있는 것만 유지)
+        if (!u.skillTreeCustomized && Array.isArray(record.skillTree) && record.skillTree.length) {
+          u.skillTree = JSON.parse(JSON.stringify(record.skillTree));
+          u.skillTreeCustomized = !!record.skillTreeCustomized;
+          const ids = new Set(u.skillTree.map(n => n.id));
+          const learned = (u.learnedSkills || []).filter(id => ids.has(id));
+          u.skillTree.forEach(n => { if (n.startsLearned && !learned.includes(n.id)) learned.push(n.id); });
+          u.learnedSkills = learned;
+        }
+        if (!u.dialogues && record.dialogues) u.dialogues = JSON.parse(JSON.stringify(record.dialogues));
+        if (!u.dialogueTone && record.dialogueTone) u.dialogueTone = record.dialogueTone;
+        if (!u.imageUrl && record.imageUrl) u.imageUrl = record.imageUrl;
+        // 캐릭터 id로 묶인 것들(부관, 지휘력 보정, 기억 계승 재료)을 새 id로 옮긴다
+        if (run && run.adjutant && String(run.adjutant.characterId) === oldId) run.adjutant = { characterId: newId, name: u.name };
+        if (run && run.commandBonus && String(run.commandBonus.characterId) === oldId) run.commandBonus.characterId = newId;
+        (state.characterCollection || []).forEach(e => { if (e && String(e.characterId) === oldId) e.characterId = newId; });
+        changed = true;
+      });
+
+      // 2-1. 이미 연결된 유닛인데 재료가 유닛 id로 남아 있으면 캐릭터 id로 옮긴다
+      captured().forEach(u => {
+        if (!u.sourceCharacterId) return;
+        (state.characterCollection || []).forEach(e => {
+          if (e && String(e.characterId) === String(u.id)) { e.characterId = String(u.sourceCharacterId); changed = true; }
+        });
+      });
+
+      // 3. 해금권 보정
+      captured().forEach(u => { if (topUpCapturedSkillPoints(u)) changed = true; });
+
+      // 4. 같은 캐릭터 중복 정리
+      if (!isCharacterPoolLocked()) {
+        captured().forEach(u => {
+          if (!isUnitAlive(u) || !lists.some(l => l.includes(u))) return;
+          const other = findOwnedSameCharacter(getCharacterId(u), u.name, u);
+          if (!other) return;
+          let keep = (Number(u.level) || 1) > (Number(other.level) || 1) ? u : other;
+          let drop = keep === u ? other : u;
+          // 부관은 남긴다 (부관 지정이 캐릭터 id로 묶여 있다)
+          const adjutantId = run && run.adjutant ? String(run.adjutant.characterId) : null;
+          if (adjutantId && getCharacterId(drop) === adjutantId && getCharacterId(keep) !== adjutantId) [keep, drop] = [drop, keep];
+          const dropList = lists.find(l => l.includes(drop));
+          dropList.splice(dropList.indexOf(drop), 1);
+          if (state.strategy && Array.isArray(state.strategy.deploySelectedIds)) {
+            state.strategy.deploySelectedIds = state.strategy.deploySelectedIds.filter(id => id !== drop.id);
+          }
+          if (selectedUnitId === drop.id) selectedUnitId = keep.id;
+          addAbsorbMaterial(keep, 'capture');
+          addLog(`🧬 [포섭 정리] 중복된 ${drop.name}(Lv.${drop.level || 1})을(를) ${keep.name}(Lv.${keep.level || 1})의 기억 계승 재료로 바꿨습니다.`, 'system');
+          changed = true;
+        });
+      }
+      return changed;
+    }
 
     // ------------------------------------------------------------------------
     // 용병 명부 (캐릭터 풀): 용병 고용으로 얻은 캐릭터는 바로 출전 명단(playerUnits)에 들어가지 않고
@@ -8602,7 +8723,6 @@
         // --------------------------------------------------------------------
         // 성공 (Success): 플레이어 로스터로 영입 및 상태 초기화
         // --------------------------------------------------------------------
-        const recruitId = `recruited_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
         const originalName = targetUnit.name || '야생 유닛';
 
         // 적군 목록에서 제거
@@ -8611,20 +8731,14 @@
           state.enemyUnits.splice(enemyIdx, 1);
         }
 
-        // 유닛 데이터 아군으로 전환 및 상태 초기화
-        targetUnit.id = recruitId;
-        targetUnit.owner = 'PLAYER';
-        targetUnit.isPlayer = true;
-        targetUnit.name = `[포섭] ${originalName.replace(/^\[.*?\]\s*/, '')}`;
-        targetUnit.isDead = false;
-        targetUnit.isInactivated = false;
-        targetUnit.inactivatedUntil = null;
-        targetUnit.hp = Math.max(targetUnit.hp || 0, Math.round((targetUnit.maxHp || 100) * 0.75));
-        targetUnit.affection = Math.max(targetUnit.affection || 50, 70);
-        targetUnit.favorability = Math.max(targetUnit.favorability || 50, 70);
-        targetUnit.ap = targetUnit.baseAP || 2;
-
-        state.playerUnits.push(targetUnit);
+        // 전투 포섭과 같은 규칙: 원본 캐릭터로 연결, 레벨만큼 해금권, 이미 있는 캐릭터면 기억 계승 재료
+        const recruitAffection = Math.max(Number(targetUnit.affection) || 50, 70);
+        const recruited = captureEnemyUnit(targetUnit, recruitAffection, targetUnit.x, targetUnit.y);
+        if (recruited) {
+          recruited.hp = Math.max(recruited.hp, Math.round((recruited.maxHp || 100) * 0.75));
+          if (recruited.stats) recruited.stats.hp = recruited.hp;
+          recruited.ap = recruited.baseAP || 2;
+        }
 
         const logMsg = `🤝 [야생 유닛 영입 성공!] (성공률 ${ratePct}%) ${originalName}을(를) 설득하여 아군 부대로 정식 영입했습니다!`;
         addLog(logMsg, 'gold');
@@ -8638,7 +8752,7 @@
 
         return {
           success: true,
-          unit: targetUnit,
+          unit: recruited || targetUnit,
           successRate: ratePct,
           message: `${originalName} 부대를 아군으로 영입했습니다!`
         };
