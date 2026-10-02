@@ -517,9 +517,6 @@
           </div>
         </div>
 
-        <!-- Stack Switcher Bar (Appears when units are stacked on the same tile) -->
-        <div class="stack-switcher-bar" id="stack-switcher-bar" style="display: none;"></div>
-
         <!-- 4. Combat Console Log Window -->
         <div id="console-wrap">
           <div class="log-line log-system">🎮 [시스템] 세로형 모바일 SLG 전투 엔진이 초기화되었습니다.</div>
@@ -591,6 +588,9 @@
         </div>
       </div>
     </div>
+
+    <!-- 중첩 부대 사이드 패널: 부대가 있는 타일 반대편에서 슬라이드 (1초 후 자동 닫힘, 조작하면 고정) -->
+    <aside class="squad-side-panel side-right" id="squad-side-panel" aria-label="부대 편성"></aside>
 
     <!-- ========================================================================
          Bottom Slide Full-Shot Character Showcase Overlay (우마무스메 스타일 전신 풀샷)

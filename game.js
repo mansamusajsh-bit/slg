@@ -700,6 +700,8 @@
     normalizeAllUnitsHP(state);
     let historyStack = []; // 리와인더용 실행 취소 스택
     let selectedUnitId = 'u1';
+    const SQUAD_PANEL_PEEK_MS = 1000; // 중첩 부대 사이드 패널 자동 닫힘 시간
+    const squadPanel = { open: false, pinned: false, timer: null };
     let currentInteractionMode = null; // 'MOVE' | 'ATTACK' | null
     let isEnemyTurnProcessing = false; // 적 AI 턴 진행 상태 플래그
 
@@ -2883,6 +2885,9 @@
       const pUnits = state.playerUnits.filter(u => !u.isDead && u.x === tile.x && u.y === tile.y);
       const eUnits = state.enemyUnits.filter(u => !u.isDead && u.x === tile.x && u.y === tile.y);
 
+      // 고정되지 않은 부대 사이드 패널은 다른 칸을 누르면 바로 닫는다
+      if (squadPanel.open && !squadPanel.pinned && pUnits.length < 2) hideSquadPanel();
+
       // 디버그 패널 소환 좌표 동기화
       debugParams.targetSpawnCoord = { x: tile.x, y: tile.y };
       const coordEl = document.getElementById('lbl-spawn-target-coord');
@@ -2906,6 +2911,7 @@
             const nextIdx = (curIdx + 1) % pUnits.length;
             selectedUnitId = pUnits[nextIdx].id;
             addLog(`👥 [중첩 부대 순환] ${pUnits[nextIdx].name} 선택 (${nextIdx + 1}/${pUnits.length}기) - 다시 터치 시 다음 부대원`, 'system');
+            if (!squadPanel.pinned) showSquadPanel();
           } else {
             addLog(`ℹ️ [유닛 대기] ${selUnit.name} (현재 타일 위치 유지)`, 'system');
           }
@@ -2938,6 +2944,7 @@
           cardInspectedEnemyId = null;
           if (pUnits.length > 1) {
             addLog(`👥 [중첩 부대 전환] (${tile.x}, ${tile.y}) 타일의 ${pUnits[0].name} 선택 (총 ${pUnits.length}기 중첩)`, 'system');
+            showSquadPanel();
           } else {
             addLog(`🎯 [유닛 선택 전환] ${pUnits[0].name} 선택 - 이동 및 교전 가능 범위가 갱신되었습니다.`, 'system');
           }
@@ -2984,6 +2991,7 @@
         userCardViewPreference = 'AUTO';
         cardInspectedEnemyId = null;
         addLog(`🎯 [유닛 선택] ${pUnits[0].name} 선택 - 이동(초록) 및 공격(빨강) 가능 범위가 표시됩니다.`, 'system');
+        if (pUnits.length > 1) showSquadPanel();
         openFullShotOverlay();
         renderAll();
         updateDebugInspector();
@@ -3162,6 +3170,7 @@
 
       // Selected Unit Card Info
       const unit = getSelectedUnit();
+      renderSquadSidePanel(unit);
       if (!unit) return;
 
       const cardAvatar = document.getElementById('card-avatar');
@@ -3232,62 +3241,128 @@
           };
         }
       }
+    }
 
-      // Stack Switcher Bar for units sharing the same tile
-      const stackBar = document.getElementById('stack-switcher-bar');
-      if (stackBar) {
-        const stackUnits = state.playerUnits.filter(u => !u.isDead && u.x === unit.x && u.y === unit.y);
-        if (stackUnits.length > 1) {
-          stackBar.style.display = 'flex';
-          const skills = state.commander.unlockedSkills;
-          const costAP = skills.RapidAdvance ? 1 : 1;
-          const minAP = Math.min(...stackUnits.map(su => su.isInactivated ? 0 : su.ap));
-          const hasAPShortage = minAP < costAP;
+    // ------------------------------------------------------------------------
+    // 중첩 부대 사이드 패널: 겹친 타일을 누르면 부대 반대편에서 1초간 나타났다 사라진다.
+    // 그 사이 패널을 조작(부대원 선택 등)하면 고정되어 닫기/스택 해산 전까지 유지된다.
+    // ------------------------------------------------------------------------
+    function clearSquadPanelTimer() {
+      if (squadPanel.timer) { clearTimeout(squadPanel.timer); squadPanel.timer = null; }
+    }
+    function applySquadPanelOpen() {
+      const el = document.getElementById('squad-side-panel');
+      if (el) el.classList.toggle('open', squadPanel.open);
+    }
+    function showSquadPanel() {
+      clearSquadPanelTimer();
+      squadPanel.open = true;
+      squadPanel.pinned = false;
+      squadPanel.timer = setTimeout(() => {
+        squadPanel.timer = null;
+        if (!squadPanel.pinned) { squadPanel.open = false; applySquadPanelOpen(); }
+      }, SQUAD_PANEL_PEEK_MS);
+    }
+    function pinSquadPanel() {
+      if (!squadPanel.open) return;
+      clearSquadPanelTimer();
+      squadPanel.pinned = true;
+    }
+    function hideSquadPanel() {
+      clearSquadPanelTimer();
+      squadPanel.open = false;
+      squadPanel.pinned = false;
+      applySquadPanelOpen();
+    }
+    window.hideSquadPanel = hideSquadPanel;
 
-          stackBar.innerHTML = `
-            <div class="stack-switcher-label" title="현재 타일에 함께 주둔 중인 부대원">
-              👥 부대 (${stackUnits.length}기)${state.stackMoveEnabled ? `<span style="margin-left:4px; font-size:8px; font-weight:800; color:${hasAPShortage ? '#ef4444' : '#22c55e'};">[최소AP: ${minAP}]</span>` : ''}:
-            </div>
-            <div style="display:flex; gap:4px; overflow-x:auto; flex:1;">
-              ${stackUnits.map(su => {
-                const isShort = state.stackMoveEnabled && (su.isInactivated || su.ap < costAP);
-                return `
-                  <button class="stack-unit-chip ${su.id === unit.id ? 'active' : ''}" data-unit-id="${su.id}" style="${isShort ? 'border-color:#ef4444; color:#ef4444;' : ''}" title="${su.name} (AP: ${su.ap}/${su.baseAP}${su.isInactivated ? ', 정지' : ''})">
-                    <span>${su.avatar}</span>
-                    <span>${su.name}</span>
-                    <span style="opacity:0.85; font-size:8px; font-weight:700;">[AP ${su.ap}]</span>
-                  </button>
-                `;
-              }).join('')}
-            </div>
-            <button id="btn-stack-bar-toggle" class="stack-unit-chip ${state.stackMoveEnabled ? 'active' : ''}" style="margin-left:auto; font-size:8px; ${state.stackMoveEnabled && hasAPShortage ? 'background:rgba(239,68,68,0.2); border-color:#ef4444;' : ''}" title="중첩 부대 동시 이동 모드 토글 (최소 AP 기준 일괄 이동)">
-              <span>${state.stackMoveEnabled ? (hasAPShortage ? '⚠️ 동시이동(AP부족)' : '👥 동시이동 ON') : '👤 개별이동'}</span>
-            </button>
-          `;
-          stackBar.querySelectorAll('.stack-unit-chip[data-unit-id]').forEach(btn => {
-            btn.onclick = (e) => {
-              e.stopPropagation();
-              const uid = btn.getAttribute('data-unit-id');
-              if (uid) {
-                selectedUnitId = uid;
-                renderAll();
-                updateDebugInspector();
-              }
-            };
-          });
-          const barToggle = document.getElementById('btn-stack-bar-toggle');
-          if (barToggle) {
-            barToggle.onclick = (e) => {
-              e.stopPropagation();
-              state.stackMoveEnabled = !state.stackMoveEnabled;
-              addLog(`👥 [부대 동시 이동] ${state.stackMoveEnabled ? '활성화 (ON - 최소 AP 기준 일괄 이동)' : '해제 (OFF - 개별 이동)'}`, 'gold');
-              renderAll();
-            };
-          }
-        } else {
-          stackBar.style.display = 'none';
-        }
+    function renderSquadSidePanel(unit) {
+      const panel = document.getElementById('squad-side-panel');
+      if (!panel) return;
+      const fieldEl = document.getElementById('view-sector-field');
+      const inField = !!(fieldEl && fieldEl.classList.contains('active'));
+      const stackUnits = (inField && unit && !unit.isDead)
+        ? state.playerUnits.filter(u => !u.isDead && u.x === unit.x && u.y === unit.y)
+        : [];
+      if (stackUnits.length < 2) {
+        if (squadPanel.open) hideSquadPanel();
+        return;
       }
+
+      // 부대 위치에서 먼 쪽으로: 맵 왼쪽 절반이면 오른쪽, 오른쪽 절반이면 왼쪽
+      const { width } = getBattleSize();
+      const onLeftHalf = unit.x < width / 2;
+      panel.classList.toggle('side-right', onLeftHalf);
+      panel.classList.toggle('side-left', !onLeftHalf);
+
+      const costAP = 1;
+      const minAP = Math.min(...stackUnits.map(su => su.isInactivated ? 0 : su.ap));
+      const hasAPShortage = minAP < costAP;
+      const stackOn = !!state.stackMoveEnabled;
+
+      panel.innerHTML = `
+        <div class="squad-panel-header">
+          <div class="squad-panel-title">
+            👥 부대 편성 (${stackUnits.length}기)
+            ${stackOn ? `<span class="squad-panel-sub" style="color:${hasAPShortage ? '#ef4444' : '#16a34a'};">최소 AP: ${minAP}</span>` : ''}
+          </div>
+          <button class="squad-panel-close" id="btn-squad-panel-close" title="닫기">✕</button>
+        </div>
+        <div class="squad-panel-list">
+          ${stackUnits.map(su => {
+            const isShort = stackOn && (su.isInactivated || su.ap < costAP);
+            const hpPct = Math.max(0, Math.min(100, (su.hp / (su.maxHp || 1)) * 100));
+            return `
+              <button class="squad-member ${su.id === unit.id ? 'active' : ''} ${isShort ? 'ap-short' : ''}" data-unit-id="${su.id}" title="${escapeGachaHtml(su.name)} (AP: ${su.ap}/${su.baseAP}${su.isInactivated ? ', 정지' : ''})">
+                <span class="squad-member-avatar">${renderPortrait(su, { emojiSize: '20px' })}</span>
+                <span class="squad-member-info">
+                  <span class="squad-member-name">${escapeGachaHtml(su.name)}</span>
+                  <span class="squad-member-meta">AP ${su.ap}/${su.baseAP}${su.isInactivated ? ' · 정지' : ''} · HP ${su.hp}/${su.maxHp}</span>
+                  <span class="squad-member-hp"><span style="width:${hpPct}%;"></span></span>
+                </span>
+              </button>
+            `;
+          }).join('')}
+        </div>
+        <div class="squad-panel-footer">
+          <button class="squad-move-toggle ${stackOn ? (hasAPShortage ? 'warn' : 'on') : ''}" id="btn-squad-move-toggle" title="중첩 부대 동시 이동 모드 토글 (최소 AP 기준 일괄 이동)">
+            ${stackOn ? (hasAPShortage ? '⚠️ 동시이동 (AP 부족)' : '👥 동시이동 ON') : '👤 개별이동'}
+          </button>
+        </div>
+      `;
+
+      // 패널을 건드리는 순간 고정 (자동 닫힘 타이머보다 먼저 잡히도록 pointerdown 사용)
+      panel.onpointerdown = () => pinSquadPanel();
+      panel.querySelectorAll('.squad-member[data-unit-id]').forEach(btn => {
+        btn.onclick = (e) => {
+          e.stopPropagation();
+          pinSquadPanel();
+          const uid = btn.getAttribute('data-unit-id');
+          if (uid) {
+            selectedUnitId = uid;
+            renderAll();
+            updateDebugInspector();
+          }
+        };
+      });
+      const toggleBtn = document.getElementById('btn-squad-move-toggle');
+      if (toggleBtn) {
+        toggleBtn.onclick = (e) => {
+          e.stopPropagation();
+          pinSquadPanel();
+          state.stackMoveEnabled = !state.stackMoveEnabled;
+          addLog(`👥 [부대 동시 이동] ${state.stackMoveEnabled ? '활성화 (ON - 최소 AP 기준 일괄 이동)' : '해제 (OFF - 개별 이동)'}`, 'gold');
+          renderAll();
+        };
+      }
+      const closeBtn = document.getElementById('btn-squad-panel-close');
+      if (closeBtn) {
+        closeBtn.onclick = (e) => {
+          e.stopPropagation();
+          hideSquadPanel();
+        };
+      }
+      applySquadPanelOpen();
     }
 
     // ========================================================================
