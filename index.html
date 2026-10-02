@@ -272,16 +272,16 @@
         <section class="gacha-owned-section">
           <div class="gacha-section-heading">
             <span>보유 용병</span>
-            <span class="gacha-section-note">중복 사본은 흡수 레벨업 재료</span>
+            <span class="gacha-section-note">중복 사본은 다른 시간선의 잔영 — 기억 계승 재료</span>
           </div>
-          <button type="button" class="pool-btn primary pool-open-wide" onclick="openCharacterPool()">📜 용병 명부 열기 (편입 · 제외 · 흡수)</button>
+          <button type="button" class="pool-btn primary pool-open-wide" onclick="openCharacterPool()">📜 용병 명부 열기 (편입 · 제외 · 계승)</button>
         </section>
       </main>
     </div>
 
     <!-- ======================================================================
          [ 용병 명부 (캐릭터 풀) ]
-         용병 고용으로 얻은 캐릭터를 출전 명단에 편입/제외하고 중복 사본을 흡수한다.
+         용병 고용으로 얻은 캐릭터를 출전 명단에 편입/제외하고 다른 시간선의 잔영으로 기억을 계승한다.
          ====================================================================== -->
     <div class="pool-overlay" id="modal-character-pool" style="display: none;" onclick="if(event.target===this) closeCharacterPool()">
       <div class="pool-window" role="dialog" aria-label="용병 명부">
@@ -1044,7 +1044,7 @@
                 </label>
               </div>
               <div style="font-size: 10px; color: #64748b; margin-bottom: 6px; line-height: 1.4;">
-                ★ 표시한 노드는 생성 즉시 습득합니다. 나머지는 동일 캐릭터 흡수 레벨업으로 얻는 해금권(1장 = 1개)으로 스킬트리에서 해금합니다.
+                ★ 표시한 노드는 생성 즉시 습득합니다. 나머지는 기억 계승으로 얻는 해금권(1장 = 1개)으로 스킬트리에서 해금합니다.
                 효과는 여러 개를 조합할 수 있습니다 (예: 피해 + 기절, 순간이동 + 보호막).
               </div>
               <div id="dev-skill-tree-builder-container"></div>

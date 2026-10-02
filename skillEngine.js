@@ -297,7 +297,7 @@
       unit.learnedSkills = unit.skillTree.filter(n => n && n.startsLearned).map(n => n.id);
     }
     if (typeof unit.skillPoints !== 'number') unit.skillPoints = 0;
-    // 스킬 해금 방식 변경(전투 승리 SP → 동일 캐릭터 흡수 레벨업 1회 = 해금 1개).
+    // 스킬 해금 방식 변경(전투 승리 SP → 기억 계승 1회 = 해금 1개).
     // 구버전 세이브에 쌓인 SP는 회수한다. 이미 익힌 스킬은 그대로 유지된다.
     if (unit.skillUnlockMode !== 'absorb') {
       unit.skillPoints = 0;
@@ -343,7 +343,7 @@
     }
     // 해금권(skillPoints) 1장 = 스킬 1개. 노드의 spCost와 무관하게 항상 1장을 쓴다.
     const cost = SKILL_UNLOCK_COST;
-    if (unit.skillPoints < cost) return { state: 'poor', reason: '레벨업 필요 (동일 캐릭터 흡수)', cost };
+    if (unit.skillPoints < cost) return { state: 'poor', reason: '레벨업 필요 (기억 계승)', cost };
     return { state: 'learnable', cost };
   }
 

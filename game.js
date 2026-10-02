@@ -5821,7 +5821,7 @@
     }
 
     // ------------------------------------------------------------------------
-    // 동일 캐릭터 흡수 레벨업: 가챠로 얻은 같은 캐릭터 1장(characterCollection)을 소모해
+    // 기억 계승: 가챠로 얻은 같은 캐릭터 1장(characterCollection)을 소모해
     // 레벨 +1, 스킬 해금권 +1. 스킬트리 노드는 해금권 1장당 1개씩 열 수 있다.
     // ------------------------------------------------------------------------
     function getAbsorbMaterials(unit) {
@@ -5836,7 +5836,7 @@
         || (state.reserveUnits || []).find(u => u.id === unitId);
       if (!unit) return { ok: false, reason: '유닛을 찾을 수 없습니다.' };
       const materials = getAbsorbMaterials(unit);
-      if (!materials.length) return { ok: false, reason: '흡수할 동일 캐릭터가 없습니다.' };
+      if (!materials.length) return { ok: false, reason: '계승할 다른 시간선의 잔영이 없습니다.' };
 
       const material = materials[materials.length - 1];
       state.characterCollection.splice(state.characterCollection.indexOf(material), 1);
@@ -5844,7 +5844,7 @@
       unit.level = (Number(unit.level) || 1) + 1;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
 
-      addLog(`🧬 [흡수 레벨업] ${unit.name} Lv.${unit.level} — 스킬 해금권 +1 (잔여 동일 캐릭터 ${materials.length - 1}장)`, 'gold');
+      addLog(`🧬 [기억 계승] ${unit.name} Lv.${unit.level} — 다른 시간선의 기억을 이어받았다. 스킬 해금권 +1 (남은 잔영 ${materials.length - 1}장)`, 'gold');
       saveGameState(true);
       return { ok: true, level: unit.level };
     }
@@ -5853,7 +5853,7 @@
     // ------------------------------------------------------------------------
     // 용병 명부 (캐릭터 풀): 용병 고용으로 얻은 캐릭터는 바로 출전 명단(playerUnits)에 들어가지 않고
     // 여기서 골라 편입한다.
-    //   state.characterCollection — 아직 쓰지 않은 사본 (편입 1장 / 흡수 레벨업 재료)
+    //   state.characterCollection — 아직 쓰지 않은 사본 (편입 1장 / 기억 계승 재료)
     //   state.playerUnits         — 출전 명단 (sourceCharacterId로 원본 캐릭터와 연결)
     //   state.reserveUnits        — 명단에서 뺀 유닛. 레벨/스킬을 그대로 보관했다가 다시 편입할 때 복귀한다.
     // ------------------------------------------------------------------------
@@ -5985,7 +5985,7 @@
         const actions = [];
         if (e.unit) actions.push(`<button type="button" class="pool-btn ghost" data-pool-dismiss="${esc(e.id)}" ${locked ? 'disabled' : ''}>명단 제외</button>`);
         else actions.push(`<button type="button" class="pool-btn primary" data-pool-enlist="${esc(e.id)}" ${canEnlist && !locked ? '' : 'disabled'}>${e.reserve ? '복귀' : '편입 (사본 1)'}</button>`);
-        if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 흡수</button>`);
+        if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 계승</button>`);
         return `
           <div class="pool-card ${e.unit ? 'in-roster' : ''}">
             <div class="gacha-card-image">${getGachaAvatarHtml(src)}</div>
@@ -6012,7 +6012,7 @@
         b.onclick = () => {
           const entry = getCharacterPoolEntries().find(x => x.id === b.dataset.poolAbsorb);
           const owned = entry && (entry.unit || entry.reserve);
-          after(owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 흡수할 수 없습니다.' });
+          after(owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 기억을 계승할 수 없습니다.' });
         };
       });
     }
@@ -9542,7 +9542,7 @@
         .filter(u => deployed.includes(u.id) && (u.isDead || (typeof u.hp === 'number' && u.hp <= 0)))
         .map(u => ({ id: u.id, name: u.name }));
 
-      // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화 (스킬 해금권은 동일 캐릭터 흡수로만 얻는다)
+      // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화 (스킬 해금권은 기억 계승으로만 얻는다)
       cancelSkillTargeting(true);
       (state.playerUnits || []).forEach(u => {
         if (window.SkillEngine) SkillEngine.resetBattleState(u);

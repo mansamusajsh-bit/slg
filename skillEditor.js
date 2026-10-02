@@ -383,9 +383,9 @@
     container.innerHTML = `
       <div class="skl-head">
         <div>Lv.${Number(unit.level) || 1} · 스킬 해금권 <b class="skl-sp">${unit.skillPoints}장</b></div>
-        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · 동일 캐릭터 흡수 레벨업 1회 = 스킬 1개 해금</div>
+        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · 기억 계승 1회 = 스킬 1개 해금</div>
         ${unit.owner !== 'ENEMY' && typeof global.absorbDuplicateCharacter === 'function' ? `
-          <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 동일 캐릭터 흡수 레벨업 (보유 ${absorbCount}장)</button>` : ''}
+          <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 기억 계승 (잔영 ${absorbCount}장)</button>` : ''}
       </div>
       ${sig ? `
         <div class="skl-signature">
