@@ -169,12 +169,12 @@ const MapEditorController = {
   ],
 
   TERRAIN_SPECS: {
-    plain:    { name: '평야', apCost: 1, defBonus: MapSchema.TILE_DEFENSE.terrain.plain, icon: '🌱', passable: true },
-    forest:   { name: '숲',   apCost: 2, defBonus: MapSchema.TILE_DEFENSE.terrain.forest, icon: '🌲', passable: true },
-    hill:     { name: '산',   apCost: 3, defBonus: MapSchema.TILE_DEFENSE.terrain.hill, icon: '⛰️', passable: true },
-    mountain: { name: '암벽', apCost: 99, defBonus: MapSchema.TILE_DEFENSE.terrain.mountain, icon: '🏔️', passable: false },
-    river:    { name: '강',   apCost: 3, defBonus: MapSchema.TILE_DEFENSE.terrain.river, icon: '〰️', passable: true },
-    sea:      { name: '바다', apCost: 99, defBonus: MapSchema.TILE_DEFENSE.terrain.sea, icon: '🌊', passable: false }
+    plain:    { name: '평야', apCost: MapSchema.TERRAIN_MOVE_COST.plain, defBonus: MapSchema.TILE_DEFENSE.terrain.plain, icon: '🌱', passable: true },
+    forest:   { name: '숲',   apCost: MapSchema.TERRAIN_MOVE_COST.forest, defBonus: MapSchema.TILE_DEFENSE.terrain.forest, icon: '🌲', passable: true },
+    hill:     { name: '산',   apCost: MapSchema.TERRAIN_MOVE_COST.hill, defBonus: MapSchema.TILE_DEFENSE.terrain.hill, icon: '⛰️', passable: true },
+    mountain: { name: '암벽', apCost: MapSchema.TERRAIN_MOVE_COST.mountain, defBonus: MapSchema.TILE_DEFENSE.terrain.mountain, icon: '🏔️', passable: false },
+    river:    { name: '강',   apCost: MapSchema.TERRAIN_MOVE_COST.river, defBonus: MapSchema.TILE_DEFENSE.terrain.river, icon: '〰️', passable: true },
+    sea:      { name: '바다', apCost: MapSchema.TERRAIN_MOVE_COST.sea, defBonus: MapSchema.TILE_DEFENSE.terrain.sea, icon: '🌊', passable: false }
   },
 
   /**
@@ -241,15 +241,9 @@ const MapEditorController = {
     return pct ? ` <span style="color:${pct > 0 ? '#10b981' : '#ef4444'}; font-size:10px;">🛡️${pct > 0 ? '+' : ''}${pct}%</span>` : '';
   },
 
+  // passable:false 지형(암벽·바다)은 '배치 불가'일 뿐 AP를 더 쓰면 지나갈 수 있다.
   calculateMoveCost(fromTile, toTile) {
-    const spec = MapEditorController.TERRAIN_SPECS[toTile.terrain] || MapEditorController.TERRAIN_SPECS.plain;
-    if (!spec.passable) return 999;
-
-    let baseCost = spec.apCost;
-    if (toTile.hasRoad) {
-      baseCost = Math.max(0.5, baseCost * 0.5); // 도로: 이동력 2배 = AP 50% 할인
-    }
-    return baseCost;
+    return MapSchema.getTileMoveCost(toTile);
   },
 
   /**
@@ -732,6 +726,7 @@ const MapEditorController = {
       if (tile.hasRoad) tileDiv.classList.add('has-road');
       if (tile.isSpawnPlayer) tileDiv.classList.add('spawn-player');
       if (tile.isSpawnEnemy) tileDiv.classList.add('spawn-enemy');
+      if (tile.structure) tileDiv.classList.add('has-structure');
 
       const tSpec = MapEditorController.TERRAIN_SPECS[tile.terrain] || MapEditorController.TERRAIN_SPECS.plain;
       let centerIcon = tSpec.icon;
@@ -989,7 +984,7 @@ const MapEditorController = {
         const spec = MapEditorController.TERRAIN_SPECS[key];
         const btn = document.createElement('button');
         btn.className = `civ4-palette-btn ${MapEditorController.selectedPaletteItem === key ? 'active' : ''}`;
-        btn.innerHTML = `<span>${spec.icon}</span> <span>${spec.name}</span>${MapEditorController.defBonusLabel(spec.defBonus)}`;
+        btn.innerHTML = `<span>${spec.icon}</span> <span>${spec.name}</span> <span style="color:#fbbf24; font-size:10px;">AP${spec.apCost}</span>${MapEditorController.defBonusLabel(spec.defBonus)}`;
         btn.onclick = () => {
           MapEditorController.selectedPaletteItem = key;
           MapEditorController.updatePaletteItemsUI();
@@ -1000,7 +995,7 @@ const MapEditorController = {
       container.innerHTML = `
         <div style="font-size: 11px; color:#38bdf8; display:flex; align-items:center; gap:8px;">
           <span>═ 도로 붓 활성화</span>
-          <span style="color:#94a3b8;">(타일을 클릭하여 도로 설치/제거. AP 이동력 소모 50% 절감)</span>
+          <span style="color:#94a3b8;">(타일을 클릭하여 도로 설치/제거. 도로 칸은 지형과 무관하게 AP 1 — 강 위 도로는 다리)</span>
         </div>
       `;
     } else if (cat === 'STRUCTURE') {

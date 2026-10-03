@@ -1938,8 +1938,6 @@
     }
 
     function executeMove(unit, targetX, targetY) {
-      const skills = state.commander.unlockedSkills;
-      const costAP = skills.RapidAdvance ? 1 : 1; // 신속한 진격: 적은 AP 소모
       if (window.SkillEngine && !SkillEngine.canMove(unit)) {
         addLog(`⛓️ [이동 불가] ${unit.name}은(는) 속박/기절 상태라 이동할 수 없습니다.`, 'warning');
         return;
@@ -1948,6 +1946,8 @@
       const startX = unit.x;
       const startY = unit.y;
       const targetTile = getTile(targetX, targetY);
+      // 지형별 진입 AP: 물·암벽은 더 든다 (도로가 깔리면 1)
+      const costAP = MapSchema.getTileMoveCost(targetTile);
 
       // 출발 타일에 주둔 중인 아군 유닛 수집
       const friendlyAtStart = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY);
@@ -1988,7 +1988,7 @@
                 <b style="color: #dc2626;">행동력(AP)이 부족한 부대원</b>이 있어 함께 이동할 수 없습니다.
               </p>
               <div style="background: #f8fafc; border-radius: 6px; padding: 6px 10px; margin-bottom: 8px; font-size: 11px; border-left: 3px solid #f59e0b; color: #475569;">
-                <b>필요 최소 AP:</b> <span style="color: #d97706; font-weight: 800;">${costAP} AP</span> (신속한 진격 기준)<br>
+                <b>필요 최소 AP:</b> <span style="color: #d97706; font-weight: 800;">${costAP} AP</span> (도착 지형 기준)<br>
                 <b>부족한 유닛:</b> <span style="color: #dc2626; font-weight: 700;">${insufficientUnits.map(u => u.name).join(', ')}</span>
               </div>
             </div>
@@ -2151,7 +2151,7 @@
             // 전진 가능한 중간 타일 탐색 (아군 플레이어 유닛이 없는 빈 타일)
             const midTiles = directions
               .map(d => ({ x: enemy.x + d.dx, y: enemy.y + d.dy }))
-              .filter(pt => getTile(pt.x, pt.y) && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y) && (Math.abs(pt.x - p.x) + Math.abs(pt.y - p.y) === 1));
+              .filter(pt => getTile(pt.x, pt.y) && MapSchema.getTileMoveCost(getTile(pt.x, pt.y)) < enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y) && (Math.abs(pt.x - p.x) + Math.abs(pt.y - p.y) === 1));
 
             if (midTiles.length > 0) {
               attackCandidates.push({
@@ -2184,7 +2184,7 @@
           if (chosen.requiresMove && chosen.moveStep) {
             enemy.x = chosen.moveStep.x;
             enemy.y = chosen.moveStep.y;
-            enemy.ap -= 1;
+            enemy.ap -= MapSchema.getTileMoveCost(getTile(chosen.moveStep.x, chosen.moveStep.y));
             const destTile = getTile(chosen.moveStep.x, chosen.moveStep.y);
             addLog(`👟 [적군 돌격 기동] ${enemy.name}이(가) 아군 ${chosen.target.name}을(를) 요격하기 위해 [${destTile ? destTile.name : '타일'}](${chosen.moveStep.x}, ${chosen.moveStep.y})로 전진했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
@@ -2206,7 +2206,7 @@
       // 유닛이 이동할 수 있는 인접 타일 탐색 (플레이어 유닛이 주둔 중이지 않은 타일)
       const validMoves = directions
         .map(d => ({ x: enemy.x + d.dx, y: enemy.y + d.dy }))
-        .filter(pt => getTile(pt.x, pt.y) && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y));
+        .filter(pt => getTile(pt.x, pt.y) && MapSchema.getTileMoveCost(getTile(pt.x, pt.y)) <= enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y));
 
       if (validMoves.length === 0) return false;
 
@@ -2259,7 +2259,7 @@
         if (bestTile) {
           enemy.x = bestTile.x;
           enemy.y = bestTile.y;
-          enemy.ap -= 1;
+          enemy.ap -= MapSchema.getTileMoveCost(getTile(bestTile.x, bestTile.y));
           const targetTile = getTile(bestTile.x, bestTile.y);
           addLog(`🛡️ [적군 ZOC 차단선 형성] ${enemy.name}이(가) 동료 적군과 2셀 간격의 ZOC 포위망을 형성하며 [${targetTile ? targetTile.name : '길목'}](${bestTile.x}, ${bestTile.y})을(를) 차단했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
           renderAll();
@@ -2299,7 +2299,7 @@
           if (bestBaseMove) {
             enemy.x = bestBaseMove.x;
             enemy.y = bestBaseMove.y;
-            enemy.ap -= 1;
+            enemy.ap -= MapSchema.getTileMoveCost(getTile(bestBaseMove.x, bestBaseMove.y));
             const targetTile = getTile(bestBaseMove.x, bestBaseMove.y);
             addLog(`🏰 [적군 거점 압박] ${enemy.name}이(가) [${nearestBase.name}] 방면으로 전진 진격했습니다! -> [${targetTile ? targetTile.name : '타일'}](${bestBaseMove.x}, ${bestBaseMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
@@ -2333,7 +2333,7 @@
       if (bestRoamMove) {
         enemy.x = bestRoamMove.x;
         enemy.y = bestRoamMove.y;
-        enemy.ap -= 1;
+        enemy.ap -= MapSchema.getTileMoveCost(getTile(bestRoamMove.x, bestRoamMove.y));
         const targetTile = getTile(bestRoamMove.x, bestRoamMove.y);
         addLog(`🧭 [적군 수색 정찰] ${enemy.name}이(가) 아군 거점 방면을 수색 정찰 중입니다 -> [${targetTile ? targetTile.name : '타일'}](${bestRoamMove.x}, ${bestRoamMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
         renderAll();
@@ -2720,8 +2720,8 @@
             const hasEnemy = state.enemyUnits.some(e => !e.isDead && e.x === t.x && e.y === t.y);
             if (hasEnemy) {
               attackTiles.push(t);
-            } else {
-              // 적이 없는 타일은 빈 타일 및 아군 유닛이 이미 있는 타일 모두 이동/중첩 가능!
+            } else if (MapSchema.getTileMoveCost(t) <= selUnit.ap) {
+              // 적이 없는 타일은 빈 타일 및 아군 유닛이 이미 있는 타일 모두 이동/중첩 가능! (AP가 지형 비용 이상일 때)
               moveTiles.push(t);
             }
           }
@@ -2764,7 +2764,10 @@
         if (canAttack) {
           actionIcon = '<span class="tile-action-indicator attack" title="클릭 시 즉시 자동 전투 개시!">⚔️</span>';
         } else if (canMove) {
-          actionIcon = '<span class="tile-action-indicator move" title="클릭 시 즉시 이동">👟</span>';
+          const moveCost = MapSchema.getTileMoveCost(t);
+          actionIcon = moveCost > 1
+            ? `<span class="tile-action-indicator move" title="클릭 시 즉시 이동 (AP ${moveCost} 소모)">👟${moveCost}</span>`
+            : '<span class="tile-action-indicator move" title="클릭 시 즉시 이동">👟</span>';
         }
 
         const terrainIcons = {

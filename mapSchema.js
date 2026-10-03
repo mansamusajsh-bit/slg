@@ -296,6 +296,21 @@
     return (TILE_DEFENSE.terrain[terrain] || 0) + ((structure && TILE_DEFENSE.structure[structure]) || 0);
   }
 
+  // 지형별 진입 AP의 단일 기준표. 물(강·바다)과 암벽은 들어가기 어려워 AP를 더 쓴다.
+  // 기본 AP 2인 유닛은 이런 칸에 들어가면 그 턴 이동이 끝난다. 도로(다리)가 깔린 칸은 항상 1.
+  const TERRAIN_MOVE_COST = { plain: 1, forest: 1, hill: 1, river: 2, sea: 2, mountain: 2 };
+
+  /**
+   * @param {{terrain?:string, type?:string, hasRoad?:boolean}} tile
+   * @returns {number} 이 칸으로 들어갈 때 드는 AP
+   */
+  function getTileMoveCost(tile) {
+    if (!tile) return 1;
+    if (tile.hasRoad) return 1;
+    const terrain = String(tile.terrain || tile.type || 'plain').toLowerCase();
+    return TERRAIN_MOVE_COST[terrain] || 1;
+  }
+
   // ==========================================================================
   // 3. Seed 기반 결정론적 난수 생성기 (8단계)
   // ==========================================================================
@@ -643,6 +658,8 @@
     computeTerrainComposition,
     TILE_DEFENSE,
     getTileDefBonus,
+    TERRAIN_MOVE_COST,
+    getTileMoveCost,
 
     // CurrentBattle
     createCurrentBattle,

@@ -368,4 +368,5 @@
 .civ4-editor-grid.has-bg .civ4-tile.terrain-mountain { background: rgba(51, 65, 85, 0.6); }
 .civ4-editor-grid.has-bg .civ4-tile.terrain-river { background: rgba(14, 165, 233, 0.45); }
 .civ4-editor-grid.has-bg .civ4-tile.terrain-sea { background: rgba(37, 99, 235, 0.6); }
-.civ4-editor-grid.has-bg .civ4-tile.terrain-plain .civ4-tile-ico { opacity: 0; }
+/* 배경 위 평야 칸은 지형 아이콘만 숨긴다 — 거점 아이콘(🏡/🏰 등)은 보여야 한다 */
+.civ4-editor-grid.has-bg .civ4-tile.terrain-plain:not(.has-structure) .civ4-tile-ico { opacity: 0; }
