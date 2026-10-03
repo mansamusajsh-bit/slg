@@ -2237,6 +2237,158 @@
     .pc-prev-card { width: 76px; height: 96px; border-radius: 12px; }
     .pc-prev-roster { width: 30px; height: 30px; border-radius: 6px; }
 
+    /* 맵 유닛 토큰 (game.js buildUnitToken) — 원형 얼굴 + 팀색 HP 링
+       링 색 = 아군/적, 링 길이 = 남은 HP(--hp, 0~100). 병과·중첩·상태 칩은 원 밖에 둔다. */
+    .unit-avatar.unit-token {
+      --team: #2563eb;
+      --hp: 100;
+      /* 지형 아이콘 등 타일 안 다른 요소와 공간을 나누지 않도록 타일 중앙에 띄운다 */
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: auto;
+      height: 90%;
+      aspect-ratio: 1 / 1;
+      z-index: 2;
+      padding: 3px;
+      box-sizing: border-box;
+      border: none;
+      border-radius: 50%;
+      color: #ffffff;
+      background: conic-gradient(var(--team) calc(var(--hp) * 1%), rgba(148, 163, 184, 0.5) 0);
+      box-shadow: 0 2px 5px rgba(15, 23, 42, 0.28);
+    }
+    .unit-avatar.unit-token.unit-enemy { --team: #e11d48; }
+    .unit-avatar.unit-token:active { transform: translate(-50%, -50%) scale(0.92); }
+    .unit-avatar.unit-token.stacked-card {
+      /* 뒤에 겹친 원 한 장으로 중첩 표시 */
+      box-shadow: 3px -3px 0 -1px color-mix(in srgb, var(--team) 45%, transparent), 0 2px 5px rgba(15, 23, 42, 0.28);
+    }
+    .unit-avatar.unit-token.hp-low { animation: unitTokenLowHp 1s ease-in-out infinite; }
+    @keyframes unitTokenLowHp {
+      50% { box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.4), 0 2px 5px rgba(15, 23, 42, 0.28); }
+    }
+    .unit-token .unit-token-face {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 1.5px solid #ffffff;
+      box-sizing: border-box;
+      background-color: #e2e8f0;
+    }
+    .unit-token .portrait-emoji {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      border: 1.5px solid #ffffff;
+      box-sizing: border-box;
+      background: color-mix(in srgb, var(--team) 80%, #0f172a);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+    }
+    .unit-token .unit-class-badge {
+      top: auto;
+      right: -3px;
+      bottom: -2px;
+      min-width: 12px;
+      height: 12px;
+      padding: 0 2px;
+      border: 1.5px solid #ffffff;
+      border-radius: 6px;
+      background: var(--team);
+      color: #ffffff;
+      font-size: 7.5px;
+      line-height: 9px;
+      text-align: center;
+      box-sizing: border-box;
+      z-index: 3;
+    }
+    .unit-token .unit-stack-badge {
+      top: -2px;
+      left: -3px;
+      height: 12px;
+      padding: 0 3px;
+      line-height: 9px;
+      font-size: 7.5px;
+      border-width: 1.5px;
+      border-radius: 6px;
+      background: #0f172a;
+      box-shadow: none;
+      box-sizing: border-box;
+    }
+    .unit-token .unit-status-icons {
+      left: auto;
+      right: -3px;
+      top: -2px;
+    }
+    .unit-token .unit-inactivated-badge { border-radius: 50%; }
+
+    /* 선택/정찰 시 큰 얼굴 말풍선 (game.js showUnitTokenBubble) */
+    .unit-token-bubble {
+      --c: #2563eb;
+      position: absolute;
+      z-index: 60;
+      width: 168px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 6px;
+      background: #ffffff;
+      border: 2px solid var(--c);
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+      pointer-events: none;
+      animation: utbIn 0.18s ease-out;
+      transition: opacity 0.3s ease;
+    }
+    .unit-token-bubble.enemy { --c: #e11d48; }
+    .unit-token-bubble.fade { opacity: 0; }
+    .unit-token-bubble::after {
+      content: '';
+      position: absolute;
+      left: var(--tail, 30px);
+      bottom: -8px;
+      width: 12px;
+      height: 12px;
+      background: #ffffff;
+      border-right: 2px solid var(--c);
+      border-bottom: 2px solid var(--c);
+      transform: rotate(45deg);
+    }
+    .unit-token-bubble.below::after {
+      bottom: auto;
+      top: -8px;
+      transform: rotate(-135deg);
+    }
+    @keyframes utbIn { from { opacity: 0; transform: translateY(4px); } }
+    .utb-face {
+      width: 64px;
+      height: 64px;
+      flex-shrink: 0;
+      border-radius: 9px;
+      background: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .utb-face .portrait-crop { border-radius: 9px; }
+    .utb-info { min-width: 0; flex: 1; }
+    .utb-name {
+      font-size: 12px;
+      font-weight: 900;
+      color: #0f172a;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .utb-meta { font-size: 9.5px; color: #64748b; margin-top: 2px; }
+    .utb-hp { height: 5px; margin-top: 5px; border-radius: 3px; background: #e2e8f0; overflow: hidden; }
+    .utb-hp > i { display: block; height: 100%; background: #10b981; }
+    .utb-hp > i.low { background: #ef4444; }
+
     /* ==========================================================================
        Character Image Customization & DEV Manager
        ========================================================================== */

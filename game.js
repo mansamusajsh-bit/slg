@@ -2797,86 +2797,12 @@
         if (pUnits.length > 0) {
           // 해당 타일에서 전면에 표시할 유닛 결정 (현재 선택된 유닛 우선)
           const topUnit = pUnits.find(u => u.id === selectedUnitId) || pUnits[0];
-
-          // 중첩 표시 언더레이 카드 (물리적 겹침 입체감)
-          if (pUnits.length > 1) {
-            tileDiv.classList.add('has-stack');
-            const underlay = document.createElement('div');
-            underlay.className = 'unit-stacked-underlay';
-            tileDiv.appendChild(underlay);
-          }
-
-          const uDiv = document.createElement('div');
-          uDiv.className = `unit-avatar unit-player ${pUnits.length > 1 ? 'stacked-card' : ''}`;
-          uDiv.innerHTML = renderPortrait(topUnit, { className: 'unit-avatar-img' });
-
-          // 클래스 뱃지
-          const badge = document.createElement('span');
-          badge.className = 'unit-class-badge';
-          badge.textContent = topUnit.classType[0];
-          uDiv.appendChild(badge);
-
-          // 중첩 수량 뱃지 (2기 이상일 때 표시)
-          if (pUnits.length > 1) {
-            const stackBadge = document.createElement('span');
-            stackBadge.className = 'unit-stack-badge';
-            stackBadge.innerHTML = `👥${pUnits.length}`;
-            stackBadge.title = `${pUnits.length}기 아군 중첩 (클릭 시 순환 선택)`;
-            uDiv.appendChild(stackBadge);
-          }
-
-          // 체력 바
-          const hpBar = document.createElement('div');
-          hpBar.className = 'unit-hp-bar';
-          const hpPct = Math.max(0, (topUnit.hp / topUnit.maxHp) * 100);
-          hpBar.innerHTML = `<div class="unit-hp-fill ${hpPct < 35 ? 'low' : ''}" style="width: ${hpPct}%;"></div>`;
-          uDiv.appendChild(hpBar);
-          appendStatusIcons(uDiv, pUnits);
-
-          // 체납 비활성화 표시
-          if (topUnit.isInactivated) {
-            const inactBadge = document.createElement('div');
-            inactBadge.className = 'unit-inactivated-badge';
-            inactBadge.textContent = '정지';
-            uDiv.appendChild(inactBadge);
-          }
-
-          tileDiv.appendChild(uDiv);
+          if (pUnits.length > 1) tileDiv.classList.add('has-stack');
+          tileDiv.appendChild(buildUnitToken(topUnit, pUnits, 'player'));
         } else if (eUnits.length > 0) {
           const topUnit = eUnits.find(e => e.id === debugInspectedEnemyId) || eUnits.slice().sort((a, b) => b.def - a.def)[0];
-
-          if (eUnits.length > 1) {
-            tileDiv.classList.add('has-stack');
-            const underlay = document.createElement('div');
-            underlay.className = 'unit-stacked-underlay enemy-underlay';
-            tileDiv.appendChild(underlay);
-          }
-
-          const uDiv = document.createElement('div');
-          uDiv.className = `unit-avatar unit-enemy ${eUnits.length > 1 ? 'stacked-card' : ''}`;
-          uDiv.innerHTML = renderPortrait(topUnit, { className: 'unit-avatar-img' });
-
-          const badge = document.createElement('span');
-          badge.className = 'unit-class-badge';
-          badge.textContent = topUnit.classType[0];
-          uDiv.appendChild(badge);
-
-          if (eUnits.length > 1) {
-            const stackBadge = document.createElement('span');
-            stackBadge.className = 'unit-stack-badge enemy';
-            stackBadge.innerHTML = `👾${eUnits.length}`;
-            stackBadge.title = `${eUnits.length}기 적군 밀집 중첩`;
-            uDiv.appendChild(stackBadge);
-          }
-
-          const hpBar = document.createElement('div');
-          hpBar.className = 'unit-hp-bar';
-          const hpPct = Math.max(0, (topUnit.hp / topUnit.maxHp) * 100);
-          hpBar.innerHTML = `<div class="unit-hp-fill ${hpPct < 35 ? 'low' : ''}" style="width: ${hpPct}%;"></div>`;
-          uDiv.appendChild(hpBar);
-          appendStatusIcons(uDiv, eUnits);
-
-          tileDiv.appendChild(uDiv);
+          if (eUnits.length > 1) tileDiv.classList.add('has-stack');
+          tileDiv.appendChild(buildUnitToken(topUnit, eUnits, 'enemy'));
         }
 
         // 클릭 이벤트
@@ -2885,6 +2811,99 @@
       });
       decorateDeployPhase(mapEl);
       renderDeployBanner();
+
+      // 직접 선택한 유닛이 바뀐 순간에만 큰 얼굴 말풍선을 띄운다 (재렌더마다 다시 띄우지 않음).
+      // getSelectedUnit()은 선택이 없어도 첫 유닛을 돌려주므로 selectedUnitId로 직접 찾는다.
+      const bubbleUnit = selectedUnitId ? state.playerUnits.find(u => u.id === selectedUnitId && !u.isDead) || null : null;
+      if (bubbleUnit && bubbleUnit.id !== lastTokenBubbleUnitId) showUnitTokenBubble(bubbleUnit, 'player');
+      lastTokenBubbleUnitId = bubbleUnit ? bubbleUnit.id : null;
+    }
+
+    /* --------------------------------------------------------------------------
+       맵 유닛 토큰 — 원형 얼굴 + 팀색 HP 링, 병과·중첩·상태는 원 밖 칩
+       -------------------------------------------------------------------------- */
+    function buildUnitToken(topUnit, stackUnits, side) {
+      const hpPct = Math.max(0, Math.min(100, (topUnit.hp / topUnit.maxHp) * 100));
+      const stacked = stackUnits.length > 1;
+      const uDiv = document.createElement('div');
+      uDiv.className = `unit-avatar unit-token unit-${side}${stacked ? ' stacked-card' : ''}${hpPct < 35 ? ' hp-low' : ''}`;
+      uDiv.dataset.unitId = topUnit.id;
+      uDiv.style.setProperty('--hp', hpPct.toFixed(1));
+      uDiv.title = `${topUnit.name} · HP ${topUnit.hp}/${topUnit.maxHp}`;
+      uDiv.innerHTML = renderPortrait(topUnit, { className: 'unit-token-face' });
+
+      const badge = document.createElement('span');
+      badge.className = 'unit-class-badge';
+      badge.textContent = (topUnit.classType || topUnit.unitClass || '?')[0];
+      uDiv.appendChild(badge);
+
+      if (stacked) {
+        const stackBadge = document.createElement('span');
+        stackBadge.className = `unit-stack-badge${side === 'enemy' ? ' enemy' : ''}`;
+        stackBadge.textContent = stackUnits.length;
+        stackBadge.title = side === 'enemy'
+          ? `${stackUnits.length}기 적군 밀집 중첩`
+          : `${stackUnits.length}기 아군 중첩 (클릭 시 순환 선택)`;
+        uDiv.appendChild(stackBadge);
+      }
+      appendStatusIcons(uDiv, stackUnits);
+
+      if (topUnit.isInactivated) {
+        const inactBadge = document.createElement('div');
+        inactBadge.className = 'unit-inactivated-badge';
+        inactBadge.textContent = '정지';
+        uDiv.appendChild(inactBadge);
+      }
+      return uDiv;
+    }
+
+    // 선택/정찰한 유닛 위에 큰 얼굴 + 이름·HP 말풍선을 잠깐 띄운다.
+    // #viewport에 붙이므로 그리드가 다시 그려져도 사라지지 않는다.
+    let lastTokenBubbleUnitId = null;
+    let tokenBubbleTimer = null;
+
+    function showUnitTokenBubble(unit, side) {
+      const viewport = document.getElementById('viewport');
+      const tileEl = document.querySelector(`#grid-map .tile[data-x="${unit.x}"][data-y="${unit.y}"]`);
+      if (!viewport || !tileEl) return;
+      viewport.querySelector('.unit-token-bubble')?.remove();
+      clearTimeout(tokenBubbleTimer);
+
+      const hpPct = Math.max(0, Math.min(100, (unit.hp / unit.maxHp) * 100));
+      const cls = unit.classType || unit.unitClass;
+      const clsName = (CLASS_META[cls]?.name || cls || '').split(' ')[0];
+      const bubble = document.createElement('div');
+      bubble.className = `unit-token-bubble ${side}`;
+      bubble.innerHTML = `
+        <div class="utb-face">${renderPortrait(unit, { emojiSize: '34px' })}</div>
+        <div class="utb-info">
+          <div class="utb-name"></div>
+          <div class="utb-meta">${side === 'enemy' ? '적' : '아군'} · ${escapeGachaHtml(clsName)} · Lv.${unit.level || 1}</div>
+          <div class="utb-hp"><i class="${hpPct < 35 ? 'low' : ''}" style="width:${hpPct}%"></i></div>
+          <div class="utb-meta">HP ${unit.hp}/${unit.maxHp}</div>
+        </div>`;
+      bubble.querySelector('.utb-name').textContent = unit.name;
+      viewport.appendChild(bubble);
+
+      // 타일 위에 띄우고, 위쪽 공간이 없으면 아래로 뒤집는다. 좌우는 화면 안으로 맞춘다.
+      const vr = viewport.getBoundingClientRect();
+      const tr = tileEl.getBoundingClientRect();
+      const bw = bubble.offsetWidth, bh = bubble.offsetHeight, gap = 10;
+      const tileCx = tr.left - vr.left + tr.width / 2;
+      const left = Math.min(Math.max(tileCx - bw / 2, 4), vr.width - bw - 4);
+      let top = tr.top - vr.top - bh - gap;
+      if (top < 4) {
+        top = tr.bottom - vr.top + gap;
+        bubble.classList.add('below');
+      }
+      bubble.style.left = `${left}px`;
+      bubble.style.top = `${top}px`;
+      bubble.style.setProperty('--tail', `${tileCx - left - 6}px`);
+
+      tokenBubbleTimer = setTimeout(() => {
+        bubble.classList.add('fade');
+        setTimeout(() => bubble.remove(), 300);
+      }, 2500);
     }
 
     function onTileClicked(tile) {
@@ -2979,6 +2998,7 @@
           const defUnit = eUnits.find(e => e.id === debugInspectedEnemyId) || eUnits.slice().sort((a, b) => b.def - a.def)[0];
           debugInspectedEnemyId = defUnit.id;
           cardInspectedEnemyId = defUnit.id;
+          showUnitTokenBubble(defUnit, 'enemy');
           const stackNote = eUnits.length > 1 ? ` (적군 총 ${eUnits.length}기 밀집 중첩!)` : '';
           addLog(`🔍 [사거리 밖 적 정찰] ${defUnit.name} (공 ${defUnit.atk}, 방 ${defUnit.def}, HP ${defUnit.hp}/${defUnit.maxHp})${stackNote} - 현재 사거리(${range}칸) 밖입니다.`, 'combat');
           updateDebugInspector();
@@ -3021,6 +3041,7 @@
       if (eUnits.length > 0) {
         const defUnit = eUnits[0];
         debugInspectedEnemyId = defUnit.id;
+        showUnitTokenBubble(defUnit, 'enemy');
         addLog(`🔍 [적 정찰] ${defUnit.name} (공 ${defUnit.atk}, 방 ${defUnit.def}, HP ${defUnit.hp}/${defUnit.maxHp})`, 'combat');
         updateDebugInspector();
         return;
