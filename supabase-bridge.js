@@ -38,6 +38,33 @@ async function deleteRecord(collection, id) {
   if (error) throw error;
   return true;
 }
+// 동시 수정 방지 저장: data.rev가 expectedRev일 때만 덮어쓴다. expectedRev가 null이면 "없을 때만 새로 만들기".
+// 다른 사람이 먼저 바꿨으면 false (다시 읽고 다시 시도해야 한다).
+async function casRecord(collection, id, expectedRev, value) {
+  const now = new Date().toISOString();
+  if (expectedRev == null) {
+    const payload = { collection_name: collection, record_id: String(id), data: clean(value), updated_at: now };
+    const { data, error } = await requireClient().from(TABLE).upsert(payload, { onConflict: 'collection_name,record_id', ignoreDuplicates: true }).select('record_id');
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
+  }
+  const { data, error } = await requireClient().from(TABLE).update({ data: clean(value), updated_at: now })
+    .eq('collection_name', collection).eq('record_id', String(id)).eq('data->>rev', String(expectedRev)).select('record_id');
+  if (error) throw error;
+  return Array.isArray(data) && data.length > 0;
+}
+// 서버 시각(ms). supabase-schema.sql의 slg_server_time()이 있으면 그걸 쓰고, 없으면
+// 임시 행을 하나 넣어 DB 기본값 now()로 찍힌 updated_at을 읽은 뒤 지운다.
+async function getServerTime() {
+  const c = requireClient();
+  const rpc = await c.rpc('slg_server_time');
+  if (!rpc.error && rpc.data) return Date.parse(rpc.data);
+  const rid = `clock_${uid()}`;
+  const { data, error } = await c.from(TABLE).insert({ collection_name: 'serverClock', record_id: rid, data: {} }).select('updated_at').single();
+  if (error) throw error;
+  c.from(TABLE).delete().eq('collection_name', 'serverClock').eq('record_id', rid).then(() => {}, () => {});
+  return Date.parse(data.updated_at);
+}
 async function uploadAsset(input, folder, filename) {
   if (!client) return typeof input === 'string' ? input : '';
   try {
@@ -174,6 +201,11 @@ const bridge = {
     if(dryRun) console.info('[migrateScenarioMaps] 미리보기입니다. 실제로 옮기려면 migrateScenarioMaps({ dryRun:false })');
     return report;
   },
+  // 국가 지분 (nationShares/{regionId}, 전 플레이어 공유). 오류는 던진다 — nationShares.js가 처리.
+  listNationShares(){return listRecords('nationShares');},
+  getNationShare(id){return getRecord('nationShares',id);},
+  casNationShare(id,expectedRev,value){return casRecord('nationShares',id,expectedRev,value);},
+  getServerTime(){return getServerTime();},
   async saveGameStateToCloud(payload){try{const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
   async loadGameStateFromCloud(uid){try{return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
   subscribeGameState(uid,cb){return subscribeOne('gameState',uid||this.currentUser?.uid||'guest_main',cb);}

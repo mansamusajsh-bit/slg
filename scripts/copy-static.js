@@ -19,6 +19,8 @@ const STATIC_FILES = [
   'skill-system.css',
   'ui.js',
   'game.js',
+  'shareEngine.js',
+  'nationShares.js',
   'campaignMap.js',
   'civ4-editor.js',
   'supabase-bridge.js',

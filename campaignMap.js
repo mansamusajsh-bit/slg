@@ -189,11 +189,110 @@
     const labels = Object.values(REGIONS).map((r) => {
       const status = regionStatus(campaign, r.id);
       const mark = status === 'locked' ? '🔒 ' : status === 'secured' ? '🏴 ' : status === 'current' ? '⚔️ ' : '';
-      return `<text class="cmp-label is-${status}" x="${r.label.x}" y="${r.label.y}">${mark}${esc(r.name.ko)}</text>`;
+      const mine = myShareBp(r.id);
+      const share = mine ? `<tspan class="cmp-label-share" x="${r.label.x}" dy="26">📈 ${fmtPct(mine)}</tspan>` : '';
+      return `<text class="cmp-label is-${status}" x="${r.label.x}" y="${r.label.y}">${mark}${esc(r.name.ko)}${share}</text>`;
     }).join('');
     svg.querySelector('.cmp-regions').innerHTML = paths;
     svg.querySelector('.cmp-labels').innerHTML = labels;
     return svg;
+  }
+
+  // ------------------------------------------------------------
+  // 국가 지분 패널 (로직은 nationShares.js / shareEngine.js)
+  // ------------------------------------------------------------
+  const BUY_STEPS = [100, 500, 1000]; // 1% · 5% · 10%
+  const SHARE_COLORS = ['#64748b', '#94a3b8', '#475569', '#a8a29e', '#78716c', '#cbd5e1'];
+
+  const fmtPct = (bp) => `${(bp / 100).toFixed(bp % 100 ? 2 : 0)}%`;
+  function myShareBp(regionId) {
+    const NS = global.NationShares;
+    if (!NS) return 0;
+    const v = NS.view(regionId);
+    return v.nation ? v.nation.mine : 0;
+  }
+  function fmtCountdown(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    const p = (n) => String(n).padStart(2, '0');
+    return `${p(Math.floor(s / 3600))}:${p(Math.floor((s % 3600) / 60))}:${p(s % 60)}`;
+  }
+
+  function renderSharePanel(campaign, sel) {
+    const NS = global.NationShares;
+    if (!NS) return '';
+    const v = NS.view(sel ? sel.id : null);
+    const gold = Number(state.gold) || 0;
+    const head = `
+      <div class="strat-section-header">
+        <h2 class="strat-section-title">📈 국가 지분</h2>
+        <span class="strat-section-sub" title="지분 보유 플레이어 ${v.realHolders}명 · 서버 시각 기준">⏱️ ${v.hours}시간 주기 · 다음 정산 <b data-share-countdown data-at="${v.nextAt}">${fmtCountdown(v.nextAt - v.now)}</b></span>
+      </div>`;
+    if (!v.ready) return `<section class="strat-section-card cmp-share-card">${head}<p class="cmp-share-empty">지분 현황을 불러오는 중…</p></section>`;
+
+    let body = '';
+    if (sel && v.nation) {
+      const n = v.nation;
+      let ci = 0;
+      const segs = n.holders.map((h) => {
+        const isMe = h.id === v.myId;
+        return { ...h, isMe, color: isMe ? '#16a34a' : SHARE_COLORS[ci++ % SHARE_COLORS.length] };
+      });
+      const bar = segs.map((h) => `<span style="width:${h.bp / 100}%;background:${h.color}" title="${esc(h.name)} ${fmtPct(h.bp)}"></span>`).join('')
+        + (n.unowned ? `<span class="is-unowned" style="width:${n.unowned / 100}%" title="무주 ${fmtPct(n.unowned)}"></span>` : '');
+      const rows = segs.map((h) => `<li class="${h.isMe ? 'is-me' : ''}"><i style="background:${h.color}"></i><span>${esc(h.name)}${h.isMe ? ' (나)' : ''}</span><b>${fmtPct(h.bp)}</b></li>`).join('')
+        + (n.unowned ? `<li class="is-unowned"><i></i><span>무주 지분</span><b>${fmtPct(n.unowned)}</b></li>` : '');
+
+      let buy;
+      if (v.right > 0) {
+        const steps = [...BUY_STEPS.filter((bp) => bp < v.right), v.right];
+        const btns = steps.map((bp) => {
+          const q = NS.quote(sel.id, bp);
+          const can = q && q.bp === bp && q.cost <= gold && !v.busy;
+          return `<button type="button" class="cmp-share-buy-btn" data-share-buy="${bp}" ${can ? '' : 'disabled'}>+${fmtPct(bp)}<small>${q ? q.cost : '-'}G</small></button>`;
+        }).join('');
+        const afford = NS.maxAffordableBp(sel.id);
+        const maxBtn = afford > 0 && !steps.includes(afford)
+          ? `<button type="button" class="cmp-share-buy-btn is-max" data-share-buy="${afford}" ${v.busy ? 'disabled' : ''}>최대 +${fmtPct(afford)}<small>${NS.quote(sel.id, afford).cost}G</small></button>` : '';
+        buy = `<div class="cmp-share-buy">
+            <div class="cmp-share-buy-head">📜 구매권 남은 <b>${fmtPct(v.right)}</b><small>무주 지분부터, 모자라면 기존 보유자에게서 할증가로 사 옵니다</small></div>
+            <div class="cmp-share-buy-row">${btns}${maxBtn}</div>
+          </div>`;
+      } else if (regionStatus(campaign, sel.id) === 'secured') {
+        buy = '<p class="cmp-share-note">📜 이번 회차 구매권을 모두 썼습니다.</p>';
+      } else {
+        buy = '<p class="cmp-share-note">📜 이 국가를 점령하면 지분 구매권을 얻습니다.</p>';
+      }
+      body = `
+        <div class="cmp-share-region">
+          <div class="cmp-share-sub"><b>${esc(sel.title.ko)}</b><span>세수 ${n.taxPerSettlement}G / 정산</span><span>내 지분 <b class="cmp-share-mine">${fmtPct(n.mine)}</b></span></div>
+          <div class="cmp-share-bar">${bar}</div>
+          <ul class="cmp-share-list">${rows}</ul>
+          ${buy}
+        </div>`;
+    } else if (v.holdings.length) {
+      body = `<ul class="cmp-share-list is-mine">${v.holdings.map((h) => `<li><i style="background:#16a34a"></i><span>${esc(REGIONS[h.regionId].title.ko)}</span><b>${fmtPct(h.bp)}</b></li>`).join('')}</ul>`;
+    } else {
+      body = '<p class="cmp-share-empty">보유 지분이 없습니다. 국가를 점령하면 그 국가의 지분 구매권이 생깁니다.</p>';
+    }
+    const last = v.last ? ` · 최근 정산 +${v.last.total}G` : '';
+    return `<section class="strat-section-card cmp-share-card">${head}${body}
+      <div class="cmp-share-foot">정산당 예상 세수 <b>+${v.perSettlement}G</b>${last}${v.cloud ? '' : ' · <span title="Supabase 미연결: 이 탭 안에서만 유지됩니다">오프라인</span>'}</div>
+    </section>`;
+  }
+
+  // 1초마다 카운트다운 갱신 + 작전지도에 있으면 지분 기록을 주기적으로 다시 읽는다 (새로 읽으면 다시 그림).
+  // 정산 시각이 지나면 바로 다시 읽어 세금을 받는다.
+  let shareTicker = null;
+  function startShareTicker() {
+    if (shareTicker || !global.NationShares) return;
+    shareTicker = setInterval(() => {
+      if (!getState() || state.currentView !== 'CAMPAIGN') return;
+      const NS = global.NationShares;
+      const el = document.querySelector('#campaign-map-body [data-share-countdown]');
+      const left = el ? Number(el.dataset.at) - NS.serverNow() : 1;
+      if (el) el.textContent = fmtCountdown(left);
+      NS.refresh(left <= 0).then((changed) => { if (changed && state.currentView === 'CAMPAIGN') render(); });
+    }, 1000);
   }
 
   // ------------------------------------------------------------
@@ -265,6 +364,7 @@
           </div>
         </div>
       </section>
+      ${renderSharePanel(campaign, sel)}
       <footer class="strat-bottom-action-bar cmp-action-bar">
         <div class="strat-action-summary">
           <span class="strat-action-dest">${esc(summaryDest)}</span>
@@ -282,6 +382,14 @@
       el.addEventListener('click', pick);
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
     });
+    root.querySelectorAll('[data-share-buy]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        btn.disabled = true;
+        await global.NationShares.buy(selectedRegionId, Number(btn.dataset.shareBuy));
+        render();
+      });
+    });
+    startShareTicker();
     root.querySelector('[data-cmp-appoint]')?.addEventListener('click', () => (adjutant ? openSkillsModal() : openAdjutantSelect(true)));
     root.querySelector('[data-cmp-launch]')?.addEventListener('click', async () => {
       const target = campaign.currentRegionId || selectedRegionId;

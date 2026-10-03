@@ -33,3 +33,7 @@ create policy "SLG assets public read" on storage.objects for select to anon, au
 create policy "SLG assets public upload" on storage.objects for insert to anon, authenticated with check (bucket_id = 'slg-assets');
 create policy "SLG assets public update" on storage.objects for update to anon, authenticated using (bucket_id = 'slg-assets') with check (bucket_id = 'slg-assets');
 create policy "SLG assets public delete" on storage.objects for delete to anon, authenticated using (bucket_id = 'slg-assets');
+
+-- 국가 지분 세금 정산용 서버 시각 (nationShares). 없어도 동작하지만(임시 행으로 대체) 있으면 왕복이 1번으로 준다.
+create or replace function public.slg_server_time() returns timestamptz language sql stable as $$ select now() $$;
+grant execute on function public.slg_server_time() to anon, authenticated;

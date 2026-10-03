@@ -9841,6 +9841,7 @@
       const regionId = getCurrentRegionId(run);
       if (!regionId) return null;
       const unlocked = secureRegion(run.campaign, regionId);
+      if (window.NationShares) window.NationShares.onRegionSecured(regionId); // 점령 → 지분 구매권
       const final = regionId === CAMPAIGN_MAP.finalRegionId;
       run.campaign.currentRegionId = null;
       run.campaign.lastSecured = { regionId, unlocked, final }; // 작전지도 브리핑이 한 번 읽고 지운다
@@ -10082,6 +10083,7 @@
         const seed = run.seed; // 같은 세계를 반복
         const reward = await openLoopRewardSelect(seed);
         const echo = run.lastStanding || null;
+        if (window.NationShares) await window.NationShares.onReturnByDeath(); // 국가 지분도 회귀와 함께 사라진다
         state.run = createInitialRun(seed, reward);
         // 잔향: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
         if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {
