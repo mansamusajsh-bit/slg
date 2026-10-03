@@ -572,6 +572,19 @@
     return moved;
   }
 
+  // 적과 위치 교환은 양쪽 칸이 혼자일 때만: 겹친 부대가 있으면 적과 아군이 한 칸에 섞이게 된다.
+  function getSwapBlockReason(caster, skill, targets) {
+    if (!skill.effects.some(e => e.type === 'SWAP')) return null;
+    for (const u of targets) {
+      if (u.isDead || u.id === caster.id || !isHostileTo(caster, u)) continue;
+      const stackedAllies = allUnits().some(o => o.id !== caster.id && o.x === caster.x && o.y === caster.y && !isHostileTo(caster, o));
+      if (stackedAllies) return '위치 교환 실패 — 아군 부대와 겹쳐 있어 적과 자리를 바꿀 수 없습니다.';
+      const stackedEnemies = allUnits().some(o => o.id !== u.id && o.x === u.x && o.y === u.y && isHostileTo(caster, o));
+      if (stackedEnemies) return '위치 교환 실패 — 대상이 다른 적과 겹쳐 있어 자리를 바꿀 수 없습니다.';
+    }
+    return null;
+  }
+
   // --------------------------------------------------------------------------
   // 시전
   // --------------------------------------------------------------------------
@@ -585,6 +598,8 @@
     if (!isValidTarget(caster, skill, x, y)) return { ok: false, reason: '사거리 밖이거나 올바르지 않은 대상입니다.' };
 
     const targets = getAffectedUnits(caster, skill, x, y);
+    const swapBlocked = getSwapBlockReason(caster, skill, targets);
+    if (swapBlocked) return { ok: false, reason: swapBlocked };
     const results = [];
     const pushResult = (unit, text, color) => results.push({ unit, x: unit.x, y: unit.y, text, color });
     const atk = num(caster.atk, 40);

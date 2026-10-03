@@ -7146,6 +7146,7 @@
       const res = SkillEngine.cast(unit, skill, x, y);
       if (!res.ok) {
         addLog(`⚠️ [${skill.name}] ${res.reason}`, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(`${skill.name}: ${res.reason}`, 'warning');
         return false;
       }
       cancelSkillTargeting(true);
@@ -8116,6 +8117,7 @@
     window.checkCommandRefusal = checkCommandRefusal;
     window.executeAttack = executeAttack;
     window.applyPromotion = applyPromotion;
+    window.awardPromotionXp = awardPromotionXp;
     window.calculateCombatModifiers = calculateCombatModifiers;
     window.addSkillToTree = addSkillToTree;
     window.updateSkillImage = updateSkillImage;
@@ -8177,11 +8179,40 @@
       if (isPlayer && state.commander?.unlockedSkills?.CommanderLeadership) {
         gained = roundStochastic(amount * (1 + LEADERSHIP_XP_BONUS));
       }
+      const affordableBefore = isPlayer ? getAffordablePromotions(unit).length : 0;
       unit.xp = (unit.xp || 0) + gained;
       if (isPlayer) {
         const bonusText = gained > amount ? ` (통솔 +${gained - amount})` : '';
         addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${gained} XP${bonusText} (보유 ${unit.xp} XP)`, 'gold');
+        // 이번 경험치로 처음 승급할 수 있게 되면 안내 (이미 승급 가능 상태였으면 다시 띄우지 않는다)
+        const affordable = getAffordablePromotions(unit);
+        if (!affordableBefore && affordable.length) {
+          window.UI?.showGrowthNotice?.({
+            key: `promo-${unit.id}`, icon: '🎖️', title: `${unit.name} 승급 가능!`,
+            lines: [
+              `병과 경험치 ${unit.xp} XP — 승급할 수 있습니다.`,
+              `가능: ${affordable.slice(0, 3).map(p => p.name).join(', ')}${affordable.length > 3 ? ` 외 ${affordable.length - 3}개` : ''}`,
+              '승급 창에서 승급을 고르고, 스킬트리 탭에서 스킬도 확인하세요.'
+            ],
+            actionLabel: '🎖️ 승급하러 가기',
+            onAction: () => window.UI?.renderPromotionMenu?.(unit)
+          });
+        }
       }
+    }
+
+    // 지금 XP로 바로 습득할 수 있는 승급 목록 (병과 제한 · 선행 조건 · 보유 여부 반영)
+    function getAffordablePromotions(unit) {
+      const data = window.PROMOTION_DATA || {};
+      const owned = getUnitPromotionIds(unit);
+      const unitClass = unit.classType || unit.class || 'MELEE';
+      const xp = unit.xp || 0;
+      return Object.values(data).filter(p =>
+        !owned.includes(p.id)
+        && (typeof window.isPromotionAllowed !== 'function' || window.isPromotionAllowed(unitClass, p.category))
+        && (!Array.isArray(p.prereqs) || p.prereqs.every(id => owned.includes(id)))
+        && xp >= getPromotionXpCost(p.level)
+      );
     }
 
     function applyPromotion(unit, promotionId) {
@@ -8262,7 +8293,6 @@
       );
 
       renderAll();
-      notifyUnitGrowth(unit, `${unit.name} 승급! [${promoData.name}]`, [promoData.effects?.description || '전투 능력 강화', `HP +${actualHealed} 회복`]);
 
       return true;
     }
