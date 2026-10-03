@@ -6000,6 +6000,9 @@
             </div>
 
             <div style="display: flex; gap: 4px; flex-shrink: 0;">
+              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #7c3aed;" onclick="openCharacterRenameEditor('${c.id}')" title="이름 변경">
+                ✏️ 이름
+              </button>
               <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0284c7;" onclick="openCharacterSkillTreeEditor('${c.id}')" title="스킬 · 스킬트리 편집">
                 🌳 트리
               </button>
@@ -6740,6 +6743,58 @@
       };
     }
     window.openCharacterSkillTreeEditor = openCharacterSkillTreeEditor;
+
+    // 보관함 캐릭터의 이름 변경 (저장 시 클라우드 레코드와 전장의 같은 캐릭터에 반영)
+    function openCharacterRenameEditor(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record) return;
+      document.getElementById('rename-char-modal')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'rename-char-modal';
+      overlay.className = 'sk-modal-overlay';
+      overlay.innerHTML = `
+        <div class="sk-modal" style="max-width: 360px;">
+          <div class="sk-modal-head"><span>✏️ 이름 변경</span><button class="btn-close" data-close>✕</button></div>
+          <div class="sk-modal-body">
+            <label class="dbg-form-label" for="rename-char-input">캐릭터 이름</label>
+            <input type="text" id="rename-char-input" class="dbg-form-control" maxlength="30" placeholder="캐릭터명 입력" />
+          </div>
+          <div class="sk-modal-foot">
+            <button class="btn-cheat" style="background:#64748b;" data-close>닫기</button>
+            <button class="btn-cheat purple" data-save>💾 이름 저장</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const input = overlay.querySelector('#rename-char-input');
+      input.value = record.name || '';
+      const close = () => overlay.remove();
+      overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      const save = () => {
+        const newName = input.value.trim();
+        if (!newName) { input.focus(); return; }
+        const oldName = record.name;
+        if (newName === oldName) { close(); return; }
+        record.name = newName;
+        if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+        // 같은 캐릭터에서 나온 유닛 중 원래 이름을 쓰던 것만 바꾼다 (전사 후 다른 이름으로 고용된 경우는 유지)
+        [...(state.playerUnits || []), ...(state.enemyUnits || [])].forEach(u => {
+          if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+          if (u !== record && u.name === oldName) u.name = newName;
+        });
+        saveGameState(true);
+        renderAll();
+        renderCustomCharactersList();
+        updateFullShotOverlay();
+        addLog(`✏️ [이름 변경] ${oldName} → ${newName}`, 'gold');
+        close();
+      };
+      overlay.querySelector('[data-save]').onclick = save;
+      input.onkeydown = (e) => { if (e.key === 'Enter') save(); else if (e.key === 'Escape') close(); };
+      input.focus();
+      input.select();
+    }
+    window.openCharacterRenameEditor = openCharacterRenameEditor;
 
     function deleteSavedCustomCharacter(charId) {
       customCharactersCloudCache = customCharactersCloudCache.filter(c => c.id !== charId);
