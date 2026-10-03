@@ -351,10 +351,11 @@
 
     // 유물 효과 중 출전 인원을 늘리는 것. commanderAP는 출격 AP가 있던 시절의 유물 데이터(같은 의미로 읽는다).
     const LEADERSHIP_RELIC_STATS = ['leadership', 'deploySlots', 'commanderAP'];
+    // 지휘관 유물은 이 개수까지만 장착할 수 있고, 장착한 것만 효과가 난다.
+    const COMMANDER_RELIC_SLOTS = 3;
 
     function getRelicLeadershipBonus() {
-      return getOwnedRelics()
-        .filter(r => r.kind === 'commander')
+      return getEquippedCommanderRelics()
         .reduce((sum, r) => sum + (r.effects || [])
           .filter(fx => fx && LEADERSHIP_RELIC_STATS.includes(fx.stat))
           .reduce((acc, fx) => acc + (Number(fx.value) || 0), 0), 0);
@@ -524,6 +525,8 @@
       // 보유 유물 (회귀하면 사라진다). 보스 유물 3택1을 고르는 중이면 pendingRelicChoice에 후보가 남는다.
       run.relics = [];
       run.pendingRelicChoice = null;
+      // 장착한 지휘관 유물의 instanceId (최대 COMMANDER_RELIC_SLOTS개). 장착한 것만 효과가 난다.
+      run.equippedRelics = [];
       // 진행 중인 전술 전투. run 아래에 있으므로 회귀(새 run)와 함께 사라진다.
       run.currentBattle = null;
       applyLoopRewardToRun(run, loopReward);
@@ -572,6 +575,13 @@
       }
       if (!('adjutant' in nextRun)) nextRun.adjutant = null;
       if (!('currentBattle' in nextRun)) nextRun.currentBattle = null;
+      // 장착 슬롯 이전 세이브: 갖고 있던 지휘관 유물을 앞에서부터 슬롯 수만큼 장착해 둔다 (예전엔 전부 적용됐다).
+      if (!Array.isArray(nextRun.equippedRelics)) {
+        nextRun.equippedRelics = (Array.isArray(nextRun.relics) ? nextRun.relics : [])
+          .filter(r => r && r.kind === 'commander' && r.instanceId)
+          .slice(0, COMMANDER_RELIC_SLOTS)
+          .map(r => r.instanceId);
+      }
       state.run = nextRun;
       return nextRun;
     }
@@ -3661,6 +3671,89 @@
         }));
     }
 
+    // ------------------------------------------------------------------------
+    // 전략맵 '출현 적' 정보: WORLD_SECTORS의 설명 문구(enemyForce)가 아니라 실제 전투와 같은 규칙으로 만든다.
+    //   후보 = buildEnemyPool (캐릭터 풀), 레벨 = 섹터 난이도 + 노드 타입,
+    //   인원 = 전술맵 템플릿의 적 스폰 지점 수 (MapSchema.generateBattleMapWithSeed와 같은 범위).
+    //   맵에 적을 직접 배치한 고정 전투면 그 적들을 그대로, 예지/기억으로 아는 노드면 이번 전장의 적을 정확히 보여 준다.
+    // ------------------------------------------------------------------------
+    const enemyIntelTemplateCache = new Map(); // templateId → Promise<template|null>
+
+    function getNodeTemplateId(node, sector) {
+      return node.mapTemplateId || sector.mapTemplateId || sector.defaultTemplateId || MapSchema.resolveDefaultTemplateId(node.sectorId);
+    }
+
+    function loadEnemyIntelTemplate(templateId) {
+      if (!enemyIntelTemplateCache.has(templateId)) {
+        enemyIntelTemplateCache.set(templateId, loadTacticalMapTemplate(templateId).catch(err => {
+          enemyIntelTemplateCache.delete(templateId); // 다음에 다시 시도
+          console.warn('[Strategy] 출현 적 계산용 템플릿 로드 실패', err);
+          return null;
+        }));
+      }
+      return enemyIntelTemplateCache.get(templateId);
+    }
+
+    function getEnemyLevelFor(sector, nodeType) {
+      const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
+      const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
+      return diff.level + typ.levelBonus;
+    }
+
+    function formatEnemyNames(list, max = 4) {
+      const names = list.map(e => `${e.avatar || '👤'} ${e.name}`);
+      return names.length > max ? `${names.slice(0, max).join(', ')} 외 ${names.length - max}명` : names.join(', ');
+    }
+
+    /** 템플릿 없이 알 수 있는 부분 (후보·레벨). 템플릿을 불러오면 summarizeNodeEnemies가 인원까지 채운다. */
+    function summarizeNodeEnemiesQuick(node, sector) {
+      const pool = buildEnemyPool(sector, node.type);
+      if (!pool.length) return '캐릭터 풀을 불러오는 중…';
+      return `Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
+    }
+
+    async function summarizeNodeEnemies(node, sector) {
+      const run = state.run;
+      // 예지/기억/기시감으로 이번 전장을 아는 노드: 실제로 나올 적을 그대로
+      const knows = isForeseenNode(run, node.id) || (getDeathMemory(run, node.id) && getNodeAttempts(run, node.id) === 0);
+      if (knows) {
+        const p = await previewNode(node);
+        if (p && Array.isArray(p.enemies) && !p.error && !p.retry) {
+          return `적 ${p.enemies.length}명: ${p.enemies.map(e => `${e.avatar} ${e.name} Lv.${e.level}`).join(', ') || '없음'}`;
+        }
+      }
+      await ensureCharacterPoolLoaded();
+      const template = await loadEnemyIntelTemplate(getNodeTemplateId(node, sector));
+      if (!template) return `${summarizeNodeEnemiesQuick(node, sector)} (전술맵 없음)`;
+      const manual = (template.metadata && Array.isArray(template.metadata.units) ? template.metadata.units : [])
+        .filter(u => u && (u.owner === 'ENEMY' || u.side === 'ENEMY'));
+      if (manual.length) {
+        // 맵에 직접 배치한 적 = 고정 전투. 매번 같은 적이 나온다.
+        return `적 ${manual.length}명 (고정 배치): ${formatEnemyNames(manual, 6)}`;
+      }
+      const pool = buildEnemyPool(sector, node.type);
+      if (!pool.length) return '적으로 쓸 캐릭터가 없습니다';
+      const spawns = (template.spawnPoints && Array.isArray(template.spawnPoints.enemy)) ? template.spawnPoints.enemy.length : 0;
+      // MapSchema.generateBattleMapWithSeed: 스폰 n개(n>1) 중 ceil(n/2)~n개 사용 / 스폰이 없으면 빈 땅에 2~4명
+      const [min, max] = spawns > 1 ? [Math.ceil(spawns / 2), spawns] : spawns === 1 ? [1, 1] : [2, 4];
+      const count = min === max ? `${min}명` : `${min}~${max}명`;
+      return `적 ${count} · Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
+    }
+
+    // el에 출현 적 정보를 채운다 (먼저 바로 아는 부분, 템플릿을 불러온 뒤 전체). 그 사이 노드가 바뀌면 덮어쓰지 않는다.
+    function renderNodeEnemyIntel(el, node, sector) {
+      if (!el || !node) return;
+      const token = String(Math.random());
+      el.dataset.intelToken = token;
+      el.textContent = summarizeNodeEnemiesQuick(node, sector);
+      el.title = '';
+      summarizeNodeEnemies(node, sector).then(text => {
+        if (el.dataset.intelToken !== token) return;
+        el.textContent = text;
+        el.title = text;
+      }).catch(err => console.warn('[Strategy] 출현 적 정보 계산 실패', err));
+    }
+
     // 0. Encounter 진입점 — 2단계: Sector → TacticalMapTemplate → CurrentBattle 순서로만 조립한다.
     /**
      * 전술 맵 템플릿 로더. tacticalMapTemplates/{templateId}만 조회한다.
@@ -4410,14 +4503,17 @@
         diffBadge.textContent = `${curSec.difficulty} ${curSec.stars}`;
       }
       if (descEl) descEl.textContent = curSec.terrainDesc;
-      if (enemyEl) enemyEl.textContent = curSec.enemyForce;
+      if (enemyEl) {
+        if (selNode && selNodeIsBattle) renderNodeEnemyIntel(enemyEl, selNode, curSec);
+        else enemyEl.textContent = curSec.enemyForce;
+      }
       if (powerEl) powerEl.textContent = `${curSec.recPower} PWR`;
       if (upkeepEl) upkeepEl.textContent = `${curSec.upkeep}G / 턴`;
       if (rewardEl) rewardEl.textContent = curSec.clearReward;
       if (!selNodeIsBattle) {
         // 이벤트/상점 노드에는 적이 없다.
         if (descEl) descEl.textContent = selNode.type === 'shop' ? '군수 물자를 구입할 수 있는 보급 거점입니다.' : '전투 없이 무작위 사건이 벌어지는 구역입니다.';
-        if (enemyEl) enemyEl.textContent = '— (전투 없음)';
+        if (enemyEl) { enemyEl.dataset.intelToken = ''; enemyEl.textContent = '— (전투 없음)'; enemyEl.title = ''; }
         if (powerEl) powerEl.textContent = '—';
         if (upkeepEl) upkeepEl.textContent = '—';
         if (rewardEl) rewardEl.textContent = selNode.type === 'shop' ? '골드로 구매' : '사건 결과에 따름';
@@ -4708,7 +4804,7 @@
       const leadershipEl = document.getElementById('deploy-sim-leadership');
       if (leadershipEl) leadershipEl.textContent = `${totalUnits} / ${maxLeadership}부대`;
       if (enemyPowerEl) enemyPowerEl.textContent = `${curSec.recPower} PWR`;
-      if (enemyNameEl) enemyNameEl.textContent = curSec.enemyForce;
+      if (enemyNameEl) renderNodeEnemyIntel(enemyNameEl, selNode, curSec);
       if (diffEl) {
         diffEl.className = `strat-diff-badge ${curSec.difficulty.toLowerCase()}`;
         diffEl.textContent = `${curSec.difficulty} ${curSec.stars}`;
@@ -5010,21 +5106,52 @@
       if (!list) return;
       const levelPart = getLeadershipForLevel(state.commander ? state.commander.level : 1);
       const relicPart = getRelicLeadershipBonus();
+      const equipped = getEquippedCommanderRelics();
+      const locked = isCharacterPoolLocked();
       const summary = `
         <div class="relic-summary">
           <span>👑 통솔력 <b>${levelPart + relicPart}부대</b></span>
           <small>지휘관 Lv.${state.commander ? state.commander.level : 1} ${levelPart}부대${relicPart ? ` + 유물 ${relicPart}부대` : ''}</small>
         </div>
-        <div class="relic-note">유물은 전투 승리 보상으로 얻습니다 (보스는 3개 중 1개 선택). 지금은 통솔력 효과만 게임에 적용되고, 나머지 효과는 준비 중입니다. 회귀하면 유물은 사라집니다.</div>`;
+        <div class="relic-note">지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지 장착할 수 있고 장착한 것만 효과가 납니다 (지금은 통솔력 효과만 적용). 선물 유물은 캐릭터에게 선물하면 그 캐릭터의 능력치가 오릅니다. 회귀하면 유물은 사라집니다.</div>`;
       const pending = state.run && state.run.pendingRelicChoice
         ? `<button type="button" class="adj-btn relic-pending-btn" onclick="openRelicChoiceModal()">👑 보스 유물 선택이 남아 있습니다 — 고르기</button>` : '';
-      const section = (title, items) => items.length
-        ? `<div class="relic-section-title">${title} <small>${items.length}</small></div><div class="relic-grid">${items.map(r => relicCardHtml(r)).join('')}</div>` : '';
+      const slots = Array.from({ length: COMMANDER_RELIC_SLOTS }, (_, i) => {
+        const r = equipped[i];
+        if (!r) return `<div class="relic-slot empty"><span class="relic-slot-no">${i + 1}</span><span>빈 슬롯</span></div>`;
+        const rarity = RELIC_RARITY_META[r.rarity] || RELIC_RARITY_META.common;
+        return `
+          <button type="button" class="relic-slot" style="--relic-color:${rarity.color}" data-relic-unequip="${escapeGachaHtml(r.instanceId)}" ${locked ? 'disabled' : ''} title="눌러서 장착 해제">
+            <span class="relic-slot-no">${i + 1}</span>
+            <span class="relic-icon">${r.imageUrl ? `<img src="${escapeGachaHtml(r.imageUrl)}" alt="">` : '💎'}</span>
+            <span class="relic-slot-name">${escapeGachaHtml(r.name)}</span>
+          </button>`;
+      }).join('');
+      const slotBox = `
+        <div class="relic-section-title">장착 슬롯 <small>${equipped.length} / ${COMMANDER_RELIC_SLOTS}</small></div>
+        <div class="relic-slots">${slots}</div>
+        ${locked ? '<div class="relic-note">전투 중에는 장착을 바꿀 수 없습니다.</div>' : ''}`;
       const commander = relics.filter(r => r.kind !== 'gift');
       const gifts = relics.filter(r => r.kind === 'gift');
-      list.innerHTML = summary + pending + (relics.length
-        ? section('지휘관 유물', commander) + section('선물 유물 (보관 중)', gifts)
+      const full = equipped.length >= COMMANDER_RELIC_SLOTS;
+      const commanderCards = commander.map(r => {
+        const on = isRelicEquipped(r);
+        const btn = on
+          ? `<button type="button" class="relic-pick-btn ghost" data-relic-unequip="${escapeGachaHtml(r.instanceId)}" ${locked ? 'disabled' : ''}>장착 해제</button>`
+          : `<button type="button" class="relic-pick-btn" data-relic-equip="${escapeGachaHtml(r.instanceId)}" ${locked || full ? 'disabled' : ''}>${full ? '슬롯 가득 참' : '장착'}</button>`;
+        return relicCardHtml(r, { equipped: on, button: btn });
+      }).join('');
+      const giftCards = gifts.map(r => relicCardHtml(r, {
+        button: `<button type="button" class="relic-pick-btn gift" data-relic-gift="${escapeGachaHtml(r.instanceId)}">🎁 선물하기</button>`
+      })).join('');
+      const section = (title, count, cards) => count
+        ? `<div class="relic-section-title">${title} <small>${count}</small></div><div class="relic-grid">${cards}</div>` : '';
+      list.innerHTML = summary + pending + slotBox + (relics.length
+        ? section('지휘관 유물', commander.length, commanderCards) + section('선물 유물 (보관 중)', gifts.length, giftCards)
         : '<div class="adj-empty">아직 가진 유물이 없습니다.</div>');
+      list.querySelectorAll('[data-relic-equip]').forEach(b => { b.onclick = () => setRelicEquipped(b.dataset.relicEquip, true); });
+      list.querySelectorAll('[data-relic-unequip]').forEach(b => { b.onclick = () => setRelicEquipped(b.dataset.relicUnequip, false); });
+      list.querySelectorAll('[data-relic-gift]').forEach(b => { b.onclick = () => openRelicGiftPicker({ relicInstanceId: b.dataset.relicGift }); });
       // 효과 이름표(RewardEngine)가 아직 없으면 불러온 뒤 다시 그린다
       if (!window.RewardEngine && relics.length) ensureRewardDataLoaded().then(data => { if (data) renderCommanderRelics(); });
     }
@@ -6663,7 +6790,7 @@
         if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 계승</button>`);
         return `
           <div class="pool-card ${e.unit ? 'in-roster' : ''}">
-            <div class="gacha-card-image">${getGachaAvatarHtml(src)}</div>
+            <button type="button" class="gacha-card-image pool-portrait-btn" data-pool-view="${esc(e.id)}" title="캐릭터 창 열기">${getGachaAvatarHtml(src)}</button>
             <div class="pool-card-info">
               <div class="pool-card-name">${esc(nameOf(e) || '이름 없는 용병')} ${owned ? `<span class="pool-lv">Lv.${Number(owned.level) || 1}</span>` : ''}</div>
               <div class="gacha-card-class">${esc(getGachaClassName(src))} ${status}</div>
@@ -6681,6 +6808,7 @@
         renderCharacterPool();
         renderStrategyView();
       };
+      listEl.querySelectorAll('[data-pool-view]').forEach(b => { b.onclick = () => openPoolCharacterWindow(b.dataset.poolView); });
       listEl.querySelectorAll('[data-pool-enlist]').forEach(b => { b.onclick = () => after(enlistCharacterFromPool(b.dataset.poolEnlist)); });
       listEl.querySelectorAll('[data-pool-dismiss]').forEach(b => { b.onclick = () => after(dismissCharacterToPool(b.dataset.poolDismiss)); });
       listEl.querySelectorAll('[data-pool-absorb]').forEach(b => {
@@ -6694,6 +6822,23 @@
         };
       });
     }
+
+    // 용병 명부 사진 → 캐릭터 창. 미편입 캐릭터는 DB 원본으로 만든 미리 보기(isPreview)를 띄운다.
+    function openPoolCharacterWindow(charId) {
+      const entry = getCharacterPoolEntries().find(e => e.id === String(charId));
+      if (!entry) return;
+      let unit = entry.unit || entry.reserve;
+      if (!unit && entry.record) {
+        const record = entry.alias ? { ...entry.record, name: entry.alias } : entry.record;
+        unit = characterRecordToUnit(record, { id: `preview_${entry.id}`, owner: 'PLAYER', fullHp: true });
+        unit.isPreview = true;
+      }
+      if (!unit) return;
+      const modal = document.getElementById('modal-character-pool');
+      if (modal) modal.style.display = 'none';
+      openFullShotOverlay(unit, { returnToPool: true });
+    }
+    window.openPoolCharacterWindow = openPoolCharacterWindow;
 
     async function openCharacterPool() {
       const modal = document.getElementById('modal-character-pool');
@@ -7174,6 +7319,34 @@
 
       // 스킬 목록 (고유 스킬 + 스킬트리에서 습득한 스킬) 및 현재 상태이상
       renderFullshotSkillList(unit);
+      renderFullshotGiftBox(unit);
+      // 용병 명부에서 미리 보는 미편입 캐릭터는 스킬트리를 열 수 없다
+      const treeActionBtn = document.querySelector('#unit-fullshot-overlay .fullshot-btn-action.skill');
+      if (treeActionBtn) treeActionBtn.style.display = unit.isPreview ? 'none' : '';
+    }
+
+    // 캐릭터 창: 받은 선물 유물 + 선물하기 버튼
+    function renderFullshotGiftBox(unit) {
+      const box = document.getElementById('fullshot-gift-box');
+      if (!box) return;
+      const canGift = !unit.isPreview && getGiftableUnits().includes(unit);
+      const received = Array.isArray(unit.giftRelics) ? unit.giftRelics : [];
+      if (!canGift && !received.length) { box.innerHTML = ''; box.hidden = true; return; }
+      const esc = escapeGachaHtml;
+      const giftCount = getOwnedRelics().filter(r => r.kind === 'gift').length;
+      const chips = received.map(r => {
+        const rarity = RELIC_RARITY_META[r.rarity] || RELIC_RARITY_META.common;
+        return `<span class="fs-gift-chip" style="--relic-color:${rarity.color}" title="${esc(describeRelicEffects(r))}">💎 ${esc(r.name)}</span>`;
+      }).join('');
+      box.hidden = false;
+      box.innerHTML = `
+        <div class="fs-skill-head">
+          <span>🎁 받은 선물 ${received.length}개</span>
+          ${canGift ? `<button class="btn-cheat purple" style="font-size: 8.5px; padding: 2px 6px;" data-gift-open="1" ${giftCount ? '' : 'disabled'}>유물 선물하기 (${giftCount})</button>` : ''}
+        </div>
+        ${chips ? `<div class="fs-gift-row">${chips}</div>` : '<div style="font-size:10px;color:#94a3b8;padding:2px 0;">아직 받은 선물이 없습니다.</div>'}`;
+      const btn = box.querySelector('[data-gift-open]');
+      if (btn) btn.onclick = () => openRelicGiftPicker({ unitId: unit.id });
     }
 
     /* --------------------------------------------------------------------------
@@ -7189,7 +7362,7 @@
       const esc = window.SkillEditor ? SkillEditor.esc : (v) => String(v);
       const iconOf = (sk, size) => window.SkillEditor ? SkillEditor.iconHtml(sk, size) : (sk.icon || '⚡');
       const skills = SkillEngine.getUnitSkills(unit);
-      const isPlayer = unit.owner !== 'ENEMY';
+      const isPlayer = unit.owner !== 'ENEMY' && !unit.isPreview;
       const inBattle = isTacticalBattleActive() && typeof unit.x === 'number';
 
       const statusChips = SkillEngine.getStatuses(unit).map(st => {
@@ -7383,9 +7556,14 @@
       if (sk) useUnitSkill(unit.id, sk.id);
     }
 
-    function openFullShotOverlay(targetUnit) {
+    // 용병 명부에서 연 캐릭터 창이면, 닫을 때 명부로 돌아간다
+    let fullshotReturnToPool = false;
+
+    function openFullShotOverlay(targetUnit, opts = {}) {
+      fullshotReturnToPool = !!opts.returnToPool;
       if (targetUnit && targetUnit.id) {
-        selectedUnitId = targetUnit.id;
+        // 대기·미편입 캐릭터는 전장 선택 대상이 아니다 (선택을 바꾸지 않는다)
+        if (state.playerUnits.includes(targetUnit)) selectedUnitId = targetUnit.id;
         currentOverlayTargetUnit = targetUnit;
       } else {
         currentOverlayTargetUnit = getSelectedUnit();
@@ -7405,6 +7583,10 @@
         overlay.classList.remove('active');
       }
       currentOverlayTargetUnit = null;
+      if (fullshotReturnToPool) {
+        fullshotReturnToPool = false;
+        openCharacterPool();
+      }
     }
 
     window.openFullShotOverlay = openFullShotOverlay;
@@ -10736,6 +10918,176 @@
       return state && state.run && Array.isArray(state.run.relics) ? state.run.relics : [];
     }
 
+    // ---- 지휘관 유물 장착 (최대 COMMANDER_RELIC_SLOTS개) ----------------------
+    function getEquippedRelicIds() {
+      const run = state && state.run;
+      if (!run) return [];
+      if (!Array.isArray(run.equippedRelics)) run.equippedRelics = [];
+      return run.equippedRelics;
+    }
+
+    /** 장착 순서대로. 이미 없는 유물을 가리키는 id는 건너뛴다. */
+    function getEquippedCommanderRelics() {
+      const owned = getOwnedRelics();
+      return getEquippedRelicIds()
+        .map(id => owned.find(r => r.instanceId === id && r.kind === 'commander'))
+        .filter(Boolean)
+        .slice(0, COMMANDER_RELIC_SLOTS);
+    }
+
+    function isRelicEquipped(relic) {
+      return !!relic && getEquippedCommanderRelics().includes(relic);
+    }
+
+    function setRelicEquipped(instanceId, equip) {
+      const fail = (msg) => {
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      };
+      if (isCharacterPoolLocked()) return fail('전투 중에는 유물 장착을 바꿀 수 없습니다.');
+      const relic = getOwnedRelics().find(r => r.instanceId === instanceId);
+      if (!relic || relic.kind !== 'commander') return fail('장착할 수 있는 지휘관 유물이 아닙니다.');
+      const before = getLeadership();
+      // 없어진 유물 id는 이참에 정리한다
+      state.run.equippedRelics = getEquippedCommanderRelics().map(r => r.instanceId);
+      const ids = state.run.equippedRelics;
+      if (equip) {
+        if (ids.includes(instanceId)) return true;
+        if (ids.length >= COMMANDER_RELIC_SLOTS) return fail(`지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지만 장착할 수 있습니다. 먼저 하나를 해제하세요.`);
+        ids.push(instanceId);
+      } else {
+        const idx = ids.indexOf(instanceId);
+        if (idx < 0) return true;
+        ids.splice(idx, 1);
+      }
+      const after = getLeadership();
+      addLog(`💎 [유물 ${equip ? '장착' : '해제'}] ${relic.name}${after !== before ? ` · 통솔력 ${before} → ${after}부대` : ''}`, equip ? 'gold' : 'system');
+      saveGameState(true);
+      renderCommanderRelics();
+      renderAll();
+      return true;
+    }
+    window.setRelicEquipped = setRelicEquipped;
+
+    // ---- 선물 유물: 캐릭터에게 주면 그 캐릭터의 능력치가 영구히 오른다 (런이 끝나면 캐릭터와 함께 사라진다) ----
+    // 바로 능력치에 더하는 효과. 나머지 효과는 유물에 기록만 남는다 (아직 전투 공식에 없음).
+    const GIFT_RELIC_APPLIERS = {
+      atk: (u, v) => { u.atk = Math.max(1, (Number(u.atk) || 0) + v); },
+      def: (u, v) => { u.def = Math.max(0, (Number(u.def) || 0) + v); },
+      hp: (u, v) => {
+        u.maxHp = Math.max(1, (Number(u.maxHp) || 0) + v);
+        u.hp = Math.max(1, Math.min(u.maxHp, (Number(u.hp) || 0) + Math.max(0, v)));
+      },
+      ap: (u, v) => { u.baseAP = Math.max(1, (Number(u.baseAP) || 0) + v); u.ap = Math.max(0, (Number(u.ap) || 0) + v); },
+      mobility: (u, v) => { u.baseAP = Math.max(1, (Number(u.baseAP) || 0) + v); u.ap = Math.max(0, (Number(u.ap) || 0) + v); },
+      affection: (u, v) => {
+        u.affection = Math.max(0, Math.min(100, (Number(u.affection) || 0) + v));
+        u.favorability = u.affection;
+      }
+    };
+
+    function isGiftEffectApplied(fx) {
+      return !!(fx && GIFT_RELIC_APPLIERS[fx.stat]);
+    }
+
+    /** 선물을 받을 수 있는 캐릭터: 출전 명단 + 대기 (살아 있는 아군) */
+    function getGiftableUnits() {
+      return [...(state.playerUnits || []), ...(Array.isArray(state.reserveUnits) ? state.reserveUnits : [])]
+        .filter(u => u && !u.isDead && u.owner !== 'ENEMY');
+    }
+
+    function giftRelicToUnit(instanceId, unitId) {
+      const fail = (msg) => {
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return false;
+      };
+      const relics = getOwnedRelics();
+      const idx = relics.findIndex(r => r.instanceId === instanceId);
+      const relic = relics[idx];
+      if (!relic || relic.kind !== 'gift') return fail('선물할 수 있는 유물이 아닙니다.');
+      const unit = getGiftableUnits().find(u => u.id === unitId);
+      if (!unit) return fail('선물을 받을 캐릭터를 찾을 수 없습니다.');
+      relics.splice(idx, 1);
+      const applied = [];
+      (relic.effects || []).forEach(fx => {
+        const value = Number(fx && fx.value) || 0;
+        const apply = fx && GIFT_RELIC_APPLIERS[fx.stat];
+        if (!apply || !value) return;
+        apply(unit, value);
+        applied.push(relicStatText(fx));
+      });
+      if (!Array.isArray(unit.giftRelics)) unit.giftRelics = [];
+      unit.giftRelics.push({ ...relic, giftedAt: new Date().toISOString() });
+      addLog(`🎁 [유물 선물] ${unit.name}에게 ${relic.name}을(를) 선물했습니다 — ${applied.join(', ') || '적용된 능력치 없음'}`, 'success');
+      if (typeof window.UI?.showToast === 'function') window.UI.showToast(`🎁 ${unit.name}에게 ${relic.name} 선물`, 'success');
+      saveGameState(true);
+      renderCommanderRelics();
+      renderAll();
+      if (currentOverlayTargetUnit === unit) updateFullShotOverlay(unit);
+      return true;
+    }
+    window.giftRelicToUnit = giftRelicToUnit;
+
+    /**
+     * 선물 고르기 창.
+     *   { relicInstanceId } → 이 유물을 받을 캐릭터를 고른다 (지휘관 창 → 선물 유물)
+     *   { unitId }          → 이 캐릭터에게 줄 선물 유물을 고른다 (캐릭터 창)
+     */
+    function openRelicGiftPicker(opts = {}) {
+      closeRelicGiftPicker();
+      const esc = escapeGachaHtml;
+      const relic = opts.relicInstanceId ? getOwnedRelics().find(r => r.instanceId === opts.relicInstanceId) : null;
+      const unit = opts.unitId ? getGiftableUnits().find(u => u.id === opts.unitId) : null;
+      if (!relic && !unit) return;
+      let title, body;
+      if (relic) {
+        const units = getGiftableUnits();
+        title = `🎁 ${esc(relic.name)} — 누구에게 선물할까요?`;
+        body = units.length ? units.map(u => `
+          <button type="button" class="relic-gift-unit" data-gift-unit="${esc(u.id)}">
+            <span class="relic-gift-portrait">${getGachaAvatarHtml(u)}</span>
+            <span class="relic-gift-unit-info">
+              <b>${esc(u.name)} <small>Lv.${Number(u.level) || 1}</small></b>
+              <small>${esc(getGachaClassName(u))} · ATK ${u.atk} · DEF ${u.def} · HP ${u.maxHp} · 호감 ${u.affection ?? 50}${(u.giftRelics || []).length ? ` · 받은 선물 ${u.giftRelics.length}` : ''}</small>
+            </span>
+          </button>`).join('') : '<div class="adj-empty">선물을 받을 수 있는 캐릭터가 없습니다.</div>';
+        body = `<div class="relic-gift-preview">${esc(describeRelicEffects(relic))}</div><div class="relic-gift-list">${body}</div>`;
+      } else {
+        const gifts = getOwnedRelics().filter(r => r.kind === 'gift');
+        title = `🎁 ${esc(unit.name)}에게 줄 선물`;
+        body = gifts.length
+          ? `<div class="relic-grid">${gifts.map(r => relicCardHtml(r, { button: `<button type="button" class="relic-pick-btn gift" data-gift-relic="${esc(r.instanceId)}">선물하기</button>` })).join('')}</div>`
+          : '<div class="adj-empty">보관 중인 선물 유물이 없습니다. 전투 보상으로 얻을 수 있습니다.</div>';
+      }
+      const overlay = document.createElement('div');
+      overlay.id = 'modal-relic-gift';
+      overlay.className = 'relic-choice-overlay';
+      overlay.innerHTML = `
+        <div class="relic-choice-window" role="dialog" aria-label="유물 선물">
+          <div class="relic-choice-title">${title}</div>
+          <div class="relic-choice-sub">선물한 유물은 돌려받을 수 없습니다. 능력치는 바로 오릅니다.</div>
+          ${body}
+          <button type="button" class="relic-pick-btn ghost relic-gift-cancel">닫기</button>
+        </div>`;
+      overlay.onclick = (e) => { if (e.target === overlay) closeRelicGiftPicker(); };
+      overlay.querySelector('.relic-gift-cancel').onclick = closeRelicGiftPicker;
+      overlay.querySelectorAll('[data-gift-unit]').forEach(b => {
+        b.onclick = () => { if (giftRelicToUnit(relic.instanceId, b.dataset.giftUnit)) closeRelicGiftPicker(); };
+      });
+      overlay.querySelectorAll('[data-gift-relic]').forEach(b => {
+        b.onclick = () => { if (giftRelicToUnit(b.dataset.giftRelic, unit.id)) closeRelicGiftPicker(); };
+      });
+      document.body.appendChild(overlay);
+      // 효과 이름표(RewardEngine)가 아직 없으면 불러온 뒤 다시 그린다
+      if (!window.RewardEngine) ensureRewardDataLoaded().then(data => { if (data && window.RewardEngine && document.getElementById('modal-relic-gift')) openRelicGiftPicker(opts); });
+    }
+    window.openRelicGiftPicker = openRelicGiftPicker;
+
+    function closeRelicGiftPicker() {
+      document.getElementById('modal-relic-gift')?.remove();
+    }
+    window.closeRelicGiftPicker = closeRelicGiftPicker;
+
     function grantRelic(relicId, source) {
       const def = rewardDataCache && rewardDataCache.relics.get(String(relicId));
       if (!def || !state.run) return null;
@@ -10754,6 +11106,10 @@
         acquiredAt: new Date().toISOString()
       };
       state.run.relics.push(entry);
+      // 지휘관 유물은 빈 슬롯이 있으면 바로 장착한다
+      if (entry.kind === 'commander' && getEquippedCommanderRelics().length < COMMANDER_RELIC_SLOTS) {
+        state.run.equippedRelics = [...getEquippedCommanderRelics().map(r => r.instanceId), entry.instanceId];
+      }
       const rarity = RELIC_RARITY_META[entry.rarity] || RELIC_RARITY_META.common;
       const leadershipAfter = getLeadership();
       const leadershipText = leadershipAfter !== leadershipBefore ? ` · 통솔력 ${leadershipBefore} → ${leadershipAfter}부대` : '';
@@ -10815,11 +11171,14 @@
       const rarity = RELIC_RARITY_META[relic.rarity] || RELIC_RARITY_META.common;
       const kindLabel = relic.kind === 'gift' ? '선물' : '지휘관';
       const effects = (relic.effects || []).map(fx => {
-        const active = relic.kind === 'commander' && LEADERSHIP_RELIC_STATS.includes(fx.stat);
-        return `<li class="relic-fx${active ? ' active' : ''}">${escapeGachaHtml(relicStatText(fx))}${active ? ' <b>적용 중</b>' : ''}</li>`;
+        // 지휘관 유물: 장착 중인 통솔력 효과만 적용 / 선물 유물: 선물하면 바로 오르는 능력치인지 표시
+        const works = relic.kind === 'gift' ? isGiftEffectApplied(fx) : LEADERSHIP_RELIC_STATS.includes(fx.stat);
+        const active = relic.kind === 'commander' && works && opts.equipped;
+        const tag = active ? ' <b>적용 중</b>' : (works ? '' : ' <small>준비 중</small>');
+        return `<li class="relic-fx${active ? ' active' : ''}">${escapeGachaHtml(relicStatText(fx))}${tag}</li>`;
       }).join('');
       return `
-        <div class="relic-card" style="--relic-color:${rarity.color}">
+        <div class="relic-card${opts.equipped ? ' equipped' : ''}" style="--relic-color:${rarity.color}">
           <div class="relic-card-head">
             <span class="relic-icon">${relic.imageUrl ? `<img src="${escapeGachaHtml(relic.imageUrl)}" alt="">` : '💎'}</span>
             <span class="relic-title"><b>${escapeGachaHtml(relic.name)}</b><small>${rarity.label} · ${kindLabel} 유물</small></span>

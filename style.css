@@ -5985,6 +5985,37 @@
 .relic-choice-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
 .relic-pick-btn{margin-top:auto;padding:7px 10px;border-radius:999px;border:none;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;font:inherit;font-size:11.5px;font-weight:900;cursor:pointer}
 .relic-pick-btn:hover{filter:brightness(1.08)}
+.relic-pick-btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.relic-pick-btn.ghost{background:#fff;color:#475569;border:1.5px solid #cbd5e1}
+.relic-pick-btn.gift{background:linear-gradient(135deg,#ec4899,#db2777)}
+.relic-fx small{font-size:9px;font-weight:800;color:#94a3b8}
+.relic-card.equipped{border-color:#7dd3fc;background:#f0f9ff}
+/* 지휘관 유물 장착 슬롯 */
+.relic-slots{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.relic-slot{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:74px;padding:8px 4px 6px;border-radius:12px;border:2px solid var(--relic-color,#cbd5e1);background:#fff;font:inherit;color:#0f172a;cursor:pointer;min-width:0}
+.relic-slot:disabled{cursor:not-allowed}
+.relic-slot.empty{border-style:dashed;background:#f8fafc;color:#94a3b8;font-size:10px;font-weight:800;cursor:default}
+.relic-slot-no{position:absolute;left:6px;top:4px;font-size:9px;font-weight:900;color:#94a3b8}
+.relic-slot-name{font-size:10.5px;font-weight:900;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 선물 고르기 창 */
+.relic-gift-preview{font-size:11px;font-weight:800;color:#be185d;text-align:center;background:#fdf2f8;border-radius:10px;padding:6px 8px}
+.relic-gift-list{display:flex;flex-direction:column;gap:6px}
+.relic-gift-unit{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:1.5px solid #e2e8f0;border-radius:12px;background:#fff;font:inherit;color:#0f172a;text-align:left;cursor:pointer}
+.relic-gift-unit:hover{border-color:#f472b6;background:#fdf2f8}
+.relic-gift-portrait{flex:none;width:40px;height:40px;border-radius:10px;overflow:hidden;background:#f1f5f9;display:flex;align-items:center;justify-content:center}
+.relic-gift-portrait img{width:100%;height:100%;object-fit:cover}
+.relic-gift-unit-info{display:flex;flex-direction:column;min-width:0}
+.relic-gift-unit-info b{font-size:12px}
+.relic-gift-unit-info b small{font-size:10px;color:#0369a1}
+.relic-gift-unit-info>small{font-size:9.5px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relic-gift-cancel{margin-top:4px;align-self:center;min-width:120px}
+/* 캐릭터 창: 받은 선물 */
+.fullshot-gift-box{margin-top:6px;padding:6px 8px;border-radius:12px;background:#fdf2f8;border:1px solid #fbcfe8}
+.fs-gift-row{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+.fs-gift-chip{font-size:9.5px;font-weight:800;padding:2px 7px;border-radius:999px;background:#fff;border:1.5px solid var(--relic-color,#cbd5e1);color:#0f172a}
+/* 용병 명부: 사진 누르면 캐릭터 창 */
+.pool-portrait-btn{padding:0;font:inherit;cursor:pointer}
+.pool-portrait-btn:hover{border-color:#38bdf8;box-shadow:0 0 0 2px #bae6fd}
 
 /* ==========================================================================
    전술 맵 배경 일러스트 (battleMap.background)
