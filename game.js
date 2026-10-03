@@ -6420,7 +6420,7 @@
         if (!u.dialogueTone && record.dialogueTone) u.dialogueTone = record.dialogueTone;
         if ((!u.imageUrl || isClassImageUrl(u.imageUrl)) && record.imageUrl) u.imageUrl = record.imageUrl;
         // 캐릭터 id로 묶인 것들(부관, 지휘력 보정, 기억 계승 재료)을 새 id로 옮긴다
-        if (run && run.adjutant && String(run.adjutant.characterId) === oldId) run.adjutant = { characterId: newId, name: u.name };
+        if (run && run.adjutant && String(run.adjutant.characterId) === oldId) run.adjutant = { ...run.adjutant, characterId: newId, name: u.name };
         if (run && run.commandBonus && String(run.commandBonus.characterId) === oldId) run.commandBonus.characterId = newId;
         (state.characterCollection || []).forEach(e => { if (e && String(e.characterId) === oldId) e.characterId = newId; });
         changed = true;
@@ -9930,11 +9930,17 @@
     }
 
     // 부관 유닛. 임명하지 않았거나 전사했으면 null.
+    // 같은 캐릭터 id를 가진 유닛이 여럿일 수 있으므로(전사 후 다른 이름으로 재고용) 임명한 유닛 id로 찾는다.
+    // unitId가 없는 예전 세이브는 캐릭터 id가 같은 "살아 있는" 유닛을 부관으로 본다.
     function getAdjutantUnit(run = state && state.run) {
       const a = run && run.adjutant;
       if (!a) return null;
-      const unit = [...(run.party || []), ...(run.reserve || [])].find(u => getCharacterId(u) === String(a.characterId));
-      return unit && !unit.isDead ? unit : null;
+      const units = [...(run.party || []), ...(run.reserve || [])];
+      if (a.unitId) {
+        const unit = units.find(u => String(u.id) === String(a.unitId));
+        return unit && !unit.isDead ? unit : null;
+      }
+      return units.find(u => !u.isDead && getCharacterId(u) === String(a.characterId)) || null;
     }
     window.getAdjutantUnit = getAdjutantUnit;
 
@@ -9992,7 +9998,7 @@
       if (prev) applyAdjutantDismissal(run, prev);
 
       const characterId = getCharacterId(unit);
-      run.adjutant = { characterId, name: unit.name };
+      run.adjutant = { characterId, unitId: unit.id, name: unit.name };
       if (run.loopReward && run.loopReward.type === 'command') {
         run.commandBonus = { characterId, def: Number(run.loopReward.def) || 1 };
       }
