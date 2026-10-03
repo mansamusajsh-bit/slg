@@ -380,12 +380,23 @@
     const sig = unit.customSkill ? SE().normalizeSkill(unit.customSkill, unit.customSkill.id || 'signature') : null;
 
     const absorbCount = typeof global.getAbsorbMaterials === 'function' ? global.getAbsorbMaterials(unit).length : 0;
+    const isPlayer = unit.owner !== 'ENEMY';
+    // 잔향: 트리를 다 열 해금권이 이미 있으면 기억 계승은 잔향을 남기고, 남는 해금권은 잔향으로 바꿀 수 있다.
+    const hasResonance = isPlayer && typeof global.getResonance === 'function';
+    const resonance = hasResonance ? global.getResonance() : 0;
+    const resonanceCost = global.RESONANCE_PER_SKILL_POINT || 5;
+    const saturated = hasResonance && global.isSkillTreeSaturated(unit);
+    const surplus = hasResonance ? SE().getSurplusSkillPoints(unit) : 0;
     container.innerHTML = `
       <div class="skl-head">
-        <div>Lv.${Number(unit.level) || 1} · 스킬 해금권 <b class="skl-sp">${unit.skillPoints}장</b></div>
-        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · 기억 계승 1회 = 스킬 1개 해금</div>
-        ${unit.owner !== 'ENEMY' && typeof global.absorbDuplicateCharacter === 'function' ? `
-          <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 기억 계승 (잔영 ${absorbCount}장)</button>` : ''}
+        <div>Lv.${Number(unit.level) || 1} · 스킬 해금권 <b class="skl-sp">${unit.skillPoints}장</b>${hasResonance ? ` · 🔔 잔향 <b class="skl-sp">${resonance}개</b>` : ''}</div>
+        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · ${saturated ? '남은 스킬을 다 열 해금권이 있어 기억 계승은 잔향으로 남습니다' : '기억 계승 1회 = 스킬 1개 해금'}</div>
+        ${isPlayer && typeof global.absorbDuplicateCharacter === 'function' ? `
+          <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 기억 계승${saturated ? ' → 잔향' : ''} (잔영 ${absorbCount}장)</button>` : ''}
+        ${hasResonance && surplus > 0 ? `
+          <button type="button" class="skl-learn" data-resonance-convert>🔔 남는 해금권 ${surplus}장 → 잔향 ${surplus}개</button>` : ''}
+        ${hasResonance && !saturated ? `
+          <button type="button" class="skl-learn" data-resonance-inherit ${resonance >= resonanceCost ? '' : 'disabled'}>🔔 잔향 ${resonanceCost}개 → 해금권 +1</button>` : ''}
       </div>
       ${sig ? `
         <div class="skl-signature">
@@ -434,6 +445,17 @@
         renderLearnTree(container, unit, opts);
       };
     }
+
+    [['[data-resonance-convert]', 'convertSurplusSkillPoints'], ['[data-resonance-inherit]', 'inheritResonance']].forEach(([sel, fn]) => {
+      const btn = container.querySelector(sel);
+      if (!btn) return;
+      btn.onclick = () => {
+        const res = global[fn](unit.id);
+        if (!res.ok) { if (global.addLog) global.addLog(`⚠️ ${res.reason}`, 'warning'); return; }
+        if (opts.onAbsorb) opts.onAbsorb(unit);
+        renderLearnTree(container, unit, opts);
+      };
+    });
 
     container.querySelectorAll('[data-learn]').forEach(btn => {
       btn.onclick = () => {

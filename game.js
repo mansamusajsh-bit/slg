@@ -512,6 +512,8 @@
       run.commander = createInitialCommander();
       run.inventory = [];
       run.characterCollection = [];
+      // 잔향: 스킬트리를 다 연 캐릭터의 기억 계승·남는 해금권이 바뀐 공용 재화. 5개 = 원하는 캐릭터의 해금권 1장.
+      run.resonance = 0;
       run.encounterSeq = 0;
       run.nodeAttempts = {};
       run.echo = null;
@@ -559,6 +561,7 @@
         if (!nextRun.commander) nextRun.commander = prev.commander || createInitialCommander();
         if (!Array.isArray(nextRun.inventory)) nextRun.inventory = Array.isArray(prev.inventory) ? prev.inventory : [];
         if (!Array.isArray(nextRun.characterCollection)) nextRun.characterCollection = Array.isArray(prev.characterCollection) ? prev.characterCollection : [];
+        if (typeof nextRun.resonance !== 'number') nextRun.resonance = Number(prev.resonance) || 0;
         if (!nextRun.nodeAttempts) nextRun.nodeAttempts = {};
       }
       // 작전지도 이전 세이브의 런: 구역 상태를 새로 만들고, 진행 중이던 노드 그래프는 시작 구역의 작전으로 이어 간다.
@@ -3489,7 +3492,7 @@
       const prevRun = state.run;
       const nextRun = createInitialRun(customSeed, null);
       if (prevRun) {
-        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo', 'adjutant']
+        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'resonance', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo', 'adjutant']
           .forEach(k => { if (k in prevRun) nextRun[k] = prevRun[k]; });
       }
       state.run = nextRun;
@@ -6101,6 +6104,15 @@
       const material = materials[materials.length - 1];
       state.characterCollection.splice(state.characterCollection.indexOf(material), 1);
       if (window.SkillEngine) SkillEngine.ensureUnitSkillState(unit);
+
+      // 남은 스킬을 다 열 만큼 해금권이 이미 있으면, 더 받아들이지 못한 경험은 잔향으로 남는다 (레벨도 오르지 않는다).
+      if (isSkillTreeSaturated(unit)) {
+        state.run.resonance = getResonance() + 1;
+        addLog(`🔔 [기억 계승] ${unit.name}은(는) 더 받아들일 기억이 없다 — 시간선의 경험이 잔향으로 남았다. 잔향 +1 (보유 ${state.run.resonance}개, 남은 잔영 ${materials.length - 1}장)`, 'gold');
+        saveGameState(true);
+        return { ok: true, resonance: true, level: unit.level };
+      }
+
       unit.level = (Number(unit.level) || 1) + 1;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
 
@@ -6109,6 +6121,56 @@
       return { ok: true, level: unit.level };
     }
     window.absorbDuplicateCharacter = absorbDuplicateCharacter;
+
+    // ------------------------------------------------------------------------
+    // 잔향: 한 사람이 받아들일 수 있는 다른 시간선의 경험에는 한계가 있다.
+    // 넘친 경험(트리를 다 열고도 남는 해금권, 그 뒤의 기억 계승)은 주인 없는 잔향이 되고,
+    // 잔향 RESONANCE_PER_SKILL_POINT개로 해금권이 모자란 다른 캐릭터에게 해금권 1장을 줄 수 있다 (레벨은 오르지 않는다).
+    // ------------------------------------------------------------------------
+    const RESONANCE_PER_SKILL_POINT = 5;
+    window.RESONANCE_PER_SKILL_POINT = RESONANCE_PER_SKILL_POINT;
+
+    function getResonance() { return Math.max(0, Number(state.run && state.run.resonance) || 0); }
+    window.getResonance = getResonance;
+
+    function findOwnedUnit(unitId) {
+      return (state.playerUnits || []).find(u => u.id === unitId && !u.isDead)
+        || (state.reserveUnits || []).find(u => u.id === unitId) || null;
+    }
+
+    // 보유 해금권으로 남은 스킬을 전부 열 수 있는 상태
+    function isSkillTreeSaturated(unit) {
+      if (!window.SkillEngine) return false;
+      return SkillEngine.getRemainingUnlocks(unit) <= (Number(unit.skillPoints) || 0);
+    }
+    window.isSkillTreeSaturated = isSkillTreeSaturated;
+
+    function convertSurplusSkillPoints(unitId) {
+      const unit = findOwnedUnit(unitId);
+      if (!unit || !window.SkillEngine) return { ok: false, reason: '유닛을 찾을 수 없습니다.' };
+      const surplus = SkillEngine.getSurplusSkillPoints(unit);
+      if (!surplus) return { ok: false, reason: '스킬트리를 열고 남는 해금권이 없습니다.' };
+      unit.skillPoints -= surplus;
+      state.run.resonance = getResonance() + surplus;
+      addLog(`🔔 [잔향] ${unit.name}의 남는 해금권 ${surplus}장이 잔향 ${surplus}개로 흩어졌다. (보유 ${state.run.resonance}개)`, 'gold');
+      saveGameState(true);
+      return { ok: true, amount: surplus };
+    }
+    window.convertSurplusSkillPoints = convertSurplusSkillPoints;
+
+    function inheritResonance(unitId) {
+      const unit = findOwnedUnit(unitId);
+      if (!unit) return { ok: false, reason: '유닛을 찾을 수 없습니다.' };
+      if (isSkillTreeSaturated(unit)) return { ok: false, reason: `${unit.name}은(는) 이미 남은 스킬을 다 열 해금권이 있습니다.` };
+      const have = getResonance();
+      if (have < RESONANCE_PER_SKILL_POINT) return { ok: false, reason: `잔향이 부족합니다. (필요 ${RESONANCE_PER_SKILL_POINT}개, 보유 ${have}개)` };
+      state.run.resonance = have - RESONANCE_PER_SKILL_POINT;
+      unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
+      addLog(`🔔 [잔향 계승] ${unit.name}이(가) 주인 없는 잔향을 받아들였다. 스킬 해금권 +1 (남은 잔향 ${state.run.resonance}개)`, 'gold');
+      saveGameState(true);
+      return { ok: true };
+    }
+    window.inheritResonance = inheritResonance;
 
     // ------------------------------------------------------------------------
     // 포섭: 적 유닛은 캐릭터 레코드로 만들어지므로(buildEnemyPool) 포섭한 유닛도 같은 캐릭터로 연결한다.
@@ -6576,7 +6638,7 @@
       const summary = document.getElementById('pool-summary');
       if (summary) {
         const inRoster = all.filter(e => e.unit).length;
-        summary.textContent = `보유 ${all.length}명 · 출전 명단 ${inRoster}명 · 대기 ${all.length - inRoster}명`;
+        summary.textContent = `보유 ${all.length}명 · 출전 명단 ${inRoster}명 · 대기 ${all.length - inRoster}명 · 🔔 잔향 ${getResonance()}개`;
       }
       const lockNote = document.getElementById('pool-lock-note');
       if (lockNote) lockNote.style.display = locked ? '' : 'none';
@@ -6627,7 +6689,8 @@
           const owned = entry && (entry.unit || entry.reserve);
           const res = owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 기억을 계승할 수 없습니다.' };
           after(res);
-          if (res.ok) notifyUnitGrowth(owned, `${owned.name} 레벨업! Lv.${res.level}`, ['기억 계승 — 스킬 해금권 +1']);
+          if (res.ok && !res.resonance) notifyUnitGrowth(owned, `${owned.name} 레벨업! Lv.${res.level}`, ['기억 계승 — 스킬 해금권 +1']);
+          else if (res.ok && typeof window.UI?.showToast === 'function') window.UI.showToast(`🔔 잔향 +1 (보유 ${getResonance()}개)`, 'success');
         };
       });
     }
@@ -8693,7 +8756,7 @@
       if (battle && battle.status === 'active') {
         const ids = Array.isArray(state.currentDeployedUnitIds) && state.currentDeployedUnitIds.length ? state.currentDeployedUnitIds : (state.playerUnits || []).map(u => u.id);
         const aliveNow = (state.playerUnits || []).filter(u => ids.includes(u.id) && u.x >= 0 && isUnitAlive(u));
-        if (aliveNow.length) battle.lastAliveIds = aliveNow.map(u => u.id); // 잔향: 전멸 직전 생존자
+        if (aliveNow.length) battle.lastAliveIds = aliveNow.map(u => u.id); // 최후의 기억: 전멸 직전 생존자
       }
       if (!isDeployedForceWiped()) return false;
       if (wipeoutTimer) return true;
@@ -10171,7 +10234,7 @@
         const echo = run.lastStanding || null;
         if (window.NationShares) await window.NationShares.onReturnByDeath(); // 국가 지분도 회귀와 함께 사라진다
         state.run = createInitialRun(seed, reward);
-        // 잔향: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
+        // 최후의 기억: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
         if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {
           state.run.echo = { characterId: String(echo.characterId), name: echo.name, used: false };
         }
@@ -10196,7 +10259,7 @@
         } else {
           addLog(`${card.icon} [${card.name}] ${card.desc} (이번 런 한정)`, 'gold');
         }
-        if (state.run.echo) addLog(`🕯️ [잔향] ${state.run.echo.name}이(가) 마지막 순간을 기억한다. 첫 전투 첫 턴에 한 번 더 움직인다.`, 'gold');
+        if (state.run.echo) addLog(`🕯️ [최후의 기억] ${state.run.echo.name}이(가) 마지막 순간을 기억한다. 첫 전투 첫 턴에 한 번 더 움직인다.`, 'gold');
         await savePlayer();
         await saveRun();
         goToCampaignMap();
@@ -10247,7 +10310,7 @@
     //   자동 (회귀 1회 이상이면 항상):
     //     예지   — 같은 seed의 이전 런에서 방문한 노드는 들어가기 전에 적 구성/보상이 보인다.
     //     기시감 — 지난 런에서 전멸한 바로 그 전투(같은 노드·같은 전장 seed)에 다시 들어가면 적 배치를 보고 아군 배치를 고른다.
-    //     잔향   — 전멸 직전 마지막까지 살아남은 캐릭터가 다음 런 첫 전투 첫 턴에 행동을 한 번 더 한다.
+    //     최후의 기억 — 전멸 직전 마지막까지 살아남은 캐릭터가 다음 런 첫 전투 첫 턴에 행동을 한 번 더 한다.
     //   회귀 카드 (회귀할 때마다 3장 중 1장, 이번 런 한정, 누적 없음):
     //     지휘력 / 예지(노드 2개 미리 보기) / 비상금(시작 골드 +100) / 기시감(첫 엘리트 전투 배치 자유)
     //   예지가 거짓말을 하지 않도록, 각 노드의 "이번 런 첫 도전" 전장 seed는 런 seed에서 결정된다
@@ -10512,20 +10575,20 @@
         <button type="button" class="deploy-banner-done" onclick="finishDeployPhase()">배치 완료</button>`;
     }
 
-    // ---- 잔향 ---------------------------------------------------------------
+    // ---- 최후의 기억 ---------------------------------------------------------------
     function applyEchoAtBattleStart() {
       const run = state.run;
       if (!run || !run.echo || run.echo.used) return;
       run.echo.used = true; // 다음 런 "첫 전투" 한 번뿐
       const unit = (state.playerUnits || []).find(u => u.isDeployed && isUnitAlive(u) && getCharacterId(u) === String(run.echo.characterId));
       if (!unit) {
-        addLog(`🕯️ [잔향] ${run.echo.name}의 기억이 희미해졌다… (첫 전투에 출전하지 않았다)`, 'system');
+        addLog(`🕯️ [최후의 기억] ${run.echo.name}의 기억이 희미해졌다… (첫 전투에 출전하지 않았다)`, 'system');
         return;
       }
       const base = Number(unit.baseAP) || 2;
       unit.ap = base * 2;
       unit.echoActive = true;
-      addLog(`💀 [잔향] "죽음을 기억해." — ${unit.name}, 첫 턴 행동 한 번 더 (AP ${unit.ap})`, 'capture');
+      addLog(`💀 [최후의 기억] "죽음을 기억해." — ${unit.name}, 첫 턴 행동 한 번 더 (AP ${unit.ap})`, 'capture');
       showLoopLine(unit, '…이번엔 내가 먼저 움직인다.');
     }
 
@@ -10561,7 +10624,7 @@
       return pool[Math.floor(rng() * pool.length)];
     }
 
-    // 대사는 차례대로 하나씩 보여 준다 (잔향 대사와 전투 시작 대사가 겹치지 않게).
+    // 대사는 차례대로 하나씩 보여 준다 (최후의 기억 대사와 전투 시작 대사가 겹치지 않게).
     const loopLineQueue = [];
     let loopLineBusy = false;
     function showLoopLine(unit, text) {

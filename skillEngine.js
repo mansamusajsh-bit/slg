@@ -359,6 +359,19 @@
     return { ok: true, cost: ls.cost };
   }
 
+  /** 아직 익히지 않은 스킬트리 노드 수 = 앞으로 쓸 수 있는 해금권 수. */
+  function getRemainingUnlocks(unit) {
+    if (!unit) return 0;
+    ensureUnitSkillState(unit);
+    return unit.skillTree.filter(n => n && !unit.learnedSkills.includes(n.id)).length * SKILL_UNLOCK_COST;
+  }
+
+  /** 트리를 다 열고도 남는 해금권 수 (잔향으로 바꿀 수 있는 양). */
+  function getSurplusSkillPoints(unit) {
+    if (!unit) return 0;
+    return Math.max(0, num(unit.skillPoints) - getRemainingUnlocks(unit));
+  }
+
   // --------------------------------------------------------------------------
   // 상태이상
   // --------------------------------------------------------------------------
@@ -835,6 +848,7 @@
     EFFECTS, CATEGORY_LABELS, TARGET_MODES, AFFECTS, PRESETS, CLASS_TREES,
     configure, normalizeSkill, normalizeEffect, fromPreset, buildClassTree, describeSkill, describeEffect, describeTargeting, newId,
     ensureUnitSkillState, getUnitSkills, getSkillCooldown, getLearnState, learnSkill,
+    getRemainingUnlocks, getSurplusSkillPoints,
     getStatuses, hasStatus, getCombatModifiers, canMove, canAct, isTargetableByAI, breakStealth, getForcedTarget, tryPreventDeath,
     getValidTargets, isValidTarget, getAffectedUnits, getAffectedTiles, canCast, cast,
     startSideTurn, endRound, resetBattleState, planAISkill, prepareEnemySkills
