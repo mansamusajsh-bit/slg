@@ -1042,6 +1042,27 @@
    * - SECTOR_FIELD: Tactical 8x14 grid combat map.
    * - STRATEGY_MENU_OVERLAY: Temporary strategy/pause menu while combat is ongoing.
    */
+  /**
+   * ECONOMY: 골드 가격은 기본가(BASE_PRICES) × 인플레이션 배율로 정한다.
+   * 가격은 항상 getGamePrice(key)로 읽고, 인플레이션을 도입할 때는
+   * ECONOMY.inflation 값이나 ECONOMY.getInflation(회차·층 등을 보고 배율을 돌려주는 함수)만 바꾸면 된다.
+   */
+  const BASE_PRICES = Object.freeze({
+    ACADEMY_UPGRADE: 300, // 왕실 아카데미 진급 훈련
+    CAPTURE_BRIBE: 80     // 포섭 방침 "금화 회유": 포섭 성공 시 지불
+  });
+  const ECONOMY = {
+    inflation: 1.0,
+    getInflation: null
+  };
+  function getGamePrice(key) {
+    const base = BASE_PRICES[key];
+    if (!(base > 0)) return 0;
+    const rate = typeof ECONOMY.getInflation === 'function' ? Number(ECONOMY.getInflation()) : Number(ECONOMY.inflation);
+    const mult = rate > 0 ? rate : 1;
+    return Math.max(1, Math.round((base * mult) / 10) * 10); // 10G 단위로 반올림
+  }
+
   const GAME_VIEWS = Object.freeze({
     WORLD_STRATEGY: 'WORLD_STRATEGY',
     SECTOR_FIELD: 'SECTOR_FIELD',
@@ -1253,6 +1274,9 @@
     createUnit,
     createUnitInstance: createUnit,
     GAME_VIEWS,
+    BASE_PRICES,
+    ECONOMY,
+    getGamePrice,
     createInitialTacticalState,
     snapshotTacticalState
   };
@@ -1267,6 +1291,9 @@
   global.createUnit = createUnit;
   global.createUnitInstance = createUnit;
   global.GAME_VIEWS = GAME_VIEWS;
+  global.BASE_PRICES = BASE_PRICES;
+  global.ECONOMY = ECONOMY;
+  global.getGamePrice = getGamePrice;
   global.createInitialTacticalState = createInitialTacticalState;
   global.snapshotTacticalState = snapshotTacticalState;
   global.GameConfig = GameConfig;

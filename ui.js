@@ -1337,10 +1337,54 @@
     } catch (_) {}
   }
 
+  // 성장 안내창: 레벨업·승급 직후 스킬트리로 바로 안내한다.
+  // 같은 대상(key)의 안내가 열려 있으면 새 창을 띄우지 않고 내용만 이어 붙인다 (연속 레벨업 등).
+  function showGrowthNotice({ key = 'growth', icon = '⭐', title = '', lines = [], actionLabel = '🌳 스킬트리 보기', onAction = null } = {}) {
+    try {
+      const existing = document.querySelector(`.growth-notice-overlay[data-key="${key}"]`);
+      if (existing) {
+        const titleEl = existing.querySelector('.growth-notice-title');
+        if (titleEl) titleEl.textContent = title;
+        const list = existing.querySelector('.growth-notice-lines');
+        if (list) lines.forEach((t) => { const li = document.createElement('li'); li.textContent = t; list.appendChild(li); });
+        return;
+      }
+
+      const overlay = document.createElement('div');
+      overlay.className = 'growth-notice-overlay';
+      overlay.dataset.key = key;
+      overlay.innerHTML = `
+        <div class="growth-notice-card" role="dialog" aria-modal="true">
+          <div class="growth-notice-icon"></div>
+          <div class="growth-notice-title"></div>
+          <ul class="growth-notice-lines"></ul>
+          <div class="growth-notice-actions">
+            <button type="button" class="growth-notice-later">나중에</button>
+            <button type="button" class="growth-notice-go"></button>
+          </div>
+        </div>`;
+      overlay.querySelector('.growth-notice-icon').textContent = icon;
+      overlay.querySelector('.growth-notice-title').textContent = title;
+      overlay.querySelector('.growth-notice-go').textContent = actionLabel;
+      const list = overlay.querySelector('.growth-notice-lines');
+      lines.forEach((t) => { const li = document.createElement('li'); li.textContent = t; list.appendChild(li); });
+
+      const close = () => overlay.remove();
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      overlay.querySelector('.growth-notice-later').onclick = close;
+      overlay.querySelector('.growth-notice-go').onclick = () => {
+        close();
+        if (typeof onAction === 'function') onAction();
+      };
+      document.body.appendChild(overlay);
+    } catch (_) {}
+  }
+
   // Initialize on load
 
   // Export to global.UI and root window
   global.UI.showToast = showToast;
+  global.UI.showGrowthNotice = showGrowthNotice;
   global.UI.triggerFearFX = triggerFearFX;
   global.UI.showUnitSpeech = showUnitSpeech;
   global.UI.playHeartbeatSFX = playHeartbeatSFX;

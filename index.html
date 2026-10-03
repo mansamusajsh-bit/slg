@@ -701,12 +701,13 @@
     <div class="modal-backdrop" id="modal-skills">
       <div class="modal-window">
         <div class="modal-header">
-          <div class="modal-title">👑 지휘관 — 부관 임명 · 패시브 스킬 (보유: <span id="modal-sp-display">2</span> SP)</div>
+          <div class="modal-title">👑 지휘관 <small style="font-size:0.8em;opacity:.8;">(보유 <span id="modal-sp-display">2</span> SP)</small></div>
           <button class="btn-close" onclick="closeAllModals()">✕</button>
         </div>
         <!-- 탭: 부관·스킬 / 보유 유물 (game.js switchCommanderTab) -->
         <div class="cmd-tabs" role="tablist">
           <button type="button" class="cmd-tab active" role="tab" aria-selected="true" data-cmd-tab="skills" onclick="switchCommanderTab('skills')">👑 부관 · 스킬</button>
+          <button type="button" class="cmd-tab" role="tab" aria-selected="false" data-cmd-tab="capture" onclick="switchCommanderTab('capture')">🤝 포섭 방침</button>
           <button type="button" class="cmd-tab" role="tab" aria-selected="false" data-cmd-tab="relics" onclick="switchCommanderTab('relics')">💎 보유 유물 <span class="cmd-tab-count" id="cmd-relic-count">0</span></button>
         </div>
         <div class="cmd-tab-panel" data-cmd-panel="skills" role="tabpanel">
@@ -715,6 +716,10 @@
           <div class="skill-grid" id="modal-skill-grid">
             <!-- Dynamically populated -->
           </div>
+        </div>
+        <div class="cmd-tab-panel" data-cmd-panel="capture" role="tabpanel" hidden>
+          <!-- 포섭 방침 선택 (game.js renderCaptureDoctrinePanel) -->
+          <div id="modal-capture-doctrine"></div>
         </div>
         <div class="cmd-tab-panel" data-cmd-panel="relics" role="tabpanel" hidden>
           <!-- 보유 유물 (game.js renderCommanderRelics) -->
@@ -774,9 +779,9 @@
           <div class="shop-item-card">
             <div>
               <div style="font-weight: 800; font-size: 13px;">⚔️ 왕실 아카데미 진급 훈련</div>
-              <div style="font-size: 10px; color: #9ca3af;">선택 유닛 레벨 +1 및 승급 스킬 강화 (80G)</div>
+              <div style="font-size: 10px; color: #9ca3af;">선택 유닛 레벨 +1 · 스킬 해금권 +1 · 승급 스킬 강화</div>
             </div>
-            <button class="btn-buy" onclick="executeCityUpgrade(80)">80G 훈련</button>
+            <button class="btn-buy" id="btn-city-upgrade" onclick="executeCityUpgrade()">300G 훈련</button>
           </div>
         </div>
       </div>

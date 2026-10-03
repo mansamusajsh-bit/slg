@@ -371,6 +371,7 @@
       if (!commander || !(amount > 0)) return;
       commander.exp = (commander.exp || 0) + amount;
       if (reason) addLog(`👑 ${reason}: 지휘관 경험치 +${amount} EXP`, 'gold');
+      const noticeLines = [];
       while (commander.exp >= commander.maxExp) {
         const leadershipBefore = getLeadership();
         commander.exp -= commander.maxExp;
@@ -380,7 +381,27 @@
         const leadershipAfter = getLeadership();
         const leadershipText = leadershipAfter > leadershipBefore ? ` · 통솔력 ${leadershipBefore} → ${leadershipAfter}부대` : '';
         addLog(`👑 지휘관 레벨업! Lv.${commander.level} — 스킬 선택권 +1${leadershipText}`, 'gold');
+        noticeLines.push(`Lv.${commander.level} 달성 — 스킬 선택권 +1`);
+        if (leadershipAfter > leadershipBefore) noticeLines.push(`통솔력 ${leadershipBefore} → ${leadershipAfter}부대`);
       }
+      if (noticeLines.length) {
+        noticeLines.push(`보유 스킬 선택권 ${commander.skillPoints}개 — 지휘관 스킬트리에서 새 패시브를 해금하세요.`);
+        window.UI?.showGrowthNotice?.({
+          key: 'commander', icon: '👑', title: `지휘관 레벨업! Lv.${commander.level}`, lines: noticeLines,
+          actionLabel: '🌳 지휘관 스킬트리', onAction: openSkillsModal
+        });
+      }
+    }
+
+    // 유닛 레벨업 · 병과 승급 직후 안내창 → 해당 유닛의 스킬트리 탭으로 바로 이동
+    function notifyUnitGrowth(unit, title, lines = []) {
+      if (!unit || (unit.owner && unit.owner !== 'PLAYER')) return;
+      const sp = Number(unit.skillPoints) || 0;
+      window.UI?.showGrowthNotice?.({
+        key: `unit-${unit.id}`, icon: '⭐', title,
+        lines: [...lines, sp > 0 ? `스킬 해금권 ${sp}장 보유 — 스킬트리에서 새 스킬을 익히세요.` : '스킬트리에서 다음 스킬을 확인해 보세요.'],
+        onAction: () => window.UI?.renderPromotionMenu?.(unit, { tab: 'skills' })
+      });
     }
 
     // 아군 전사 시 지휘관 경험치 획득.
@@ -1789,13 +1810,9 @@
             }
           }
 
-          // 포켓몬식 야생 유닛 포섭 판정 (50% 확률)
-          const canCapture = Math.random() < 0.50;
-          if (canCapture) {
-            const initAffection = skills.StrategicDominance ? 50 : 25;
-            captureEnemyUnit(defender, initAffection, defender.x, defender.y);
-          } else {
-            const lootGold = 35 + defender.level * 10;
+          // 포섭 판정: 확률·초기 호감도는 지휘관의 포섭 방침이 정한다. 포섭하지 못하면 전리품.
+          if (!tryCaptureEnemy(defender, defender.x, defender.y)) {
+            const lootGold = Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult);
             state.gold += lootGold;
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
@@ -1882,17 +1899,13 @@
         } else {
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
-          const lootGold = 35 + attacker.level * 10;
+          const lootGold = Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult);
           state.gold += lootGold;
           addLog(`🏆 [적 격퇴 전리품] +${lootGold}G 국고 획득!`, 'gold');
           grantCommanderExp(20, '반격 섬멸');
 
-          // 반격 승리 시 적 포섭 판정 (50%)
-          const canCapture = Math.random() < 0.50;
-          if (canCapture) {
-            const initAffection = skills.StrategicDominance ? 50 : 25;
-            captureEnemyUnit(attacker, initAffection, defender.x, defender.y);
-          }
+          // 반격 승리 시 적 포섭 판정 (포섭 방침)
+          tryCaptureEnemy(attacker, defender.x, defender.y);
         }
       }
 
@@ -2575,9 +2588,14 @@
       saveGameState();
     }
 
-    function executeCityUpgrade(cost) {
+    function getAcademyUpgradeCost() {
+      return typeof window.getGamePrice === 'function' ? window.getGamePrice('ACADEMY_UPGRADE') : 300;
+    }
+
+    function executeCityUpgrade() {
       const unit = getSelectedUnit();
       if (!unit) return;
+      const cost = getAcademyUpgradeCost();
 
       if (state.gold < cost) {
         const msg = `⚠️ 골드가 부족합니다! (필요: ${cost}G)`;
@@ -2593,13 +2611,15 @@
       unit.def += 6;
       unit.maxHp += 20;
       unit.hp = unit.maxHp;
+      unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
       if (!unit.promotions) unit.promotions = {};
       unit.promotions.combatRank = (unit.promotions.combatRank || 0) + 1;
 
-      addLog(`⚔️ [아카데미 진급] ${unit.name} 레벨업! (Lv.${unit.level}, 공 +8, 방 +6, 최대 HP +20)`, 'gold');
+      addLog(`⚔️ [아카데미 진급] ${unit.name} 레벨업! (Lv.${unit.level}, 공 +8, 방 +6, 최대 HP +20, 스킬 해금권 +1) -${cost}G`, 'gold');
       closeAllModals();
       renderAll();
       saveGameState();
+      notifyUnitGrowth(unit, `${unit.name} 레벨업! Lv.${unit.level}`, ['공격 +8 · 방어 +6 · 최대 HP +20', '스킬 해금권 +1']);
     }
 
     /* --------------------------------------------------------------------------
@@ -4950,6 +4970,7 @@
         panel.hidden = panel.dataset.cmdPanel !== tab;
       });
       if (tab === 'relics') renderCommanderRelics();
+      if (tab === 'capture') renderCaptureDoctrinePanel();
     }
     window.switchCommanderTab = switchCommanderTab;
 
@@ -4984,6 +5005,7 @@
       const modal = document.getElementById('modal-skills');
       renderAdjutantPanel();
       renderCommanderRelics();
+      renderCaptureDoctrinePanel();
       const grid = document.getElementById('modal-skill-grid');
       document.getElementById('modal-sp-display').textContent = state.commander.skillPoints;
 
@@ -5038,6 +5060,8 @@
       if (unit) {
         document.getElementById('city-sell-title').textContent = `💰 [${unit.name}] 명예 퇴역 (매각)`;
       }
+      const upgradeBtn = document.getElementById('btn-city-upgrade');
+      if (upgradeBtn) upgradeBtn.textContent = `${getAcademyUpgradeCost()}G 훈련`;
       document.getElementById('modal-city').classList.add('open');
     }
 
@@ -6093,6 +6117,122 @@
       return Math.max(0, Number(base) || 0) + Math.max(0, (Number(level) || 1) - 1);
     }
 
+    // ------------------------------------------------------------------------
+    // 전투 포섭: 적을 쓰러뜨리면 기본 포섭(무력 위압)으로 CAPTURE_BASE_CHANCE 확률, 초기 호감도 CAPTURE_BASE_AFFECTION.
+    // 포섭 방침(지휘관 창에서 하나 선택)은 그 위에 붙는 보정이다.
+    //   chanceBonus: 포섭 확률 가산(%p) / affectionBonus: 초기 호감도 가산 / lootMult: 포섭 실패 시 전리품 배율
+    //   priceKey: 포섭 성공 시 지불하는 가격(getGamePrice) — 골드가 모자라면 방침 효과 없이 기본 포섭으로 판정
+    //   noCapture: 포섭 판정을 하지 않는다
+    // ------------------------------------------------------------------------
+    const CAPTURE_BASE_CHANCE = 0.50;
+    const CAPTURE_BASE_AFFECTION = 25;
+    const CAPTURE_DOCTRINES = {
+      NONE:    { id: 'NONE',    icon: '➖', name: '방침 없음', desc: '기본 포섭만 한다.', chanceBonus: 0, affectionBonus: 0, lootMult: 1 },
+      BRIBE:   { id: 'BRIBE',   icon: '🪙', name: '금화 회유', desc: '위압에 금화를 얹어 계약을 맺는다. 포섭 성공 시 계약금을 지불한다.', chanceBonus: 0.05, affectionBonus: 20, lootMult: 1, priceKey: 'CAPTURE_BRIBE' },
+      SINCERE: { id: 'SINCERE', icon: '🤝', name: '진심 설득', desc: '항복을 받기 전 설득부터 한다. 조금 덜 넘어오지만 마음을 열고 들어온다.', chanceBonus: -0.05, affectionBonus: 15, lootMult: 1 },
+      LOOT:    { id: 'LOOT',    icon: '💰', name: '전리품 우선', desc: '포섭하지 않고 전리품을 챙긴다.', chanceBonus: 0, affectionBonus: 0, lootMult: 1.2, noCapture: true }
+    };
+    window.CAPTURE_DOCTRINES = CAPTURE_DOCTRINES;
+
+    function getCaptureDoctrine() {
+      const id = state && state.commander && state.commander.captureDoctrine;
+      return CAPTURE_DOCTRINES[id] || CAPTURE_DOCTRINES.NONE;
+    }
+
+    function getCapturePrice(doctrine) {
+      return doctrine.priceKey && typeof window.getGamePrice === 'function' ? window.getGamePrice(doctrine.priceKey) : 0;
+    }
+
+    // 방침 효과가 실제로 적용되는가 (계약금을 낼 골드가 있어야 한다)
+    function isDoctrineActive(doctrine) {
+      const price = getCapturePrice(doctrine);
+      return !(price > 0 && (state.gold || 0) < price);
+    }
+
+    // 적 1기를 포섭할 확률 (0~0.95)
+    function getCaptureChance(doctrine = getCaptureDoctrine()) {
+      if (doctrine.noCapture) return 0;
+      const bonus = isDoctrineActive(doctrine) ? doctrine.chanceBonus : 0;
+      return Math.max(0, Math.min(0.95, CAPTURE_BASE_CHANCE + bonus));
+    }
+    window.getCaptureChance = getCaptureChance;
+
+    function getCaptureAffection(doctrine = getCaptureDoctrine()) {
+      const dominance = state.commander?.unlockedSkills?.StrategicDominance ? 25 : 0;
+      const bonus = isDoctrineActive(doctrine) ? doctrine.affectionBonus : 0;
+      return Math.min(100, CAPTURE_BASE_AFFECTION + bonus + dominance);
+    }
+
+    // 쓰러뜨린 적의 포섭 판정. 포섭(또는 기억 계승 재료 획득)하면 true.
+    function tryCaptureEnemy(enemy, x, y) {
+      const doctrine = getCaptureDoctrine();
+      const chance = getCaptureChance(doctrine);
+      if (!(chance > 0) || Math.random() >= chance) return false;
+      const affection = getCaptureAffection(doctrine);
+      const price = getCapturePrice(doctrine);
+      if (price > 0 && isDoctrineActive(doctrine)) {
+        state.gold -= price;
+        addLog(`🪙 [금화 회유] ${enemy.name}에게 계약금 ${price}G 지불`, 'gold');
+      }
+      captureEnemyUnit(enemy, affection, x, y);
+      return true;
+    }
+
+    function setCaptureDoctrine(id) {
+      if (!CAPTURE_DOCTRINES[id] || !state.commander) return;
+      state.commander.captureDoctrine = id;
+      addLog(`🤝 [포섭 방침] ${CAPTURE_DOCTRINES[id].icon} ${CAPTURE_DOCTRINES[id].name}`, 'system');
+      renderCaptureDoctrinePanel();
+      saveGameState(true);
+    }
+    window.setCaptureDoctrine = setCaptureDoctrine;
+
+    function renderCaptureDoctrinePanel() {
+      const el = document.getElementById('modal-capture-doctrine');
+      if (!el) return;
+      const current = getCaptureDoctrine();
+      const pct = v => `${Math.round(v * 100)}%`;
+      const signed = (v, unit = '') => `${v > 0 ? '+' : ''}${v}${unit}`;
+      const baseAff = getCaptureAffection(CAPTURE_DOCTRINES.NONE);
+      el.innerHTML = `
+        <div class="cap-doc-base">
+          <span class="cap-doc-icon">⚔️</span>
+          <span class="cap-doc-main">
+            <b>기본 포섭 · 무력 위압</b>
+            <span class="cap-doc-desc">적을 쓰러뜨리면 항상 판정합니다. 포섭하지 못하면 전리품을 얻습니다.</span>
+            <span class="cap-doc-tags"><span class="cap-doc-tag chance">포섭 ${pct(CAPTURE_BASE_CHANCE)}</span><span class="cap-doc-tag aff">호감도 ${baseAff}</span></span>
+          </span>
+        </div>
+        <div class="cap-doc-head">
+          <b>🤝 포섭 방침</b>
+          <small>기본 포섭에 더하는 방침을 하나 고릅니다.</small>
+        </div>
+        <div class="cap-doc-list">${Object.values(CAPTURE_DOCTRINES).map(d => {
+          const price = getCapturePrice(d);
+          const short = price > 0 && (state.gold || 0) < price;
+          const tags = d.noCapture
+            ? `<span class="cap-doc-tag chance">포섭 안 함</span><span class="cap-doc-tag loot">전리품 ×${d.lootMult}</span>`
+            : [
+                d.chanceBonus ? `<span class="cap-doc-tag chance">포섭 ${signed(Math.round(d.chanceBonus * 100), '%p')} → ${pct(CAPTURE_BASE_CHANCE + d.chanceBonus)}</span>` : '',
+                d.affectionBonus ? `<span class="cap-doc-tag aff">호감도 ${signed(d.affectionBonus)} → ${baseAff + d.affectionBonus}</span>` : '',
+                price > 0 ? `<span class="cap-doc-tag cost${short ? ' short' : ''}">성공 시 ${price}G${short ? ' · 골드 부족 시 효과 없음' : ''}</span>` : ''
+              ].join('');
+          const on = d.id === current.id;
+          return `
+            <button type="button" class="cap-doc-card${on ? ' active' : ''}" data-capture-doctrine="${d.id}" aria-pressed="${on}">
+              <span class="cap-doc-icon">${d.icon}</span>
+              <span class="cap-doc-main">
+                <b>${d.name}${on ? ' <em>사용 중</em>' : ''}</b>
+                <span class="cap-doc-desc">${d.desc}</span>
+                ${tags ? `<span class="cap-doc-tags">${tags}</span>` : ''}
+              </span>
+            </button>`;
+        }).join('')}</div>`;
+      el.querySelectorAll('[data-capture-doctrine]').forEach(btn => {
+        btn.onclick = () => setCaptureDoctrine(btn.dataset.captureDoctrine);
+      });
+    }
+
     function captureEnemyUnit(enemy, initAffection, x, y) {
       const charId = getCharacterId(enemy);
       const record = findCharacterRecord(charId, enemy.name);
@@ -6457,7 +6597,9 @@
         b.onclick = () => {
           const entry = getCharacterPoolEntries().find(x => x.id === b.dataset.poolAbsorb);
           const owned = entry && (entry.unit || entry.reserve);
-          after(owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 기억을 계승할 수 없습니다.' });
+          const res = owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 기억을 계승할 수 없습니다.' };
+          after(res);
+          if (res.ok) notifyUnitGrowth(owned, `${owned.name} 레벨업! Lv.${res.level}`, ['기억 계승 — 스킬 해금권 +1']);
         };
       });
     }
@@ -8120,6 +8262,7 @@
       );
 
       renderAll();
+      notifyUnitGrowth(unit, `${unit.name} 승급! [${promoData.name}]`, [promoData.effects?.description || '전투 능력 강화', `HP +${actualHealed} 회복`]);
 
       return true;
     }

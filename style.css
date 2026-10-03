@@ -69,7 +69,10 @@
       justify-content: center;
       align-items: center;
       min-height: 100vh;
+      /* 모바일 브라우저의 100vh는 주소창까지 포함해 화면보다 길다 → 실제 보이는 높이(dvh) 사용 */
+      min-height: 100dvh;
       overflow: hidden;
+      overscroll-behavior: none;
     }
 
     /* Mobile Container Frame (480px) */
@@ -77,6 +80,7 @@
       width: 100%;
       max-width: 480px;
       height: 100vh;
+      height: 100dvh;
       max-height: 1000px;
       background: var(--bg-app);
       border: 1.5px solid rgba(186, 230, 253, 0.85);
@@ -3182,6 +3186,8 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex: 1 1 auto;
+      min-width: 0;
     }
     .strat-commander-avatar {
       width: 38px;
@@ -3200,6 +3206,7 @@
       display: flex;
       flex-direction: column;
       gap: 2px;
+      min-width: 0;
     }
     .strat-commander-name {
       font-size: 13px;
@@ -3208,8 +3215,17 @@
       display: flex;
       align-items: center;
       gap: 5px;
+      min-width: 0;
+    }
+    /* 긴 이름은 줄바꿈 대신 말줄임 */
+    #strat-cmd-name {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
     }
     .strat-lvl-tag {
+      flex-shrink: 0;
       font-size: 9px;
       font-weight: 900;
       color: #ffffff;
@@ -3232,6 +3248,7 @@
     .strat-resources-grid {
       display: flex;
       gap: 5px;
+      flex-shrink: 0;
     }
     .strat-res-chip {
       background: #ffffff;
@@ -3268,6 +3285,13 @@
       color: #0f172a;
       margin-top: 2px;
       line-height: 1;
+    }
+
+    /* 좁은 화면: 자원 칩을 한 줄짜리로 세로 배치해 상단 프로필 줄이 넘치지 않게 */
+    @media (max-width: 420px) {
+      .strat-resources-grid { flex-direction: column; gap: 2px; }
+      .strat-res-chip { flex-direction: row; justify-content: space-between; gap: 5px; min-width: 0; padding: 2px 6px; border-radius: 7px; }
+      .strat-res-val { margin-top: 0; font-size: 10.5px; }
     }
 
     /* Common Card Section */
@@ -5525,7 +5549,7 @@
 .strat-char-roster-badge.benched { background: #f1f5f9; color: #64748b; border: 1px solid #cbd5e1; }
 
 /* ---- 용병 명부 (캐릭터 풀) ---- */
-.strat-gacha-entry-wrap{flex-direction:column;gap:4px}
+.strat-gacha-entry-wrap{flex-direction:column;gap:4px;flex-shrink:0}
 .strat-gacha-entry-wrap .strat-gacha-entry-btn{white-space:nowrap;padding:5px 10px;margin:0}
 .pool-overlay{position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:12px}
 .pool-window{width:100%;max-width:560px;max-height:100%;display:flex;flex-direction:column;background:linear-gradient(180deg,#f8fbff 0%,#eef6ff 100%);border-radius:18px;border:1px solid #bfdbfe;box-shadow:0 20px 50px rgba(15,23,42,.3);overflow:hidden}
@@ -5815,3 +5839,38 @@
   pointer-events: none;
   background: no-repeat center / contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cg fill='%233f5d1c' opacity='.28'%3E%3Cellipse cx='34' cy='44' rx='22' ry='19'/%3E%3Cellipse cx='66' cy='36' rx='19' ry='17'/%3E%3Cellipse cx='58' cy='72' rx='23' ry='19'/%3E%3C/g%3E%3Cg fill='%235f8a26'%3E%3Ccircle cx='31' cy='39' r='19'/%3E%3Ccircle cx='64' cy='31' r='16'/%3E%3Ccircle cx='55' cy='66' r='20'/%3E%3C/g%3E%3Cg fill='%237fb236'%3E%3Ccircle cx='27' cy='34' r='12'/%3E%3Ccircle cx='60' cy='27' r='10'/%3E%3Ccircle cx='50' cy='60' r='13'/%3E%3C/g%3E%3Cg fill='%23a6d64a'%3E%3Ccircle cx='23' cy='30' r='5'/%3E%3Ccircle cx='57' cy='23' r='4'/%3E%3Ccircle cx='46' cy='55' r='5'/%3E%3C/g%3E%3C/svg%3E");
 }
+
+/* ---- 성장 안내창 (레벨업 · 승급 → 스킬트리 안내) ---- */
+.growth-notice-overlay{position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(15,23,42,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);animation:fadeIn .2s ease-out}
+.growth-notice-card{width:100%;max-width:340px;background:linear-gradient(180deg,#1e293b 0%,#0f172a 100%);border:2px solid #fbbf24;border-radius:18px;padding:18px 16px 14px;text-align:center;color:#f8fafc;box-shadow:0 0 0 4px rgba(251,191,36,.15),0 20px 48px rgba(0,0,0,.5);animation:growthPop .35s cubic-bezier(.16,1,.3,1)}
+.growth-notice-icon{font-size:40px;line-height:1;margin-bottom:6px;filter:drop-shadow(0 0 10px rgba(251,191,36,.55))}
+.growth-notice-title{font-size:16px;font-weight:900;color:#fbbf24;margin-bottom:8px;word-break:keep-all}
+.growth-notice-lines{list-style:none;margin:0 0 14px;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12px;line-height:1.5;color:#cbd5e1;max-height:40vh;overflow-y:auto}
+.growth-notice-actions{display:flex;gap:8px}
+.growth-notice-actions button{border-radius:12px;padding:11px 8px;font-size:13px;font-weight:900;cursor:pointer}
+.growth-notice-later{flex:1;background:transparent;border:1px solid #475569;color:#94a3b8}
+.growth-notice-go{flex:2;background:linear-gradient(135deg,#0284c7,#1d4ed8);border:2px solid #fff;color:#fff;box-shadow:0 4px 14px rgba(2,132,199,.4)}
+.growth-notice-go:active,.growth-notice-later:active{transform:scale(.97)}
+@keyframes growthPop{0%{opacity:0;transform:scale(.85) translateY(10px)}100%{opacity:1;transform:none}}
+
+/* 지휘관 창 — 포섭 방침 */
+.cap-doc-base{display:flex;align-items:flex-start;gap:10px;padding:10px;border-radius:12px;background:#f8fafc;border:1.5px dashed #cbd5e1;margin-bottom:12px}
+.cap-doc-head{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+.cap-doc-head b{font-size:13px;color:#0f172a}
+.cap-doc-head small{font-size:10.5px;color:#64748b;line-height:1.45}
+.cap-doc-list{display:flex;flex-direction:column;gap:6px}
+.cap-doc-card{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:10px;border-radius:12px;border:1.5px solid #e2e8f0;background:#fff;font:inherit;color:#0f172a;cursor:pointer}
+.cap-doc-card:hover{border-color:#bae6fd;background:#f8fbff}
+.cap-doc-card.active{border-color:#0284c7;background:linear-gradient(90deg,#e0f2fe 0%,#fff 100%);box-shadow:0 0 0 2px rgba(2,132,199,.15)}
+.cap-doc-icon{font-size:22px;line-height:1;flex:none;margin-top:2px}
+.cap-doc-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.cap-doc-main b{font-size:12.5px;font-weight:900}
+.cap-doc-main b em{font-style:normal;font-size:9.5px;font-weight:900;color:#fff;background:#0284c7;border-radius:999px;padding:1px 6px;margin-left:4px;vertical-align:1px}
+.cap-doc-desc{font-size:10.5px;color:#475569;line-height:1.45}
+.cap-doc-tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.cap-doc-tag{font-size:9.5px;font-weight:900;border-radius:6px;padding:2px 6px;border:1px solid}
+.cap-doc-tag.chance{color:#0369a1;background:#f0f9ff;border-color:#bae6fd}
+.cap-doc-tag.aff{color:#be185d;background:#fdf2f8;border-color:#fbcfe8}
+.cap-doc-tag.cost{color:#b45309;background:#fffbeb;border-color:#fde68a}
+.cap-doc-tag.cost.short{color:#dc2626;background:#fef2f2;border-color:#fca5a5}
+.cap-doc-tag.loot{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
