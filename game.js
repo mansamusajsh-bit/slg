@@ -8179,14 +8179,13 @@
       if (isPlayer && state.commander?.unlockedSkills?.CommanderLeadership) {
         gained = roundStochastic(amount * (1 + LEADERSHIP_XP_BONUS));
       }
-      const affordableBefore = isPlayer ? getAffordablePromotions(unit).length : 0;
       unit.xp = (unit.xp || 0) + gained;
       if (isPlayer) {
         const bonusText = gained > amount ? ` (통솔 +${gained - amount})` : '';
         addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${gained} XP${bonusText} (보유 ${unit.xp} XP)`, 'gold');
-        // 이번 경험치로 처음 승급할 수 있게 되면 안내 (이미 승급 가능 상태였으면 다시 띄우지 않는다)
+        // 경험치를 받을 때마다 승급할 수 있는 상태면 안내 (같은 유닛 창이 열려 있으면 내용만 갱신)
         const affordable = getAffordablePromotions(unit);
-        if (!affordableBefore && affordable.length) {
+        if (affordable.length) {
           window.UI?.showGrowthNotice?.({
             key: `promo-${unit.id}`, icon: '🎖️', title: `${unit.name} 승급 가능!`,
             lines: [
@@ -8194,7 +8193,7 @@
               `가능: ${affordable.slice(0, 3).map(p => p.name).join(', ')}${affordable.length > 3 ? ` 외 ${affordable.length - 3}개` : ''}`,
               '승급 창에서 승급을 고르고, 스킬트리 탭에서 스킬도 확인하세요.'
             ],
-            actionLabel: '🎖️ 승급하러 가기',
+            actionLabel: '🎖️ 승급하러 가기', replace: true,
             onAction: () => window.UI?.renderPromotionMenu?.(unit)
           });
         }
