@@ -410,7 +410,8 @@
   function openAdjutantSelect(force) {
     if (!force && typeof cloudLoadPending !== 'undefined' && cloudLoadPending) return; // 클라우드 세이브가 곧 덮어쓴다
     if (typeof isRunBlocked === 'function' && isRunBlocked()) return; // 회귀/긴급 모집이 먼저
-    if (state.currentView !== 'CAMPAIGN') return;
+    // 작전지도를 벗어났으면 창을 닫는다 (클라우드 세이브가 도착해 전략맵으로 넘어간 경우 등 — 남겨 두면 옛 파티로 만든 창이 그대로 남는다)
+    if (state.currentView !== 'CAMPAIGN') { document.getElementById('modal-adjutant')?.remove(); return; }
     const run = state.run;
     const candidates = (run.party || []).filter((u) => !u.isDead);
     if (!candidates.length) { document.getElementById('modal-adjutant')?.remove(); return; }

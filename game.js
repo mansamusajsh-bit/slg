@@ -4821,6 +4821,7 @@
         document.getElementById('view-sector-field')?.classList.remove('active');
         renderCampaignView();
       } else if (state && state.currentView === 'STRATEGY') {
+        document.getElementById('modal-adjutant')?.remove(); // 부관 임명 창은 작전지도 전용
         const viewStrat = document.getElementById('view-strategy-main');
         const viewSector = document.getElementById('view-sector-field');
         if (viewStrat) viewStrat.classList.add('active');
