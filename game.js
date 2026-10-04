@@ -1427,6 +1427,11 @@
       return state.playerUnits.find(u => u.id === selectedUnitId && !u.isDead) || state.playerUnits.find(u => !u.isDead);
     }
 
+    // 맵 클릭/범위 표시용: 첫 유닛으로 대체하지 않고, 실제로 선택한 유닛만 돌려준다 (없으면 null).
+    function getExplicitSelectedUnit() {
+      return selectedUnitId ? state.playerUnits.find(u => u.id === selectedUnitId && !u.isDead) || null : null;
+    }
+
     let userCardViewPreference = 'AUTO'; // 'AUTO' | 'FORCE_NORMAL'
     let cardInspectedEnemyId = null;
 
@@ -2765,7 +2770,7 @@
       mapEl.classList.toggle('has-bg', !!bgUrl);
       mapEl.style.backgroundImage = bgUrl ? `url("${encodeURI(bgUrl)}")` : '';
 
-      const selUnit = getSelectedUnit();
+      const selUnit = getExplicitSelectedUnit();
       let moveTiles = [];
       let attackTiles = [];
       const zocTiles = computeZocTiles();
@@ -2993,7 +2998,7 @@
         castTargetedSkillAt(tile.x, tile.y);
         return;
       }
-      const selUnit = getSelectedUnit();
+      const selUnit = getExplicitSelectedUnit();
       const pUnits = state.playerUnits.filter(u => !u.isDead && u.x === tile.x && u.y === tile.y);
       const eUnits = state.enemyUnits.filter(u => !u.isDead && u.x === tile.x && u.y === tile.y);
 
