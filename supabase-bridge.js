@@ -206,6 +206,10 @@ const bridge = {
   getNationShare(id){return getRecord('nationShares',id);},
   casNationShare(id,expectedRev,value){return casRecord('nationShares',id,expectedRev,value);},
   getServerTime(){return getServerTime();},
+  // 연준 · 캐릭터 경매 (fedState/main · charAuctions/{id}, 전 플레이어 공유). 오류는 던진다 — fedSystem.js가 처리.
+  listSharedRecords(collection){return listRecords(collection);},
+  getSharedRecord(collection,id){return getRecord(collection,id);},
+  casSharedRecord(collection,id,expectedRev,value){return casRecord(collection,id,expectedRev,value);},
   async saveGameStateToCloud(payload){try{const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
   async loadGameStateFromCloud(uid){try{return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
   subscribeGameState(uid,cb){return subscribeOne('gameState',uid||this.currentUser?.uid||'guest_main',cb);}

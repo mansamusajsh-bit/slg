@@ -6088,3 +6088,84 @@
 .cap-doc-tag.cost{color:#b45309;background:#fffbeb;border-color:#fde68a}
 .cap-doc-tag.cost.short{color:#dc2626;background:#fef2f2;border-color:#fca5a5}
 .cap-doc-tag.loot{color:#047857;background:#ecfdf5;border-color:#a7f3d0}
+
+/* ===== 연방준비기금 (fedSystem.js): 금리·물가 / 담보 대출 / 캐릭터 경매시장 ===== */
+.strat-res-chip.is-clickable{cursor:pointer}
+.strat-res-chip.is-clickable:active{transform:scale(.98)}
+.strat-res-lbl small[data-fed-badge]{font-size:10px;font-weight:800;color:#0369a1;opacity:.85;margin-left:2px}
+.fed-card{max-width:560px;text-align:left;padding:0;display:flex;flex-direction:column;border-color:#0ea5e9}
+.fed-head{display:flex;align-items:center;gap:10px;padding:14px 16px 8px}
+.fed-head h2{margin:0;font-size:17px;font-weight:900;color:#7dd3fc;flex:1}
+.fed-gold{font-size:12px;font-weight:800;color:#fbbf24}
+.fed-x{background:#1e293b;border:1px solid #334155;color:#94a3b8;width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:13px}
+.fed-tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid #1e293b}
+.fed-tab{flex:1;background:transparent;border:none;border-bottom:2px solid transparent;color:#94a3b8;font-weight:800;font-size:12.5px;padding:8px 4px;cursor:pointer}
+.fed-tab small{background:#334155;color:#e2e8f0;border-radius:8px;padding:0 6px;font-size:10px;margin-left:2px}
+.fed-tab.is-on{color:#38bdf8;border-bottom-color:#38bdf8}
+.fed-body{padding:12px 16px 18px;overflow-y:auto;font-size:12px;color:#cbd5e1;line-height:1.55}
+.fed-help{font-size:11px;color:#94a3b8;margin:0 0 10px}
+.fed-help b{color:#fca5a5}
+.fed-h{font-size:13px;font-weight:900;color:#e2e8f0;margin:14px 0 6px}
+.fed-h small{font-weight:600;color:#64748b;font-size:10.5px;margin-left:4px}
+.fed-empty,.fed-note{font-size:11px;color:#94a3b8;margin:6px 0}
+.fed-note b{color:#e2e8f0}
+.fed-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.fed-stat{background:#111c33;border:1px solid #1e293b;border-radius:10px;padding:8px;display:flex;flex-direction:column;gap:1px}
+.fed-stat small{font-size:10px;color:#64748b}
+.fed-stat b{font-size:18px;color:#f8fafc;font-variant-numeric:tabular-nums}
+.fed-stat em{font-style:normal;font-size:10px;color:#94a3b8}
+.fed-stat em.is-up{color:#f87171}.fed-stat em.is-down{color:#4ade80}
+.fed-chart{display:flex;align-items:center;gap:10px;margin:8px 0 4px;color:#38bdf8;font-size:10.5px}
+.fed-chart span{color:#94a3b8;flex:1;text-align:right}
+.fed-spark{width:160px;height:36px;flex:none}
+.fed-cd{font-variant-numeric:tabular-nums;color:#7dd3fc}
+.fed-members{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.fed-members li{display:flex;justify-content:space-between;gap:8px;background:#111c33;border:1px solid #1e293b;border-radius:8px;padding:6px 10px}
+.fed-members li.is-me{border-color:#16a34a}
+.fed-members li span{color:#94a3b8;font-size:11px;text-align:right}
+.fed-motion{margin-top:10px;background:#0b2447;border:1px solid #1d4ed8;border-radius:12px;padding:10px 12px}
+.fed-motion.is-idle{background:#111c33;border-color:#1e293b}
+.fed-motion-head{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:#f8fafc}
+.fed-motion-head span{color:#94a3b8;font-size:11px}
+.fed-motion-meta{font-size:11px;color:#94a3b8;margin:4px 0}
+.fed-votes{display:flex;flex-wrap:wrap;gap:4px;margin:4px 0}
+.fed-vote{font-size:10.5px;border-radius:6px;padding:1px 7px;background:#1e293b}
+.fed-vote.is-yes{color:#86efac}.fed-vote.is-no{color:#fca5a5}
+.fed-motion-actions{display:flex;gap:6px;margin-top:8px}
+.fed-btn{flex:1;background:#1e293b;border:1px solid #475569;color:#e2e8f0;font-weight:800;font-size:12px;border-radius:10px;padding:9px 10px;cursor:pointer}
+.fed-btn:disabled{opacity:.45;cursor:not-allowed}
+.fed-btn.is-primary{background:linear-gradient(135deg,#0284c7,#38bdf8);color:#fff;border:none;width:100%;margin-top:8px}
+.fed-btn.is-danger.is-on{background:#7f1d1d;border-color:#ef4444}
+.fed-btn.is-on{background:#14532d;border-color:#22c55e}
+.fed-loan,.fed-auc{background:#111c33;border:1px solid #1e293b;border-radius:12px;padding:10px 12px;margin-bottom:8px}
+.fed-loan.is-arrears{border-color:#b45309}
+.fed-auc.is-mine{border-color:#22c55e}
+.fed-loan-unit{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.fed-loan-unit b{color:#f8fafc;font-size:13px}
+.fed-loan-unit small{display:block;color:#94a3b8;font-size:10.5px}
+.fed-ava{width:38px;height:38px;border-radius:50%;overflow:hidden;background:#1e293b;display:flex;align-items:center;justify-content:center;flex:none}
+.fed-ava img{width:100%;height:100%;object-fit:cover}
+.fed-loan-grid{display:grid;grid-template-columns:auto 1fr;gap:2px 12px;font-size:11.5px;margin-bottom:6px}
+.fed-loan-grid span{color:#64748b}
+.fed-loan-grid b{color:#e2e8f0;text-align:right;font-weight:700}
+.fed-bad{color:#fbbf24}
+.fed-collat{display:flex;flex-direction:column;gap:4px;margin-bottom:8px}
+.fed-collat-row{display:flex;align-items:center;gap:8px;background:#111c33;border:1px solid #1e293b;border-radius:10px;padding:6px 10px;cursor:pointer}
+.fed-collat-row.is-sel{border-color:#38bdf8;background:#0b2447}
+.fed-collat-row input{accent-color:#38bdf8}
+.fed-collat-main{flex:1}
+.fed-collat-main b{display:block;color:#f8fafc}
+.fed-collat-main small,.fed-collat-val small{display:block;color:#94a3b8;font-size:10px}
+.fed-collat-val{text-align:right;color:#fbbf24;font-weight:800;font-size:11.5px}
+.fed-field{margin:8px 0}
+.fed-field label{display:flex;justify-content:space-between;font-size:11.5px;color:#cbd5e1;margin-bottom:2px}
+.fed-field input[type=range]{width:100%;accent-color:#38bdf8}
+.fed-quote{background:#0b2447;border:1px solid #1d4ed8;border-radius:10px;padding:8px 10px;font-size:11.5px;color:#e2e8f0}
+.fed-quote small{color:#94a3b8}
+.fed-bid-row{display:flex;gap:6px}
+.fed-bid-row .fed-btn{width:auto;margin-top:0;padding:9px 18px;flex:none}
+.fed-input{flex:1;min-width:0;background:#0b1220;border:1px solid #334155;border-radius:10px;color:#f8fafc;font-weight:800;padding:8px 10px;font-size:13px}
+.fed-min{display:block;color:#64748b;font-size:10px;margin-top:4px}
+.fed-closed{list-style:none;margin:0;padding:0;font-size:11.5px}
+.fed-closed li{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b}
+.fed-closed li span{color:#94a3b8}

@@ -20,7 +20,9 @@ const files = [
   'ui.js',
   'game.js',
   'shareEngine.js',
+  'fedEngine.js',
   'nationShares.js',
+  'fedSystem.js',
   'campaignMap.js',
   'civ4-editor.js',
   'assets', // 작전지도 배경 일러스트 등 이미지

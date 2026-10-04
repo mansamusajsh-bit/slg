@@ -2652,7 +2652,7 @@
       const baseGold = baseMap[unit.classType] || 120;
       const levelMult = 1 + (unit.level - 1) * 0.35;
       const affBonus = Math.round(unit.affection * 2.0);
-      const refund = Math.round(baseGold * levelMult + affBonus);
+      const refund = scaleGold(Math.round(baseGold * levelMult + affBonus)); // 매각가도 물가를 따라간다
 
       unit.isDead = true;
       state.gold += refund;
@@ -2703,7 +2703,8 @@
     /* --------------------------------------------------------------------------
        Village Store Items (호감도 과일, 만찬, 리와인더)
        -------------------------------------------------------------------------- */
-    function buyVillageItem(type, cost, affAdd) {
+    function buyVillageItem(type, baseCost, affAdd) {
+      const cost = scaleGold(baseCost); // 기준가 × 물가
       if (state.gold < cost) {
         const msg = `⚠️ 골드가 부족합니다! (필요: ${cost}G)`;
         addLog(msg, 'warning');
@@ -3655,7 +3656,7 @@
         };
         card.appendChild(ok);
       } else {
-        const offers = RunEngine.getShopOffers(run, node);
+        const offers = RunEngine.getShopOffers(run, node).map(o => ({ ...o, cost: scaleGold(o.cost) })); // 기준가 × 물가
         const bought = new Set();
         card.appendChild(el('div', 'font-size:40px;', '🛒'));
         card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', '보급 상점'));
@@ -4351,8 +4352,10 @@
     // 획득 기록: state.characterCollection (게임 상태에 함께 저장)
     // ========================================================================
     let gachaLastResults = [];
-    const GACHA_HIRE_COST = 100;          // 용병 고용 1회
-    const EMERGENCY_RECRUIT_COST = 200;   // 전멸 후 긴급 모집 1회 (무작위)
+    const GACHA_HIRE_BASE = 100;          // 용병 고용 1회 (기준가 — 실제 가격은 인플레이션 반영: getGachaHireCost)
+    const getGachaHireCost = () => scaleGold(GACHA_HIRE_BASE);
+    const EMERGENCY_RECRUIT_BASE = 200;   // 전멸 후 긴급 모집 1회 (무작위, 기준가)
+    const getEmergencyRecruitCost = () => scaleGold(EMERGENCY_RECRUIT_BASE);
 
     function getCharacterGachaPool() {
       return Array.isArray(customCharactersCloudCache) ? customCharactersCloudCache.filter(c => c && c.id) : [];
@@ -4432,10 +4435,11 @@
       if (poolCount) poolCount.textContent = `DB ${pool.length}명`;
       if (ownedCount) ownedCount.textContent = `미편입 사본 ${collection.length}장`;
       const costDesc = document.getElementById('gacha-cost-desc');
-      if (costDesc) costDesc.textContent = `1회 ${GACHA_HIRE_COST}G · 보유 골드 ${Number(state.gold) || 0}G`;
+      if (costDesc) costDesc.textContent = `1회 ${getGachaHireCost()}G · 보유 골드 ${Number(state.gold) || 0}G`;
+      document.querySelectorAll('[data-gacha-price]').forEach(el => { el.textContent = `${getGachaHireCost() * Number(el.dataset.gachaPrice)}G · RANDOM × ${el.dataset.gachaPrice}`; });
       document.querySelectorAll('.gacha-summon-btn').forEach(b => {
         if (status && status.dataset.busy) return;
-        b.disabled = (Number(state.gold) || 0) < GACHA_HIRE_COST * (Number(b.dataset.amount) || 1);
+        b.disabled = (Number(state.gold) || 0) < getGachaHireCost() * (Number(b.dataset.amount) || 1);
       });
       if (status && pool.length > 0 && !status.dataset.busy) status.textContent = `고용 가능 용병 ${pool.length}명`;
 
@@ -4489,7 +4493,7 @@
       if (status) { status.textContent = '고용 중...'; status.dataset.busy = '1'; }
       let message = '';
       try {
-        const cost = GACHA_HIRE_COST * amount;
+        const cost = getGachaHireCost() * amount;
         if ((Number(state.gold) || 0) < cost) throw new Error(`골드가 부족합니다. (필요 ${cost}G · 보유 ${Number(state.gold) || 0}G)`);
         const pool = await ensureCharacterGachaPool();
         if (!pool.length) throw new Error('고용 가능한 용병이 없습니다.');
@@ -5484,8 +5488,18 @@
       saveGameState();
     }
 
+    // data-base-price 가 붙은 버튼의 가격 표시를 현재 물가로 고친다 (마을 보급소)
+    function refreshPriceLabels(root) {
+      (root || document).querySelectorAll('[data-base-price]').forEach(el => {
+        el.textContent = `${scaleGold(Number(el.dataset.basePrice))}G ${el.dataset.priceSuffix || ''}`.trim();
+      });
+    }
+    window.refreshPriceLabels = refreshPriceLabels;
+
     function openVillageModal() {
-      document.getElementById('modal-village').classList.add('open');
+      const modal = document.getElementById('modal-village');
+      refreshPriceLabels(modal);
+      modal.classList.add('open');
     }
 
     function openCityModal() {
@@ -10192,6 +10206,7 @@
         return { success: false, message: errorMsg, remainingGold: state.gold };
       }
 
+      const unitCost = scaleGold(template.cost); // 기준가 × 물가
       const townLevel = getTownLevel(safeTile);
       const safeTownName = safeTile?.name || '안전 거점';
       if (townLevel < template.reqTownLevel) {
@@ -10201,8 +10216,8 @@
         return { success: false, message: errorMsg, remainingGold: state.gold };
       }
 
-      if (state.gold < template.cost) {
-        const errorMsg = `💰 골드가 부족합니다! (필요: ${template.cost}G, 보유: ${state.gold}G)`;
+      if (state.gold < unitCost) {
+        const errorMsg = `💰 골드가 부족합니다! (필요: ${unitCost}G, 보유: ${state.gold}G)`;
         addLog(errorMsg, 'warning');
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(errorMsg, 'warning');
         return { success: false, message: errorMsg, remainingGold: state.gold };
@@ -10219,7 +10234,7 @@
       }
 
       // 골드 차감
-      state.gold -= template.cost;
+      state.gold -= unitCost;
 
       // 안전지대 타일 좌표에 유닛 스폰
       const spawnX = safeTile.x;
@@ -10259,7 +10274,7 @@
 
       state.playerUnits.push(newUnit);
       const hiredTownName = safeTile?.name || safeTownName || '안전 거점';
-      const successMsg = `🛒 [안전지대 유닛 고용] [${hiredTownName}]에서 신규 부대 [${newUnit.name}]을(를) 고용했습니다! (-${template.cost}G, 잔여: ${state.gold}G)`;
+      const successMsg = `🛒 [안전지대 유닛 고용] [${hiredTownName}]에서 신규 부대 [${newUnit.name}]을(를) 고용했습니다! (-${unitCost}G, 잔여: ${state.gold}G)`;
       addLog(successMsg, 'gold');
 
       if (typeof window.UI?.showToast === 'function') {
@@ -10514,7 +10529,7 @@
     // 용병 고용과 같은 풀(Supabase characters)에서 무작위로 1명씩 뽑아 바로 출전 명단에 넣는다 (1회 EMERGENCY_RECRUIT_COST).
     // 쓰러진 대원을 되살리지 않는다. 전사한 캐릭터가 뽑히면 이름만 다른 사람(makeMercAlias)으로 합류한다.
     function getMinRecruitCost() {
-      return EMERGENCY_RECRUIT_COST;
+      return getEmergencyRecruitCost();
     }
     window.getMinRecruitCost = getMinRecruitCost;
 
@@ -10528,7 +10543,7 @@
     function emergencyRecruit() {
       const run = state.run;
       if (!run || !run.emergencyRecruit) return { ok: false, reason: '긴급 모집 중이 아닙니다.' };
-      const cost = EMERGENCY_RECRUIT_COST;
+      const cost = getEmergencyRecruitCost();
       if (state.gold < cost) return { ok: false, reason: `골드가 부족합니다 (필요 ${cost}G)` };
       const pool = getEmergencyRecruitPool();
       if (!pool.length) return { ok: false, reason: '더 모집할 수 있는 용병이 없습니다.' };
@@ -10999,6 +11014,7 @@
         const reward = await openLoopRewardSelect(seed);
         const echo = run.lastStanding || null;
         if (window.NationShares) await window.NationShares.onReturnByDeath(); // 국가 지분도 회귀와 함께 사라진다
+        if (window.FedSystem) window.FedSystem.onReturnByDeath(); // 대출은 이 런과 함께 사라진다
         state.run = createInitialRun(seed, reward);
         // 최후의 기억: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
         if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {

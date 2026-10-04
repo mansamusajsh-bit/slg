@@ -1056,12 +1056,23 @@
     inflation: 1.0,
     getInflation: null
   };
+  // 현재 물가 지수 (1.0 = 기준). 연준(fedSystem.js)이 ECONOMY.getInflation에 물가를 연결한다.
+  function getPriceLevel() {
+    const rate = typeof ECONOMY.getInflation === 'function' ? Number(ECONOMY.getInflation()) : Number(ECONOMY.inflation);
+    return rate > 0 ? rate : 1;
+  }
   function getGamePrice(key) {
     const base = BASE_PRICES[key];
     if (!(base > 0)) return 0;
-    const rate = typeof ECONOMY.getInflation === 'function' ? Number(ECONOMY.getInflation()) : Number(ECONOMY.inflation);
-    const mult = rate > 0 ? rate : 1;
-    return Math.max(1, Math.round((base * mult) / 10) * 10); // 10G 단위로 반올림
+    return Math.max(1, Math.round((base * getPriceLevel()) / 10) * 10); // 10G 단위로 반올림
+  }
+  // 코드에 박혀 있는 골드 기준가(상점·고용 등)를 현재 물가로 환산한다. 소액은 1G, 100G 이상은 5G 단위.
+  // 사는 값과 파는 값 모두 이 함수를 지나야 인플레이션이 반영된다.
+  function scaleGold(base) {
+    const v = Number(base) * getPriceLevel();
+    if (!(v > 0)) return 0;
+    const unit = v >= 100 ? 5 : 1;
+    return Math.max(1, Math.round(v / unit) * unit);
   }
 
   const GAME_VIEWS = Object.freeze({
@@ -1278,6 +1289,8 @@
     BASE_PRICES,
     ECONOMY,
     getGamePrice,
+    getPriceLevel,
+    scaleGold,
     createInitialTacticalState,
     snapshotTacticalState
   };
@@ -1295,6 +1308,8 @@
   global.BASE_PRICES = BASE_PRICES;
   global.ECONOMY = ECONOMY;
   global.getGamePrice = getGamePrice;
+  global.getPriceLevel = getPriceLevel;
+  global.scaleGold = scaleGold;
   global.createInitialTacticalState = createInitialTacticalState;
   global.snapshotTacticalState = snapshotTacticalState;
   global.GameConfig = GameConfig;

@@ -969,7 +969,7 @@
     }
 
     const state = global.state || {};
-    const catalog = global.TOWN_UNIT_SHOP_CATALOG || global.unitShopSystem?.TOWN_UNIT_SHOP_CATALOG || [];
+    const catalog = (global.TOWN_UNIT_SHOP_CATALOG || global.unitShopSystem?.TOWN_UNIT_SHOP_CATALOG || []).map(u => ({ ...u, cost: global.scaleGold ? global.scaleGold(u.cost) : u.cost })); // 기준가 × 물가
 
     // 안전 거점 정보 계산 (safeZoneTile이 null일 경우에도 안전하게 마을 거점 정보로 폴백)
     const safeZoneTile = (typeof global.unitShopSystem?.isPlayerAtSafeZone === 'function')
@@ -1156,6 +1156,7 @@
     const rateForce = calcFn ? Math.round(calcFn(target, null) * 100) : 45;
 
     const currentGold = typeof state.gold === 'number' ? state.gold : 0;
+    const bribeCost = global.scaleGold ? global.scaleGold(80) : 80; // 금화 제시 계약금 (기준가 80G × 물가)
     const hpPct = Math.round(((target.hp || 1) / (target.maxHp || 100)) * 100);
 
     modal.innerHTML = `
@@ -1202,11 +1203,11 @@
         <!-- 3 Persuasion Strategy Options -->
         <div class="recruit-options-list">
           <!-- 1. Offer Gold -->
-          <button id="btn-recruit-gold" class="recruit-option-btn" ${currentGold < 80 ? 'disabled' : ''}>
+          <button id="btn-recruit-gold" class="recruit-option-btn" ${currentGold < bribeCost ? 'disabled' : ''}>
             <div>
               <div style="font-size: 13px; font-weight: 800; color: #f8fafc; display: flex; align-items: center; gap: 6px;">
                 <span>🪙 금화 제시 (Offer Gold)</span>
-                <span style="font-size: 11px; color: #fbbf24; font-weight: 700;">-80G</span>
+                <span style="font-size: 11px; color: #fbbf24; font-weight: 700;">-${bribeCost}G</span>
               </div>
               <div style="font-size: 10.5px; color: #94a3b8; margin-top: 2px;">풍족한 금화로 용병 계약 체결 (보유: ${currentGold}G)</div>
             </div>
@@ -1263,8 +1264,8 @@
     const btnGold = document.getElementById('btn-recruit-gold');
     if (btnGold) {
       btnGold.onclick = () => {
-        if (state.gold < 80) return;
-        state.gold -= 80;
+        if (state.gold < bribeCost) return;
+        state.gold -= bribeCost;
         if (typeof global.attemptPersuadeWildUnit === 'function') {
           global.attemptPersuadeWildUnit(target, 'bribe');
         }

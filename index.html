@@ -93,8 +93,8 @@
               <span class="strat-res-lbl">👑 통솔력</span>
               <span class="strat-res-val" id="strat-cmd-ap">4부대</span>
             </div>
-            <div class="strat-res-chip gold" title="보유 골드">
-              <span class="strat-res-lbl">🪙 골드</span>
+            <div class="strat-res-chip gold is-clickable" role="button" tabindex="0" title="보유 골드 — 눌러서 연방준비기금(금리·물가·대출·경매) 열기" onclick="openFedModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openFedModal();}">
+              <span class="strat-res-lbl">🪙 골드 <small data-fed-badge></small></span>
               <span class="strat-res-val" id="strat-gold">450G</span>
             </div>
             <div class="strat-res-chip rewind" title="리와인더 (턴 되돌리기 횟수)">
@@ -258,10 +258,10 @@
           </div>
           <div class="gacha-buttons">
             <button class="gacha-summon-btn single" data-amount="1" onclick="summonCharacters(1)">
-              <span>✦</span><strong>1회 고용</strong><small>100G · RANDOM × 1</small>
+              <span>✦</span><strong>1회 고용</strong><small data-gacha-price="1">100G · RANDOM × 1</small>
             </button>
             <button class="gacha-summon-btn multi" data-amount="10" onclick="summonCharacters(10)">
-              <span>✦✦</span><strong>10회 고용</strong><small>1000G · RANDOM × 10</small>
+              <span>✦✦</span><strong>10회 고용</strong><small data-gacha-price="10">1000G · RANDOM × 10</small>
             </button>
           </div>
           <div class="gacha-status" id="gacha-status">캐릭터 DB를 불러오는 중...</div>
@@ -742,21 +742,21 @@
               <div style="font-weight: 800; font-size: 13px;">🍎 영양 과일 바구니</div>
               <div style="font-size: 10px; color: #9ca3af;">선택 유닛 호감도 +15 즉시 상승</div>
             </div>
-            <button class="btn-buy" onclick="buyVillageItem('FRUIT', 25, 15)">25G 구입</button>
+            <button class="btn-buy" onclick="buyVillageItem('FRUIT', 25, 15)" data-base-price="25" data-price-suffix="구입">25G 구입</button>
           </div>
           <div class="shop-item-card">
             <div>
               <div style="font-weight: 800; font-size: 13px;">🍖 특제 만찬 세트</div>
               <div style="font-size: 10px; color: #9ca3af;">선택 유닛 호감도 +35 대폭 상승</div>
             </div>
-            <button class="btn-buy" onclick="buyVillageItem('FEAST', 60, 35)">60G 구입</button>
+            <button class="btn-buy" onclick="buyVillageItem('FEAST', 60, 35)" data-base-price="60" data-price-suffix="구입">60G 구입</button>
           </div>
           <div class="shop-item-card">
             <div>
               <div style="font-weight: 800; font-size: 13px;">⏳ 시공간 리와인더 충전권</div>
               <div style="font-size: 10px; color: #9ca3af;">리와인더 잔여 횟수 +1 충전</div>
             </div>
-            <button class="btn-buy" onclick="buyVillageItem('REWIND', 120, 0)">120G 충전</button>
+            <button class="btn-buy" onclick="buyVillageItem('REWIND', 120, 0)" data-base-price="120" data-price-suffix="충전">120G 충전</button>
           </div>
         </div>
       </div>
@@ -1404,8 +1404,10 @@
   <script src="ui.js"></script>
   <script src="audio/returnByDeath.js"></script>
   <script src="shareEngine.js"></script>
+  <script src="fedEngine.js"></script>
   <script src="game.js"></script>
   <script src="nationShares.js"></script>
+  <script src="fedSystem.js"></script>
   <script src="campaignMap.js"></script>
   <script src="civ4-editor.js"></script>
 </body>
