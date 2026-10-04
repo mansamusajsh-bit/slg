@@ -385,7 +385,7 @@
    *
    * @param {TacticalMapTemplate} tpl - 이미 normalizeTacticalMapTemplate()을 거친 템플릿
    * @param {string} seed
-   * @param {{randomize?:boolean, enemyPool?:Array, terrainNoiseRate?:number, chestCountRange?:[number,number], enemyCountRange?:[number,number]}} [options]
+   * @param {{randomize?:boolean, enemyPool?:Array, terrainNoiseRate?:number, chestCountRange?:[number,number], enemyCountRange?:[number,number], enemyCount?:[number,number]}} [options]
    * @returns {{tiles:Array, spawnPoints:{player:Array,enemy:Array}, enemies:Array}}
    */
   function generateBattleMapWithSeed(tpl, seed, options = {}) {
@@ -439,7 +439,37 @@
     //       (고정 적이 이미 배치된 템플릿은 작가가 의도한 전투이므로 건드리지 않는다.)
     //       플레이어 스폰에서 멀리 떨어진 빈 평지/숲 칸 중에서 고른다.
     const poolForSpawn = Array.isArray(options.enemyPool) ? options.enemyPool : [];
-    if (spawnPoints.enemy.length === 0 && manualEnemies.length === 0 && poolForSpawn.length > 0) {
+    const farFromPlayerSpawns = (t) => spawnPoints.player.every((p) => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) >= 4);
+    const isOpenForEnemy = (t) => ['plain', 'forest'].includes(terrainOf(t)) && !t.structure && !t.object
+      && !reserved.has(`${t.x},${t.y}`) && farFromPlayerSpawns(t);
+
+    // [2.4] 적 인원을 정확히 지정한 경우(options.enemyCount = [min, max], 진행도에 따라 게임이 정한다):
+    //       min~max 중 seed로 인원을 정하고, 템플릿 적 스폰을 먼저 쓴 뒤 모자라면
+    //       기존 적 스폰에 가까운 빈 칸(없으면 플레이어와 먼 쪽 빈 칸)을 추가로 고른다.
+    //       에디터가 직접 배치한 적이 있는 고정 전투는 건드리지 않는다.
+    const exactCount = Array.isArray(options.enemyCount) ? options.enemyCount : null;
+    if (exactCount && manualEnemies.length === 0 && poolForSpawn.length > 0) {
+      const [cMin, cMax] = exactCount.map((n) => Math.max(1, Math.floor(Number(n) || 1)));
+      const want = rng.rangeInt(cMin, Math.max(cMin, cMax));
+      let chosen = rng.shuffle(spawnPoints.enemy).slice(0, want).map((p) => ({ x: p.x, y: p.y }));
+      if (chosen.length < want) {
+        const taken = new Set(chosen.map((p) => `${p.x},${p.y}`));
+        const playerYs = spawnPoints.player.map((p) => p.y);
+        const avgY = playerYs.length ? playerYs.reduce((x, y) => x + y, 0) / playerYs.length : tpl.height;
+        const anchors = chosen.length ? chosen : spawnPoints.enemy;
+        const score = (t) => anchors.length
+          ? Math.min(...anchors.map((p) => Math.abs(p.x - t.x) + Math.abs(p.y - t.y)))
+          : -Math.abs(t.y - avgY); // 기준 스폰이 없으면 플레이어와 먼 줄부터
+        const extra = rng.shuffle(tiles.filter((t) => isOpenForEnemy(t) && !taken.has(`${t.x},${t.y}`)))
+          .map((t, i) => ({ t, i, d: score(t) }))
+          .sort((p, q) => p.d - q.d || p.i - q.i)
+          .slice(0, want - chosen.length)
+          .map(({ t }) => ({ x: t.x, y: t.y }));
+        chosen = chosen.concat(extra);
+      }
+      spawnPoints.enemy = chosen;
+      applySpawnPointsToTiles(tiles, spawnPoints);
+    } else if (spawnPoints.enemy.length === 0 && manualEnemies.length === 0 && poolForSpawn.length > 0) {
       const playerYs = spawnPoints.player.map((p) => p.y);
       const avgY = playerYs.length ? playerYs.reduce((a, b) => a + b, 0) / playerYs.length : tpl.height;
       const farFromPlayers = (t) => spawnPoints.player.every((p) => Math.abs(p.x - t.x) + Math.abs(p.y - t.y) >= 4);
@@ -454,7 +484,7 @@
 
     // [3] 적 스폰 위치: 템플릿의 enemy 스폰 후보 중 일부만 seed로 골라 이번 전투에 실제로 쓴다.
     // (템플릿 원본은 건드리지 않는다 — 위에서 깊은 복사한 사본만 줄인다.)
-    if (spawnPoints.enemy.length > 1) {
+    if (!exactCount && spawnPoints.enemy.length > 1) {
       const [eMin, eMax] = options.enemyCountRange || [Math.max(1, Math.ceil(spawnPoints.enemy.length / 2)), spawnPoints.enemy.length];
       const keep = Math.min(spawnPoints.enemy.length, rng.rangeInt(eMin, Math.max(eMin, eMax)));
       spawnPoints.enemy = rng.shuffle(spawnPoints.enemy).slice(0, keep);

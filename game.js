@@ -132,6 +132,7 @@
         // recPower: 예전 고정 추천 전투력. 화면에는 더 이상 쓰지 않는다 (estimateNodeEnemyPower가 실제 적 기준으로 계산).
         recPower: 320,
         upkeep: 15,
+        // clearReward / upkeep: 예전 고정 문구·수치. 화면에는 더 이상 쓰지 않는다 (실제 지급 규칙·편성 유지비로 계산).
         clearReward: '250G + 장비',
         locked: false,
         // 2단계: Sector가 사용할 기본 TacticalMapTemplate id (지금은 sectorId와 1:1).
@@ -3729,12 +3730,27 @@
     }
     window.calculateUnitPower = calculateUnitPower;
 
-    // 적 인원 범위: MapSchema.generateBattleMapWithSeed와 같은 규칙
-    // (스폰 n개(n>1) 중 ceil(n/2)~n개 사용 / 스폰 1개면 1명 / 스폰이 없으면 빈 땅에 2~4명)
-    function getEnemyCountRange(template) {
-      const spawns = (template && template.spawnPoints && Array.isArray(template.spawnPoints.enemy)) ? template.spawnPoints.enemy.length : 0;
-      return spawns > 1 ? [Math.ceil(spawns / 2), spawns] : spawns === 1 ? [1, 1] : [2, 4];
+    // ------------------------------------------------------------------------
+    // 적 인원: 섹터 진행도에 따라 늘어난다 (오차 1명).
+    //   섹터 순서 = 런 지도와 같은 난이도순(RunEngine.sortSectorIds). 첫 섹터 일반 전투 2~3명,
+    //   다음 섹터마다 +1명, 정예·보스는 +1명. 템플릿 적 스폰이 모자라면 생성기가 스폰 옆 빈 칸을 더 쓴다.
+    //   에디터에서 적을 직접 배치한 맵(고정 전투)은 이 규칙을 따르지 않고 배치한 그대로 나온다.
+    // ------------------------------------------------------------------------
+    const ENEMY_COUNT_RULE = { base: 2, perSector: 1, spread: 1, max: 10, typeBonus: { battle: 0, elite: 1, boss: 1 } };
+
+    function getSectorProgressIndex(sectorId) {
+      const ids = (window.RunEngine && typeof RunEngine.sortSectorIds === 'function')
+        ? RunEngine.sortSectorIds(WORLD_SECTORS) : Object.keys(WORLD_SECTORS);
+      return Math.max(0, ids.indexOf(String(sectorId)));
     }
+
+    /** @returns {[number, number]} 이 노드 전투의 적 인원 [최소, 최대] */
+    function getEnemyCountRange(node) {
+      const r = ENEMY_COUNT_RULE;
+      const min = Math.min(r.max, r.base + getSectorProgressIndex(node && node.sectorId) * r.perSector + (r.typeBonus[node && node.type] || 0));
+      return [min, Math.min(r.max, min + r.spread)];
+    }
+    window.getEnemyCountRange = getEnemyCountRange;
 
     function getTemplateManualEnemies(template) {
       return (template && template.metadata && Array.isArray(template.metadata.units) ? template.metadata.units : [])
@@ -3767,7 +3783,7 @@
       const pool = buildEnemyPool(sector, node.type);
       if (!pool.length) return null;
       const avg = pool.reduce((s, u) => s + calculateUnitPower(u), 0) / pool.length;
-      const [min, max] = getEnemyCountRange(template);
+      const [min, max] = getEnemyCountRange(node);
       return { min: Math.round(avg * min), max: Math.round(avg * max), exact: min === max };
     }
     window.estimateNodeEnemyPower = estimateNodeEnemyPower;
@@ -3794,6 +3810,58 @@
           : est.exact ? '이번 전장에 나올 적의 전투력 합계'
           : '적 인원 범위 × 후보 평균 전투력 (실제 인원은 전장 시드로 정해집니다)';
       }).catch(err => console.warn('[Strategy] 적 전투력 계산 실패', err));
+    }
+
+    // ------------------------------------------------------------------------
+    // 클리어 보상: WORLD_SECTORS의 고정 문구(clearReward) 대신 실제 지급 규칙으로 만든다.
+    //   골드 = 적 수 × 100 × (정예 1.5 / 보스 2)  (MapSchema.generateEncounterRewards)
+    //   리와인더 = 보스 확정, 그 외 50%
+    //   유물 = 보상 풀 `${섹터}-battle|elite|boss-relic`이 있을 때 (보스는 3개 중 1개 선택)
+    //   예지/기억으로 아는 노드는 이번 전장의 정확한 보상을 보여 준다.
+    // ------------------------------------------------------------------------
+    async function describeNodeClearReward(node, sector) {
+      const run = state.run;
+      const knows = isForeseenNode(run, node.id) || (getDeathMemory(run, node.id) && getNodeAttempts(run, node.id) === 0);
+      const parts = [];
+      let exact = false;
+      if (knows) {
+        const p = await previewNode(node);
+        if (p && Array.isArray(p.rewards) && !p.error && !p.retry) {
+          parts.push(describeRewards(p.rewards));
+          exact = true;
+        }
+      }
+      if (!exact) {
+        const template = await loadEnemyIntelTemplate(getNodeTemplateId(node, sector));
+        const manual = getTemplateManualEnemies(template);
+        const [min, max] = manual.length ? [manual.length, manual.length] : getEnemyCountRange(node);
+        const mult = node.type === 'boss' ? 2 : node.type === 'elite' ? 1.5 : 1;
+        const gMin = Math.round(Math.max(1, min) * 100 * mult);
+        const gMax = Math.round(Math.max(1, max) * 100 * mult);
+        parts.push(gMin === gMax ? `${gMin}G` : `${gMin}~${gMax}G`);
+        parts.push(node.type === 'boss' ? '리와인더 1' : '리와인더 50%');
+      }
+      const suffix = RELIC_POOL_SUFFIX[node.type];
+      if (suffix) {
+        const data = await ensureRewardDataLoaded().catch(() => null);
+        if (data && data.pools.has(`${node.sectorId}-${suffix}`)) parts.push(node.type === 'boss' ? '유물 3택1' : '유물');
+      }
+      return { text: parts.join(' · '), exact };
+    }
+    window.describeNodeClearReward = describeNodeClearReward;
+
+    function renderNodeClearReward(el, node, sector) {
+      if (!el || !node) return;
+      const token = String(Math.random());
+      el.dataset.rewardToken = token;
+      if (el.dataset.rewardNodeId !== node.id) { el.textContent = '계산 중…'; el.title = ''; }
+      el.dataset.rewardNodeId = node.id;
+      describeNodeClearReward(node, sector).then(r => {
+        if (el.dataset.rewardToken !== token) return;
+        el.textContent = r.text || '—';
+        el.title = (r.exact ? '이번 전장의 확정 보상' : '적 인원 범위에 따른 예상 보상')
+          + ' · 이와 별도로 포섭하지 못한 적을 격파하면 전리품 골드를 얻습니다';
+      }).catch(err => console.warn('[Strategy] 클리어 보상 계산 실패', err));
     }
 
     function clearNodeEnemyPower(el) {
@@ -3836,7 +3904,7 @@
       }
       const pool = buildEnemyPool(sector, node.type);
       if (!pool.length) return '적으로 쓸 캐릭터가 없습니다';
-      const [min, max] = getEnemyCountRange(template);
+      const [min, max] = getEnemyCountRange(node);
       const count = min === max ? `${min}명` : `${min}~${max}명`;
       return `적 ${count} · Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
     }
@@ -3958,6 +4026,7 @@
         nodeId: node.id,
         type: node.type, // 'battle' | 'elite' | 'boss' — rewards 배율에 반영된다
         enemyPool,
+        enemyCount: getEnemyCountRange(node), // 섹터 진행도에 따른 적 인원 (오차 1명)
         state
       });
       const seed = battle ? battle.seed : null;
@@ -4613,14 +4682,15 @@
         else clearNodeEnemyPower(powerEl);
       }
       // 예상 턴당 유지비: 섹터 고정값이 아니라 출전 편성 유닛 유지비 합계 (아래 로스터 계산 후 채운다)
-      if (rewardEl) rewardEl.textContent = curSec.clearReward;
+      if (rewardEl && selNode && selNodeIsBattle) renderNodeClearReward(rewardEl, selNode, curSec);
+      else if (rewardEl) { rewardEl.dataset.rewardToken = ''; rewardEl.dataset.rewardNodeId = ''; rewardEl.textContent = '—'; }
       if (!selNodeIsBattle) {
         // 이벤트/상점 노드에는 적이 없다.
         if (descEl) descEl.textContent = selNode.type === 'shop' ? '군수 물자를 구입할 수 있는 보급 거점입니다.' : '전투 없이 무작위 사건이 벌어지는 구역입니다.';
         if (enemyEl) { enemyEl.dataset.intelToken = ''; enemyEl.textContent = '— (전투 없음)'; enemyEl.title = ''; }
         clearNodeEnemyPower(powerEl);
         if (upkeepEl) upkeepEl.textContent = '—';
-        if (rewardEl) rewardEl.textContent = selNode.type === 'shop' ? '골드로 구매' : '사건 결과에 따름';
+        if (rewardEl) { rewardEl.dataset.rewardToken = ''; rewardEl.dataset.rewardNodeId = ''; rewardEl.textContent = selNode.type === 'shop' ? '골드로 구매' : '사건 결과에 따름'; }
       }
 
       // Terrain Bars
@@ -10718,7 +10788,7 @@
       try {
         const template = await loadTacticalMapTemplate(templateId);
         await ensureCharacterPoolLoaded();
-        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type), sectorId: node.sectorId });
+        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type), enemyCount: getEnemyCountRange(node), sectorId: node.sectorId });
         if (!map) throw new Error('전장 생성 실패');
         const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1, power: calculateUnitPower(e) }));
         const rewards = MapSchema.generateEncounterRewards(seed, { enemyCount: enemies.length, type: node.type });

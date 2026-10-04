@@ -338,6 +338,7 @@
     NODE_META,
     DEFAULT_LAYER_SIZES,
     isBattleType,
+    sortSectorIds,
     generateRunMap,
     createRun,
     getNode,
