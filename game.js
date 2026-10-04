@@ -2713,7 +2713,8 @@
 
       saveHistorySnapshot();
       state.gold -= cost;
-      unit.affection = Math.min(100, unit.affection + affAdd);
+      unit.affection = Math.min(100, getUnitAffection(unit) + affAdd);
+      unit.favorability = unit.affection;
       addLog(`🎁 [선물 증정] ${unit.name}에게 보급품을 전달하여 호감도가 +${affAdd} 상승했습니다! (현재: ${unit.affection})`, 'success');
       closeAllModals();
       renderAll();
@@ -5326,7 +5327,7 @@
           <span>👑 통솔력 <b>${levelPart + relicPart}부대</b></span>
           <small>지휘관 Lv.${state.commander ? state.commander.level : 1} ${levelPart}부대${relicPart ? ` + 유물 ${relicPart}부대` : ''}</small>
         </div>
-        <div class="relic-note">지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지 장착할 수 있고 장착한 것만 효과가 납니다 (지금은 통솔력 효과만 적용). 선물 유물은 캐릭터에게 선물하면 그 캐릭터의 능력치가 오릅니다. 회귀하면 유물은 사라집니다.</div>`;
+        <div class="relic-note">지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지 장착할 수 있고 장착한 것만 효과가 납니다 (지금은 통솔력 효과만 적용). 선물 유물은 캐릭터에게 선물하면 등급에 따라 호감도가 오르고(${Object.values(RELIC_RARITY_META).map(m => `${m.label} +${m.giftAffection}`).join(' · ')}) 유물 능력치도 더해집니다. 회귀하면 유물은 사라집니다.</div>`;
       const pending = state.run && state.run.pendingRelicChoice
         ? `<button type="button" class="adj-btn relic-pending-btn" onclick="openRelicChoiceModal()">👑 보스 유물 선택이 남아 있습니다 — 고르기</button>` : '';
       const slots = Array.from({ length: COMMANDER_RELIC_SLOTS }, (_, i) => {
@@ -11297,12 +11298,23 @@
     //   보유 유물은 run.relics에 이름·효과까지 스냅샷으로 남긴다 (DB가 바뀌어도 그대로, 회귀하면 사라진다).
     // ------------------------------------------------------------------------
     const RELIC_POOL_SUFFIX = { battle: 'battle', elite: 'elite', boss: 'boss-relic' };
+    // giftAffection: 선물 유물을 주면 유물 효과와 별개로 등급에 따라 무조건 오르는 호감도
     const RELIC_RARITY_META = {
-      common: { label: '일반', color: '#64748b' },
-      rare: { label: '희귀', color: '#0284c7' },
-      epic: { label: '영웅', color: '#9333ea' },
-      legendary: { label: '전설', color: '#d97706' }
+      common: { label: '일반', color: '#64748b', giftAffection: 5 },
+      rare: { label: '희귀', color: '#0284c7', giftAffection: 10 },
+      epic: { label: '영웅', color: '#9333ea', giftAffection: 15 },
+      legendary: { label: '전설', color: '#d97706', giftAffection: 25 }
     };
+    /** 선물 유물의 등급별 호감도 보너스. 등급을 모르면 일반으로 본다 (카드 색/라벨과 같은 규칙). */
+    function getGiftAffectionBonus(relic) {
+      return (RELIC_RARITY_META[relic && relic.rarity] || RELIC_RARITY_META.common).giftAffection;
+    }
+    /** 현재 호감도. 값이 없으면 다른 화면/전투 공식과 같은 기본값(favorability → 50)을 쓴다. */
+    function getUnitAffection(u) {
+      if (Number.isFinite(Number(u && u.affection)) && u.affection !== null && u.affection !== '') return Number(u.affection);
+      if (Number.isFinite(Number(u && u.favorability)) && u.favorability !== null && u.favorability !== '') return Number(u.favorability);
+      return 50;
+    }
     let rewardDataCache = null;   // { relics: Map<id, relic>, pools: Map<id, pool> }
     let rewardDataPromise = null;
 
@@ -11394,7 +11406,7 @@
       ap: (u, v) => { u.baseAP = Math.max(1, (Number(u.baseAP) || 0) + v); u.ap = Math.max(0, (Number(u.ap) || 0) + v); },
       mobility: (u, v) => { u.baseAP = Math.max(1, (Number(u.baseAP) || 0) + v); u.ap = Math.max(0, (Number(u.ap) || 0) + v); },
       affection: (u, v) => {
-        u.affection = Math.max(0, Math.min(100, (Number(u.affection) || 0) + v));
+        u.affection = Math.max(0, Math.min(100, getUnitAffection(u) + v));
         u.favorability = u.affection;
       }
     };
@@ -11422,6 +11434,12 @@
       if (!unit) return fail('선물을 받을 캐릭터를 찾을 수 없습니다.');
       relics.splice(idx, 1);
       const applied = [];
+      const affectionBefore = getUnitAffection(unit);
+      // 1) 등급별 호감도 보너스: 어떤 선물 유물이든 받으면 오른다
+      const bonus = getGiftAffectionBonus(relic);
+      GIFT_RELIC_APPLIERS.affection(unit, bonus);
+      applied.push(`호감도 +${bonus} (${(RELIC_RARITY_META[relic.rarity] || RELIC_RARITY_META.common).label} 선물)`);
+      // 2) 유물 자체 효과 (affection 효과가 있으면 보너스에 더해진다)
       (relic.effects || []).forEach(fx => {
         const value = Number(fx && fx.value) || 0;
         const apply = fx && GIFT_RELIC_APPLIERS[fx.stat];
@@ -11429,6 +11447,7 @@
         apply(unit, value);
         applied.push(relicStatText(fx));
       });
+      applied.push(`호감도 ${affectionBefore} → ${unit.affection}`);
       if (!Array.isArray(unit.giftRelics)) unit.giftRelics = [];
       unit.giftRelics.push({ ...relic, giftedAt: new Date().toISOString() });
       addLog(`🎁 [유물 선물] ${unit.name}에게 ${relic.name}을(를) 선물했습니다 — ${applied.join(', ') || '적용된 능력치 없음'}`, 'success');
@@ -11577,7 +11596,9 @@
     }
 
     function describeRelicEffects(relic) {
-      return (relic.effects || []).map(relicStatText).join(', ') || '효과 없음';
+      const parts = (relic.effects || []).map(relicStatText);
+      if (relic.kind === 'gift') parts.unshift(`호감도 +${getGiftAffectionBonus(relic)} (선물 보너스)`);
+      return parts.join(', ') || '효과 없음';
     }
 
     function relicCardHtml(relic, opts = {}) {
@@ -11590,6 +11611,8 @@
         const tag = active ? ' <b>적용 중</b>' : (works ? '' : ' <small>준비 중</small>');
         return `<li class="relic-fx${active ? ' active' : ''}">${escapeGachaHtml(relicStatText(fx))}${tag}</li>`;
       }).join('');
+      const giftBonus = relic.kind === 'gift'
+        ? `<li class="relic-fx">호감도 +${getGiftAffectionBonus(relic)} <small>선물 보너스</small></li>` : '';
       return `
         <div class="relic-card${opts.equipped ? ' equipped' : ''}" style="--relic-color:${rarity.color}">
           <div class="relic-card-head">
@@ -11597,7 +11620,7 @@
             <span class="relic-title"><b>${escapeGachaHtml(relic.name)}</b><small>${rarity.label} · ${kindLabel} 유물</small></span>
           </div>
           ${relic.description ? `<div class="relic-desc">${escapeGachaHtml(relic.description)}</div>` : ''}
-          <ul class="relic-fx-list">${effects}</ul>
+          <ul class="relic-fx-list">${giftBonus}${effects}</ul>
           ${opts.button || ''}
         </div>`;
     }
