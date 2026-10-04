@@ -26,8 +26,10 @@ def launch_selected(page):
     page.click('#modal-sector-deploy .strat-btn-launch-main'); page.wait_for_timeout(700)
 def win(page):
     page.evaluate("() => { state.enemyUnits.forEach(e => { e.isDead = true; e.hp = 0; }); window.defeatedEnemyCount = state.enemyUnits.length; checkTacticalVictory(); }"); page.wait_for_timeout(300)
-def fresh_run(page, seed):
+def fresh_run(page, seed, enter=True):
+    """새 런은 작전지도에서 시작한다. enter=True면 구역에 들어가 전략맵으로 간다 (노드 그래프는 그 구역의 것)."""
     page.evaluate("(s)=>startNewRun(s,{force:true})", seed)
+    if enter: assert enter_region(page), '구역 진입 실패'
 def advance_to(page, pred):
     """RunEngine으로 (전투 없이) 조건을 만족하는 노드가 열릴 때까지 첫 번째 열린 노드를 완료한다. 열린 노드 id 반환."""
     return page.evaluate("""(predSrc)=>{ const pred=new Function('n','return '+predSrc);
@@ -39,9 +41,9 @@ with sync_playwright() as pw:
     for t in ['A-1','A-2','B-1']: page.evaluate(TEMPLATE_JS,t)   # B-2는 일부러 등록하지 않는다 (템플릿 없음 경로 검증)
 
     print('\n=== 런 seed 재현성 ===')
-    fresh_run(page,'RUN-777'); m1=page.evaluate("JSON.stringify(state.run.mapState)")
-    fresh_run(page,'RUN-888'); m2=page.evaluate("JSON.stringify(state.run.mapState)")
-    fresh_run(page,'RUN-777'); m3=page.evaluate("JSON.stringify(state.run.mapState)")
+    fresh_run(page,'RUN-777',False); m1=page.evaluate("JSON.stringify(state.run.mapState)")
+    fresh_run(page,'RUN-888',False); m2=page.evaluate("JSON.stringify(state.run.mapState)")
+    fresh_run(page,'RUN-777',False); m3=page.evaluate("JSON.stringify(state.run.mapState)")
     c.ok(m1==m3 and m1!=m2,'같은 런 seed → 같은 노드 그래프, 다른 seed → 다른 그래프')
 
     print('\n=== 이벤트 노드 ===')
@@ -50,7 +52,7 @@ with sync_playwright() as pw:
     evn=page.evaluate("state.run.mapState.layers[1][0]")
     page.evaluate("(id)=>{ RunEngine.getNode(state.run,id).type='event'; selectNode(id); }",evn)
     c.ok('이벤트' in page.evaluate("document.querySelector('#btn-open-deploy-modal').innerText"),'이벤트 노드 선택 → 버튼 문구 "이벤트 진행"')
-    c.ok('AP 소모 없음' in page.evaluate("document.getElementById('strat-action-summary-cost').textContent"),'AP 소모 없음 표기')
+    c.ok('전투 없는 노드' in page.evaluate("document.getElementById('strat-action-summary-cost').textContent"),'"전투 없는 노드" 표기')
     g0=page.evaluate("state.gold"); r0=page.evaluate("state.rewinders")
     page.evaluate("()=>{ const u=state.playerUnits[0]; u.hp=10; }")
     ev=page.evaluate("(id)=>RunEngine.rollEvent(state.run,RunEngine.getNode(state.run,id))",evn)
@@ -102,16 +104,21 @@ with sync_playwright() as pw:
     rw=page.evaluate("state.currentBattle.rewards")
     c.ok(rw[0]['amount']==400 and any(r['type']=='rewinder' for r in rw),'보스 보상: 골드 x2(400) + 리와인더 확정 '+json.dumps(rw))
     win(page); page.click('#btn-victory-proceed'); page.wait_for_timeout(500)
-    st=page.evaluate("({s:state.run.status,g:state.gold,r:state.rewinders,avail:RunEngine.getAvailableNodes(state.run).length,hud:document.getElementById('strat-run-hud-text').textContent,btn:document.querySelector('#btn-open-deploy-modal').innerText,dis:document.querySelector('#btn-open-deploy-modal').disabled})")
-    c.ok(st['s']=='won' and st['g']==g0+400 and st['r']==r0+1,'보스 클리어 → run.status=won, 보상 지급')
-    c.ok(st['avail']==0 and '클리어' in st['hud'] and st['dis'] and '런 종료' in st['btn'],'런 종료 UI: HUD 클리어, 열린 노드 없음, 출격 버튼 비활성')
+    # 구역 작전에서는 보스 격파 = 구역 확보. 최종 구역이 아니면 런은 계속되고 작전지도로 돌아간다.
+    st=page.evaluate("({s:state.run.status,g:state.gold,r:state.rewinders,view:state.currentView,cur:state.run.campaign.currentRegionId,liona:state.run.campaign.regions.liona.status,opened:Object.entries(state.run.campaign.regions).filter(([k,v])=>v.status==='available').map(([k])=>k),last:state.run.campaign.lastSecured})")
+    c.ok(st['g']==g0+400 and st['r']==r0+1,'보스 클리어 → 보상 지급 (골드 +400, 리와인더 +1)')
+    c.ok(st['liona']=='secured' and st['cur'] is None and st['last'] and st['last']['regionId']=='liona','보스 격파 = 구역 확보 (liona secured, 진행 중 구역 해제)')
+    c.ok(st['s']=='active' and len(st['opened'])>=1,'최종 구역이 아니면 런은 계속되고 이웃 구역이 열린다: '+str(st['opened']))
+    c.ok(st['view']=='CAMPAIGN','확보 후 작전지도로 복귀')
+    page.evaluate("()=>document.querySelectorAll('.rbd-overlay').forEach(e=>e.remove())")  # 보스 유물 3택1 창은 이 테스트 범위 밖
     page.evaluate("openSectorDeployModal()")
-    c.ok(not page.evaluate("document.getElementById('modal-sector-deploy').classList.contains('open')"),'런 종료 후 출전 모달 열리지 않음')
+    c.ok(not page.evaluate("document.getElementById('modal-sector-deploy').classList.contains('open')"),'구역 확보 후 출전 모달 열리지 않음')
     c.ok(page.evaluate("state.run.encounters.slice(-1)[0].type")=='boss' and page.evaluate("state.run.encounters.slice(-1)[0].victory"),'마지막 encounters 기록 = 보스 승리')
 
     print('\n=== 새 런 ===')
     seed_old=page.evaluate("state.run.seed"); g=page.evaluate("state.gold")
-    page.click('#btn-new-run'); page.wait_for_timeout(300)
+    c.ok(page.evaluate("!document.getElementById('btn-new-run')"),"전략맵 HUD에 '새 런' 버튼이 없다")
+    page.evaluate("startNewRun()"); page.wait_for_timeout(300)  # 버튼은 없앴지만 startNewRun()은 디버그/내부용으로 남아 있다
     st=page.evaluate("({seed:state.run.seed,status:state.run.status,done:state.run.completedNodes,seq:state.encounterSeq,g:state.gold,avail:RunEngine.getAvailableNodes(state.run).length})")
     c.ok(st['seed']!=seed_old and st['status']=='active' and st['done']==[] and st['seq']==0 and st['avail']==1,'새 런: 새 seed, 진행도/encounterSeq 초기화, 시작 노드 열림')
     c.ok(st['g']==g,'캐릭터/골드는 유지')
@@ -134,28 +141,28 @@ with sync_playwright() as pw:
     fresh_run(page,'RUN-WON'); s0=page.evaluate("state.run.mapState.layers[0][0]"); page.evaluate("(id)=>selectNode(id)",s0)
     launch_selected(page); win(page); g0=page.evaluate("state.gold")
     sv=page.evaluate("saveGameState(true), window.__saved[window.__saved.length-1]")
-    c.ok(sv['currentBattle']['status']=='won' and sv['run']['gold']==g0,'won 상태 전투가 저장됨 (골드는 아직 미지급)')
+    c.ok(sv['run']['currentBattle']['status']=='won' and sv['run']['gold']==g0,'won 상태 전투가 저장됨 (골드는 아직 미지급)')
     b2,p2,e2=boot(pw, sv)
     c.ok(p2.evaluate("state.currentBattle && state.currentBattle.status")=='won' and p2.is_visible('#btn-victory-proceed'),'새로고침 후 승리 모달이 다시 뜬다')
     p2.click('#btn-victory-proceed'); p2.wait_for_timeout(500)
     st=p2.evaluate("({g:state.gold,done:state.run.completedNodes,b:state.currentBattle,v:state.currentView})")
     c.ok(st['g']==g0+200 and s0 in st['done'] and st['b'] is None and st['v']=='STRATEGY','수령 → 보상 1회 지급 + 노드 완료 + 전략맵')
     p2.evaluate("saveGameState(true)"); sv2=p2.evaluate("window.__saved[window.__saved.length-1]")
-    c.ok(sv2['currentBattle'] is None,'전투가 끝난 뒤 저장에는 currentBattle이 없다')
+    c.ok(sv2['run']['currentBattle'] is None and 'currentBattle' not in sv2,'전투가 끝난 뒤 저장에는 currentBattle이 없다')
     c.ok(e2==[],'복원 오류 없음 '+str(e2[:3]))
     b2.close()
 
     print('\n=== 옛 v1 세이브(평평한 구조) 호환 ===')
-    units=sv['player']['characters']
+    units=sv['run']['party']
     v1={'version':'1.0.0','savedAt':'2026-01-01T00:00:00Z','guest':sv['guest'],'currentView':'SECTOR_MAP','currentSector':'A-2',
         'strategy':sv['player']['progression']['strategy'],'turn':5,'gold':777,'rewinders':2,'stackMoveEnabled':True,
-        'commander':sv['player']['progression']['commander'],'playerUnits':units,'characterCollection':[],
+        'commander':sv['run']['commander'],'playerUnits':units,'characterCollection':[],
         'enemyUnits':[{'id':'old1','owner':'ENEMY','hp':10,'maxHp':10,'x':1,'y':1,'classType':'MELEE'}],'selectedUnitId':units[0]['id']}
     b3,p3,e3=boot(pw, v1)
-    st=p3.evaluate("({g:state.gold,r:state.rewinders,t:state.turn,view:state.currentView,run:state.run.status,done:state.run.completedNodes.length,battle:state.currentBattle,en:state.enemyUnits.length,act:document.getElementById('view-strategy-main').classList.contains('active'),units:state.playerUnits.length})")
+    st=p3.evaluate("({g:state.gold,r:state.rewinders,t:state.turn,view:state.currentView,run:state.run.status,done:state.run.completedNodes.length,battle:state.currentBattle,en:state.enemyUnits.length,act:document.getElementById('view-campaign-map').classList.contains('active'),units:state.playerUnits.length})")
     c.ok(st['g']==777 and st['r']==2 and st['t']==5 and st['units']==len(units),'v1 세이브의 골드/리와인더/턴/캐릭터 복원')
     c.ok(st['run']=='active' and st['done']==0 and st['battle'] is None,'v1에는 런이 없으므로 새 런이 생성됨')
-    c.ok(st['view']=='STRATEGY' and st['act'] and st['en']==0,'SECTOR_MAP으로 저장돼 있어도 전략맵으로 열림, 옛 enemyUnits는 버림')
+    c.ok(st['view']=='CAMPAIGN' and st['act'] and st['en']==0,'SECTOR_MAP으로 저장돼 있어도 (진행 중 구역이 없으므로) 작전지도로 열림, 옛 enemyUnits는 버림')
     c.ok(e3==[],'v1 로드 오류 없음 '+str(e3[:3]))
     b3.close()
 
@@ -164,7 +171,7 @@ with sync_playwright() as pw:
     b4,p4,e4=boot(pw, bad)
     c.ok(p4.evaluate("state.run.status")=='active' and p4.evaluate("state.run.mapState.nodes.length")>0 and p4.evaluate("state.gold")==sv2['run']['gold'],'손상된 런 → 새 런으로 대체, 골드/캐릭터는 유지')
     b4.close()
-    stale=json.loads(json.dumps(sv)); stale['currentBattle']['nodeId']='Z-9-999'; stale['currentBattle']['status']='active'
+    stale=json.loads(json.dumps(sv)); stale['run']['currentBattle']['nodeId']='Z-9-999'; stale['run']['currentBattle']['status']='active'
     b5,p5,e5=boot(pw, stale)
     c.ok(p5.evaluate("state.currentBattle")is None and p5.evaluate("state.currentView")=='STRATEGY' and p5.evaluate("state.enemyUnits.length")==0,'런에 없는 노드의 저장 전투는 버리고 전략맵으로')
     c.ok(e5==[] and e4==[],'오류 없음 '+str((e4+e5)[:3]))

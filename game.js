@@ -1286,7 +1286,14 @@
     /* --------------------------------------------------------------------------
        Snapshot & Undo (리와인더) Engine
        -------------------------------------------------------------------------- */
+    // 리와인더는 '턴 단위'로 되돌린다. 행동 직전마다 호출되지만, 스냅샷은 턴마다 첫 행동 직전
+    // (= 그 턴 시작 상태)에 한 번만 저장한다. 같은 턴의 이후 행동은 체크포인트를 덮어쓰지 않는다.
     function saveHistorySnapshot() {
+      const top = historyStack.length ? JSON.parse(historyStack[historyStack.length - 1]) : null;
+      if (top && top.turn === state.turn) {
+        saveGameState(true);
+        return;
+      }
       // 딥 카피 스냅샷 저장
       const snapshot = JSON.stringify({
         turn: state.turn,
@@ -1316,8 +1323,10 @@
         return;
       }
 
+      // 이번 턴에 행동했다면 이번 턴 시작으로, 아직 아무것도 안 했다면 직전 턴 시작으로 돌아간다.
       const prevJson = historyStack.pop();
       const prev = JSON.parse(prevJson);
+      const rewoundToThisTurn = prev.turn === state.turn;
       const currentRewinders = state.rewinders - 1;
 
       state.turn = prev.turn;
@@ -1329,7 +1338,8 @@
       state.enemyUnits = prev.enemyUnits;
       cancelSkillTargeting(true);
 
-      addLog(`⏳ [리와인더 가동!] 시공간 왜곡으로 1턴 전 상태로 복원 완료! (잔여 리와인더: ${currentRewinders}개)`, 'capture');
+      const where = rewoundToThisTurn ? `제 ${prev.turn}턴 시작 시점` : `직전 턴(제 ${prev.turn}턴) 시작 시점`;
+      addLog(`⏳ [리와인더 가동!] 시공간 왜곡으로 ${where}으로 복원 완료! (잔여 리와인더: ${currentRewinders}개)`, 'capture');
       renderAll();
       saveGameState();
     }
@@ -4854,7 +4864,7 @@
       if (launchBtn && state.run) {
         const nodeStatus = selNode ? RunEngine.getNodeStatus(state.run, selNode.id) : 'locked';
         let enabled = false, text = '아직 열리지 않은 노드', icon = '🔒';
-        if (state.run.status !== 'active') { text = '런 종료 — 새 런을 시작하세요'; icon = '🏆'; }
+        if (state.run.status !== 'active') { text = '런 종료'; icon = '🏆'; }
         else if (nodeStatus === 'completed') { text = '이미 완료한 노드'; icon = '✔'; }
         else if (nodeStatus === 'available') {
           enabled = true;
@@ -4987,7 +4997,7 @@
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
       };
       if (!selNode) { warnNode('⚠️ 선택된 노드가 없습니다.'); return; }
-      if (state.run.status !== 'active') { warnNode('🏆 이번 런은 이미 종료되었습니다. 새 런을 시작하세요.'); return; }
+      if (state.run.status !== 'active') { warnNode('🏆 이번 런은 이미 종료되었습니다.'); return; }
       if (!RunEngine.isNodeAvailable(state.run, selNode.id)) { warnNode('🔒 아직 열리지 않았거나 이미 완료한 노드입니다.'); return; }
       if (!RunEngine.isBattleType(selNode.type)) { openRunNodeModal(selNode); return; }
       const curSec = WORLD_SECTORS[selNode.sectorId] || { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '' };
@@ -11820,7 +11830,7 @@
             : `🏴 [구역 확보] ${name} — 새로 열린 구역: ${opened || '없음'}`, 'gold');
           if (typeof window.UI?.showToast === 'function') window.UI.showToast(secured.final ? '🏆 대륙 평정!' : `🏴 ${name} 확보!`, 'success');
         } else if (runWon) {
-          addLog(`🏆 [런 클리어] 보스를 격파했습니다! (seed ${run.seed}) — "🔄 새 런"으로 다시 도전할 수 있습니다.`, 'gold');
+          addLog(`🏆 [런 클리어] 보스를 격파했습니다! (seed ${run.seed})`, 'gold');
           if (typeof window.UI?.showToast === 'function') window.UI.showToast('🏆 런 클리어! 보스를 격파했습니다.', 'success');
         }
       } else if (reason === 'retreat') {

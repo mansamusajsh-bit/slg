@@ -38,6 +38,8 @@ srv=start_server()
 c=Check()
 with sync_playwright() as pw:
     browser,page,errors=boot(pw)
+    c.ok(page.evaluate("state.currentView")=='CAMPAIGN' and not page.evaluate("!!document.getElementById('modal-adjutant')"),'작전지도에서 시작, 부관 임명 창은 자동으로 뜨지 않는다')
+    c.ok(enter_region(page),'부관 임명 → 구역 진입 → 전략맵')
     page.evaluate(TEMPLATE_JS,'A-1'); page.evaluate(TEMPLATE_JS,'A-2'); page.evaluate(TEMPLATE_JS,'B-1')
     page.evaluate("() => { state.run.mapState.nodes.forEach(n => { if (n.type==='event'||n.type==='shop') n.type='battle'; }); }")  # 이 파일은 '전투' 흐름 전용 (이벤트/상점은 e2e2)
     start=page.evaluate("state.run.mapState.layers[0][0]")
@@ -71,12 +73,12 @@ with sync_playwright() as pw:
     print('\n=== [13단계] 전투 중 저장 구조 ===')
     page.evaluate("saveGameState(true)")
     sv=page.evaluate("window.__saved[window.__saved.length-1]")
-    c.ok(sv['version']=='3.0.0' and set(['player','run','currentBattle']).issubset(sv.keys()),'v3 최상위: '+str(sorted(sv.keys())))
-    c.ok(set(sv['player'].keys())=={'loopCount','memories','unlockedCharacters','settings','characterCollection','inventory','rewinders','progression'},'player(영구) 구성: '+str(sorted(sv['player'].keys())))
+    c.ok(sv['version']=='3.0.0' and set(['player','run']).issubset(sv.keys()) and 'currentBattle' not in sv,'v3 최상위 (전투는 run 아래): '+str(sorted(sv.keys())))
+    c.ok(set(sv['player'].keys())=={'loopCount','memories','unlockedCharacters','settings','rewinders','progression'},'player(영구) 구성: '+str(sorted(sv['player'].keys())))
     run=sv['run']
-    c.ok(set(['id','seed','status','currentNodeId','completedNodes','mapState','encounters','encounterSeq','party','reserve','gold','commandBonus']).issubset(run.keys()),'run 구성: '+str(sorted(run.keys())))
+    c.ok(set(['id','seed','status','currentNodeId','completedNodes','mapState','encounters','encounterSeq','party','reserve','gold','commandBonus','inventory','characterCollection','campaign','adjutant','currentBattle']).issubset(run.keys()),'run 구성: '+str(sorted(run.keys())))
     c.ok(not any(('tiles' in n or 'map' in n) for n in run['mapState']['nodes']),'런(노드)에 전술 타일 없음')
-    c.ok(sv['currentBattle']['live']['enemyUnits'].__len__()==2 and sv['currentBattle']['map']['tiles'].__len__()==112 and run['encounterSeq']==1,'currentBattle에 map + live.enemyUnits, encounterSeq=1')
+    c.ok(run['currentBattle']['live']['enemyUnits'].__len__()==2 and run['currentBattle']['map']['tiles'].__len__()==112 and run['encounterSeq']==1,'run.currentBattle에 map + live.enemyUnits, encounterSeq=1')
     c.ok('playerUnits' not in sv and 'gold' not in sv,'옛 평평한 키(playerUnits/gold)는 최상위에 없음')
     saved_mid=sv
     mid_battle_id=b['id']; mid_seed=b['seed']

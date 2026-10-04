@@ -335,8 +335,8 @@
       summaryCost = `위협도 ${threatStars(sel.threat)}`;
       if (selStatus === 'available') {
         actionIcon = adjutant ? '🚩' : '🎖️';
-        actionLabel = adjutant ? '작전 개시 (진입)' : '부관 임명 필요';
-        actionEnabled = !!adjutant;
+        actionLabel = adjutant ? '작전 개시 (진입)' : '부관 임명';
+        actionEnabled = true; // 부관이 없으면 이 버튼이 임명 창을 연다
       }
     }
 
@@ -394,13 +394,14 @@
     root.querySelector('[data-cmp-launch]')?.addEventListener('click', async () => {
       const target = campaign.currentRegionId || selectedRegionId;
       if (!target) return;
+      if (!campaign.currentRegionId && !adjutant) { openAdjutantSelect(true); return; }
       const ok = await enterRegion(target);
       if (ok) selectedRegionId = null;
       else render();
     });
 
-    if (!adjutant) openAdjutantSelect(false);
-    else document.getElementById('modal-adjutant')?.remove();
+    // 부관 임명 창은 자동으로 띄우지 않는다. 작전지도의 부관 버튼으로만 연다.
+    if (adjutant) document.getElementById('modal-adjutant')?.remove();
   }
 
   // ------------------------------------------------------------

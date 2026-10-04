@@ -48,3 +48,16 @@ class Check:
         self.n+=1
         print(('PASS ' if cond else 'FAIL ')+msg)
         if not cond: self.fail+=1
+
+def enter_region(page, region='liona'):
+    """작전지도 → 전략맵. 게임은 작전지도(CAMPAIGN)에서 시작하고, 구역에 들어가려면 부관이 있어야 한다.
+    부관이 없으면 첫 생존 대원을 임명한 뒤 구역에 진입한다 (구역의 노드 그래프가 run.mapState가 된다)."""
+    ok = page.evaluate("""async (region) => {
+      if (!getAdjutantUnit(state.run)) {
+        const u = (state.run.party || []).find(x => !x.isDead);
+        if (!u || !appointAdjutant(u.id)) return false;
+      }
+      return await enterRegion(region);
+    }""", region)
+    page.wait_for_timeout(300)
+    return ok

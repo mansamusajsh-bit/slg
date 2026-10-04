@@ -33,7 +33,7 @@ srv=start_server(); c=Check()
 with sync_playwright() as pw:
     browser,page,errors=new_page(pw)
     page.goto(f'http://127.0.0.1:{PORT}/index.html'); page.wait_for_timeout(1200)
-    page.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
+    page.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }"); enter_region(page)
     start=page.evaluate("state.run.mapState.layers[0][0]"); page.evaluate("(id)=>selectNode(id)",start)
 
     print('\n=== 캐릭터 풀에서 적 생성 ===')
@@ -85,7 +85,7 @@ with sync_playwright() as pw:
     # 캐시를 비운 새 페이지에서 확인
     b2,p2,e2=new_page(pw)
     p2.goto(f'http://127.0.0.1:{PORT}/index.html'); p2.wait_for_timeout(1200)
-    p2.evaluate(TPL_JS, ['A-1', [[1,1],[3,1]]]); p2.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
+    p2.evaluate(TPL_JS, ['A-1', [[1,1],[3,1]]]); p2.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }"); enter_region(p2)
     p2.evaluate("(id)=>selectNode(id)", p2.evaluate("state.run.mapState.layers[0][0]"))
     e2.clear()
     enter(p2)
@@ -98,7 +98,7 @@ with sync_playwright() as pw:
     b3,p3,e3=new_page(pw)
     p3.goto(f'http://127.0.0.1:{PORT}/index.html'); p3.wait_for_timeout(1200)
     p3.evaluate(POOL_JS, 5); p3.evaluate(TPL_JS, ['A-1', [[1,1],[3,1],[5,1]]])  # 이 시점까지 캐시는 비어 있음
-    p3.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
+    p3.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }"); enter_region(p3)
     p3.evaluate("(id)=>selectNode(id)", p3.evaluate("state.run.mapState.layers[0][0]"))
     enter(p3,'A-1-5')
     c.ok(p3.evaluate("state.currentBattle!==null && state.enemyUnits.length>=2"),'enterEncounter가 풀을 먼저 불러온 뒤 적을 생성')
@@ -106,7 +106,7 @@ with sync_playwright() as pw:
 
     print('\n=== 보스/정예 배율 + 전투 진행 중 오류 없음 ===')
     page.evaluate(POOL_JS, 8); page.evaluate(TPL_JS, ['A-1',[[1,1],[3,1],[5,1]]]); page.evaluate(TPL_JS, ['B-2',[[1,1],[3,1]]])
-    page.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }")
+    page.evaluate("()=>{ startNewRun('RUN-ENEMY',{force:true}); }"); enter_region(page)
     boss=page.evaluate("""()=>{ for(let i=0;i<10;i++){ const av=RunEngine.getAvailableNodes(state.run); const h=av.find(n=>n.type==='boss'); if(h) return h.id; RunEngine.completeNode(state.run,av[0].id);} }""")
     page.evaluate("(id)=>{selectNode(id);}",boss); enter(page,'B-2-1')
     eb=page.evaluate("state.enemyUnits")
