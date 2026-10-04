@@ -129,6 +129,7 @@
         terrainDesc: '탁 트인 평야 지대로 기동력이 우수하며 ZOC 전선 형성이 빠름',
         terrainComposition: { plain: 65, forest: 25, hill: 10 },
         enemyForce: '👺 고블린 유격대 (두목 그룩)',
+        // recPower: 예전 고정 추천 전투력. 화면에는 더 이상 쓰지 않는다 (estimateNodeEnemyPower가 실제 적 기준으로 계산).
         recPower: 320,
         upkeep: 15,
         clearReward: '250G + 장비',
@@ -2605,6 +2606,9 @@
       return typeof window.getGamePrice === 'function' ? window.getGamePrice('ACADEMY_UPGRADE') : 300;
     }
 
+    // 레벨이 1 오를 때의 스탯 상승 (아카데미 진급 · 기억 계승 공통)
+    const LEVEL_UP_GROWTH = { atk: 8, def: 6 };
+
     function executeCityUpgrade() {
       const unit = getSelectedUnit();
       if (!unit) return;
@@ -2620,8 +2624,8 @@
       saveHistorySnapshot();
       state.gold -= cost;
       unit.level += 1;
-      unit.atk += 8;
-      unit.def += 6;
+      unit.atk += LEVEL_UP_GROWTH.atk;
+      unit.def += LEVEL_UP_GROWTH.def;
       unit.maxHp += 20;
       unit.hp = unit.maxHp;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
@@ -3700,6 +3704,99 @@
       return diff.level + typ.levelBonus;
     }
 
+    // ========================================================================
+    // [ 전투력(PWR) — 아군·적 공통 ]
+    // 실제 승률 공식(getCombatOdds)에 들어가는 값만 쓴다:
+    //   공격 = atk × (1 + 승급 단계 × 10%), 방어 = def + 지휘력 보정, 둘 다 남은 HP 비율만큼 깎인다.
+    // 레벨·스킬 보유 여부는 따로 더하지 않는다 (레벨업은 공격·방어 상승으로 이미 반영된다).
+    // 기준: 공 40 · 방 30 · 만피 캐릭터 = 140 PWR.
+    // ========================================================================
+    function calculateUnitPower(u) {
+      if (!u || u.isDead) return 0;
+      const atk = Number(u.atk ?? (u.stats && u.stats.atk)) || 40;
+      const def = (Number(u.def ?? (u.stats && u.stats.def)) || 30) + getCommandBonusDef(u);
+      const rank = Number(u.promotions && u.promotions.combatRank) || 0;
+      const maxHp = Number(u.maxHp ?? (u.stats && u.stats.maxHp)) || 100;
+      const hp = (typeof u.hp === 'number' && !isNaN(u.hp)) ? Math.min(maxHp, Math.max(0, u.hp)) : maxHp;
+      return Math.round((atk * (1 + rank * 0.1) + def) * (hp / maxHp) * 2);
+    }
+    window.calculateUnitPower = calculateUnitPower;
+
+    // 적 인원 범위: MapSchema.generateBattleMapWithSeed와 같은 규칙
+    // (스폰 n개(n>1) 중 ceil(n/2)~n개 사용 / 스폰 1개면 1명 / 스폰이 없으면 빈 땅에 2~4명)
+    function getEnemyCountRange(template) {
+      const spawns = (template && template.spawnPoints && Array.isArray(template.spawnPoints.enemy)) ? template.spawnPoints.enemy.length : 0;
+      return spawns > 1 ? [Math.ceil(spawns / 2), spawns] : spawns === 1 ? [1, 1] : [2, 4];
+    }
+
+    function getTemplateManualEnemies(template) {
+      return (template && template.metadata && Array.isArray(template.metadata.units) ? template.metadata.units : [])
+        .filter(u => u && (u.owner === 'ENEMY' || u.side === 'ENEMY'));
+    }
+
+    /**
+     * 노드의 예상 적 전투력 (출현 적 정보와 같은 규칙).
+     * 예지/기억으로 아는 노드와 고정 배치 전투는 정확한 합계, 그 외에는 "인원 범위 × 후보 평균 전투력".
+     * @returns {Promise<{min:number,max:number,exact:boolean}|null>}
+     */
+    async function estimateNodeEnemyPower(node, sector) {
+      const run = state.run;
+      const knows = isForeseenNode(run, node.id) || (getDeathMemory(run, node.id) && getNodeAttempts(run, node.id) === 0);
+      if (knows) {
+        const p = await previewNode(node);
+        if (p && Array.isArray(p.enemies) && !p.error && !p.retry) {
+          const sum = p.enemies.reduce((s, e) => s + (Number(e.power) || 0), 0);
+          return { min: sum, max: sum, exact: true };
+        }
+      }
+      await ensureCharacterPoolLoaded();
+      const template = await loadEnemyIntelTemplate(getNodeTemplateId(node, sector));
+      if (!template) return null;
+      const manual = getTemplateManualEnemies(template);
+      if (manual.length) {
+        const sum = manual.reduce((s, u) => s + calculateUnitPower(u), 0);
+        return { min: sum, max: sum, exact: true };
+      }
+      const pool = buildEnemyPool(sector, node.type);
+      if (!pool.length) return null;
+      const avg = pool.reduce((s, u) => s + calculateUnitPower(u), 0) / pool.length;
+      const [min, max] = getEnemyCountRange(template);
+      return { min: Math.round(avg * min), max: Math.round(avg * max), exact: min === max };
+    }
+    window.estimateNodeEnemyPower = estimateNodeEnemyPower;
+
+    function formatPowerEstimate(est) {
+      if (!est) return '— PWR';
+      return est.min === est.max ? `${est.min} PWR` : `${est.min}~${est.max} PWR`;
+    }
+
+    // el에 선택한 노드의 예상 적 전투력을 채운다. 같은 노드를 다시 그릴 때는 이전 값을 유지해 깜빡이지 않게 한다.
+    function renderNodeEnemyPower(el, node, sector) {
+      if (!el || !node) return;
+      const token = String(Math.random());
+      el.dataset.powerToken = token;
+      if (el.dataset.powerNodeId !== node.id) {
+        el.textContent = '계산 중…';
+        el.title = '';
+      }
+      el.dataset.powerNodeId = node.id;
+      estimateNodeEnemyPower(node, sector).then(est => {
+        if (el.dataset.powerToken !== token) return;
+        el.textContent = formatPowerEstimate(est);
+        el.title = !est ? '전술맵이나 캐릭터 풀을 불러오지 못했습니다'
+          : est.exact ? '이번 전장에 나올 적의 전투력 합계'
+          : '적 인원 범위 × 후보 평균 전투력 (실제 인원은 전장 시드로 정해집니다)';
+      }).catch(err => console.warn('[Strategy] 적 전투력 계산 실패', err));
+    }
+
+    function clearNodeEnemyPower(el) {
+      if (!el) return;
+      el.dataset.powerToken = '';
+      el.dataset.powerNodeId = '';
+      el.textContent = '—';
+      el.title = '';
+    }
+
     function formatEnemyNames(list, max = 4) {
       const names = list.map(e => `${e.avatar || '👤'} ${e.name}`);
       return names.length > max ? `${names.slice(0, max).join(', ')} 외 ${names.length - max}명` : names.join(', ');
@@ -3725,17 +3822,14 @@
       await ensureCharacterPoolLoaded();
       const template = await loadEnemyIntelTemplate(getNodeTemplateId(node, sector));
       if (!template) return `${summarizeNodeEnemiesQuick(node, sector)} (전술맵 없음)`;
-      const manual = (template.metadata && Array.isArray(template.metadata.units) ? template.metadata.units : [])
-        .filter(u => u && (u.owner === 'ENEMY' || u.side === 'ENEMY'));
+      const manual = getTemplateManualEnemies(template);
       if (manual.length) {
         // 맵에 직접 배치한 적 = 고정 전투. 매번 같은 적이 나온다.
         return `적 ${manual.length}명 (고정 배치): ${formatEnemyNames(manual, 6)}`;
       }
       const pool = buildEnemyPool(sector, node.type);
       if (!pool.length) return '적으로 쓸 캐릭터가 없습니다';
-      const spawns = (template.spawnPoints && Array.isArray(template.spawnPoints.enemy)) ? template.spawnPoints.enemy.length : 0;
-      // MapSchema.generateBattleMapWithSeed: 스폰 n개(n>1) 중 ceil(n/2)~n개 사용 / 스폰이 없으면 빈 땅에 2~4명
-      const [min, max] = spawns > 1 ? [Math.ceil(spawns / 2), spawns] : spawns === 1 ? [1, 1] : [2, 4];
+      const [min, max] = getEnemyCountRange(template);
       const count = min === max ? `${min}명` : `${min}~${max}명`;
       return `적 ${count} · Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
     }
@@ -4507,14 +4601,17 @@
         if (selNode && selNodeIsBattle) renderNodeEnemyIntel(enemyEl, selNode, curSec);
         else enemyEl.textContent = curSec.enemyForce;
       }
-      if (powerEl) powerEl.textContent = `${curSec.recPower} PWR`;
+      if (powerEl) {
+        if (selNode && selNodeIsBattle) renderNodeEnemyPower(powerEl, selNode, curSec);
+        else clearNodeEnemyPower(powerEl);
+      }
       if (upkeepEl) upkeepEl.textContent = `${curSec.upkeep}G / 턴`;
       if (rewardEl) rewardEl.textContent = curSec.clearReward;
       if (!selNodeIsBattle) {
         // 이벤트/상점 노드에는 적이 없다.
         if (descEl) descEl.textContent = selNode.type === 'shop' ? '군수 물자를 구입할 수 있는 보급 거점입니다.' : '전투 없이 무작위 사건이 벌어지는 구역입니다.';
         if (enemyEl) { enemyEl.dataset.intelToken = ''; enemyEl.textContent = '— (전투 없음)'; enemyEl.title = ''; }
-        if (powerEl) powerEl.textContent = '—';
+        clearNodeEnemyPower(powerEl);
         if (upkeepEl) upkeepEl.textContent = '—';
         if (rewardEl) rewardEl.textContent = selNode.type === 'shop' ? '골드로 구매' : '사건 결과에 따름';
       }
@@ -4559,7 +4656,7 @@
           rosterContainer.innerHTML = activeUnits.map((u, idx) => {
             const cls = u.classType || u.unitClass || 'KNIGHT';
             const clsMeta = (typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls] : { name: cls, avatar: '👤' };
-            const uPower = Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
+            const uPower = calculateUnitPower(u);
             const uUpkeep = (u.upkeep !== undefined) ? u.upkeep : 10;
             const isSelected = selectedIds.includes(u.id);
             if (isSelected) {
@@ -4598,7 +4695,7 @@
       } else {
         // Fallback calculations if roster container missing
         activeUnits.filter(u => selectedIds.includes(u.id)).forEach(u => {
-          totalPower += Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
+          totalPower += calculateUnitPower(u);
           totalUpkeep += (u.upkeep !== undefined ? u.upkeep : 10);
         });
       }
@@ -4777,7 +4874,7 @@
       if (state.run.status !== 'active') { warnNode('🏆 이번 런은 이미 종료되었습니다. 새 런을 시작하세요.'); return; }
       if (!RunEngine.isNodeAvailable(state.run, selNode.id)) { warnNode('🔒 아직 열리지 않았거나 이미 완료한 노드입니다.'); return; }
       if (!RunEngine.isBattleType(selNode.type)) { openRunNodeModal(selNode); return; }
-      const curSec = WORLD_SECTORS[selNode.sectorId] || { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '', recPower: 0 };
+      const curSec = WORLD_SECTORS[selNode.sectorId] || { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '' };
 
       // 총 부대 수 및 전투력 계산 (1편성부대 = 1캐릭터)
       const activeUnits = getSelectedDeployUnits();
@@ -4785,9 +4882,9 @@
       const maxLeadership = getLeadership();
       let myPower = 0;
       activeUnits.forEach(u => {
-        myPower += Math.round((u.atk || 40) * 2.2 + (u.def || 30) * 1.5 + (u.level || 1) * 30 + ((u.customSkill || (u.skillTree && u.skillTree.length)) ? 40 : 0));
+        myPower += calculateUnitPower(u);
       });
-      myPower = Math.round(myPower);
+      myPower = Math.round(myPower); // calculateUnitPower: 적과 같은 공식
 
       const titleEl = document.getElementById('deploy-sim-sector-name');
       const descEl = document.getElementById('deploy-sim-desc');
@@ -4803,7 +4900,8 @@
       if (myUnitsEl) myUnitsEl.textContent = `${totalUnits}개 부대 (${totalUnits}명) 편성 완료`;
       const leadershipEl = document.getElementById('deploy-sim-leadership');
       if (leadershipEl) leadershipEl.textContent = `${totalUnits} / ${maxLeadership}부대`;
-      if (enemyPowerEl) enemyPowerEl.textContent = `${curSec.recPower} PWR`;
+      // 적 전투력: 고정 추천치가 아니라 실제 적 생성 규칙(캐릭터 풀 × 난이도 배율 × 스폰 수)으로 계산
+      if (enemyPowerEl) renderNodeEnemyPower(enemyPowerEl, selNode, curSec);
       if (enemyNameEl) renderNodeEnemyIntel(enemyNameEl, selNode, curSec);
       if (diffEl) {
         diffEl.className = `strat-diff-badge ${curSec.difficulty.toLowerCase()}`;
@@ -6242,8 +6340,15 @@
 
       unit.level = (Number(unit.level) || 1) + 1;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
+      // 레벨업이므로 아카데미 진급과 같은 만큼 공격·방어가 오른다 (최대 HP는 100 정규화 체계라 올리지 않는다).
+      unit.atk = (Number(unit.atk ?? (unit.stats && unit.stats.atk)) || 40) + LEVEL_UP_GROWTH.atk;
+      unit.def = (Number(unit.def ?? (unit.stats && unit.stats.def)) || 30) + LEVEL_UP_GROWTH.def;
+      if (unit.stats && typeof unit.stats === 'object') {
+        unit.stats.atk = unit.atk;
+        unit.stats.def = unit.def;
+      }
 
-      addLog(`🧬 [기억 계승] ${unit.name} Lv.${unit.level} — 다른 시간선의 기억을 이어받았다. 스킬 해금권 +1 (남은 잔영 ${materials.length - 1}장)`, 'gold');
+      addLog(`🧬 [기억 계승] ${unit.name} Lv.${unit.level} — 다른 시간선의 기억을 이어받았다. 공격 +${LEVEL_UP_GROWTH.atk} · 방어 +${LEVEL_UP_GROWTH.def} · 스킬 해금권 +1 (남은 잔영 ${materials.length - 1}장)`, 'gold');
       saveGameState(true);
       return { ok: true, level: unit.level };
     }
@@ -6817,7 +6922,7 @@
           const owned = entry && (entry.unit || entry.reserve);
           const res = owned ? absorbDuplicateCharacter(owned.id) : { ok: false, reason: '편입된 적 없는 캐릭터는 기억을 계승할 수 없습니다.' };
           after(res);
-          if (res.ok && !res.resonance) notifyUnitGrowth(owned, `${owned.name} 레벨업! Lv.${res.level}`, ['기억 계승 — 스킬 해금권 +1']);
+          if (res.ok && !res.resonance) notifyUnitGrowth(owned, `${owned.name} 레벨업! Lv.${res.level}`, [`기억 계승 — 공격 +${LEVEL_UP_GROWTH.atk} · 방어 +${LEVEL_UP_GROWTH.def}`, '스킬 해금권 +1']);
           else if (res.ok && typeof window.UI?.showToast === 'function') window.UI.showToast(`🔔 잔향 +1 (보유 ${getResonance()}개)`, 'success');
         };
       });
@@ -10604,7 +10709,7 @@
         await ensureCharacterPoolLoaded();
         const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type), sectorId: node.sectorId });
         if (!map) throw new Error('전장 생성 실패');
-        const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1 }));
+        const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1, power: calculateUnitPower(e) }));
         const rewards = MapSchema.generateEncounterRewards(seed, { enemyCount: enemies.length, type: node.type });
         const res = { kind: 'battle', seed, enemies, rewards };
         nodePreviewCache.set(key, res);
