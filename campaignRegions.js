@@ -196,6 +196,32 @@ const REGIONS = {
     },
 };
 
+// ------------------------------------------------------------
+// 국가별 전투 특색 — 섹터 난이도(EASY~NIGHTMARE) 위에 얹히는 보정
+//   hp/atk/def: 적 스탯 배율 · level: 적 레벨 가산 · count: 적 인원 가산 (최대 출전 수 상한은 그대로 적용)
+//   hostage: 쓰러진 아군이 영구 사망 대신 포로로 잡힐 확률 (0.5 = 50%). 0이면 포로가 없고 그대로 영구 사망. 몸값을 내면 되찾는다.
+//   위협도(threat)에 따른 공통 보정은 game.js(getRegionEnemyProfile)에서 따로 더한다.
+//   intel: 부관이 브리핑에서 말하는 적의 인상 — 수치 없이 말로만 전한다. "{intel}입니다"로 끝나는 명사구로 쓴다.
+// ------------------------------------------------------------
+const REGION_COMBAT = {
+    liona: { hp: 0.9,  atk: 0.9,  def: 0.9,  level: 0, count: -1, hostage: 0,    intel: "훈련이 덜 된 변경 민병대" },
+    mira:  { hp: 1.0,  atk: 1.0,  def: 1.0,  level: 0, count: 0,  hostage: 0,    intel: "무난하게 편성된 정규군" },
+    vaska: { hp: 1.0,  atk: 1.05, def: 1.1,  level: 0, count: 0,  hostage: 0,    intel: "갑옷이 두껍고 호전적인 기사단" },
+    oria:  { hp: 0.85, atk: 0.85, def: 0.85, level: 0, count: -1, hostage: 0,    intel: "보석으로 배를 불린 탓에 허약해진 군대" },
+    luma:  { hp: 0.95, atk: 0.95, def: 0.95, level: 0, count: 0,  hostage: 0.50, intel: "습지에 숨어 기습하는 부족 전사들" },
+    tino:  { hp: 1.0,  atk: 1.0,  def: 1.0,  level: 0, count: 0,  hostage: 0,    intel: "눈치만 보며 버티는 완충국 수비대" },
+    rokan: { hp: 1.0,  atk: 1.15, def: 0.95, level: 0, count: 0,  hostage: 0,    intel: "공세 일변도의 호전적인 군대" },
+    savo:  { hp: 1.0,  atk: 1.0,  def: 1.15, level: 0, count: 0,  hostage: 0,    intel: "강변 요새선에 틀어박힌 완강한 수비대" },
+    torva: { hp: 1.1,  atk: 0.95, def: 1.2,  level: 0, count: 0,  hostage: 0,    intel: "돌 성벽처럼 단단한 수비 병력" },
+    ara:   { hp: 1.0,  atk: 1.1,  def: 0.9,  level: 0, count: 0,  hostage: 0,    intel: "방비는 허술하지만 돌격이 매서운 기마대" },
+    elda:  { hp: 1.05, atk: 1.1,  def: 1.0,  level: 1, count: -1, hostage: 0,    intel: "수는 적어도 숙련된 신권 정예" },
+    naru:  { hp: 0.95, atk: 0.95, def: 0.95, level: 0, count: 0,  hostage: 0.60, intel: "돈이 되는 일이라면 뭐든 하는 용병 부대" },
+    silva: { hp: 0.95, atk: 1.05, def: 0.9,  level: 0, count: 0,  hostage: 0.50, intel: "숲을 누비는 거친 부족 전사들" },
+    valen: { hp: 1.1,  atk: 1.05, def: 1.05, level: 0, count: 0,  hostage: 0,    intel: "은광의 부로 무장한 강력한 정규군" },
+    arca:  { hp: 1.05, atk: 1.05, def: 1.05, level: 0, count: 1,  hostage: 0,    intel: "물량과 질을 모두 갖춘 패권국의 군대" },
+    mor:   { hp: 1.1,  atk: 1.1,  def: 1.1,  level: 1, count: 0,  hostage: 0,    intel: "정체를 알 수 없는 자들" },
+};
+
 // 강을 건너야 하는 경계 (도하 작전 등에 사용)
 const RIVER_CROSSINGS = [["naru", "savo"]];
 

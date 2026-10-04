@@ -28,6 +28,14 @@
     final: [
       '{title}… 정찰대가 돌아오지 않았습니다. 이곳이 마지막이 될 겁니다.'
     ],
+    // 적의 성향은 수치 없이 말로만 전한다 ({intel}은 campaignRegions.js REGION_COMBAT의 intel)
+    intel: [
+      '적은 {intel}입니다.',
+      '{region} 방면 적군은 {intel}입니다.'
+    ],
+    hostage: [
+      '{region|은/는} 쓰러진 아군을 포로로 잡아 몸값을 요구하는 일이 잦다고 합니다.'
+    ],
     locked: [
       '{region|은/는} 아직 정찰 정보가 없습니다. 인접한 구역을 먼저 확보해야 합니다.'
     ],
@@ -145,6 +153,13 @@
         return pickLine('busyElsewhere', selectedRegionId, vars, adjutant);
       }
       let text = pickLine(r.role === 'final' ? 'final' : 'available', selectedRegionId, vars, adjutant);
+      // 적의 성향: 수치(스탯 배율·인원·확률)는 보여 주지 않고 부관의 말로만 전한다.
+      const profile = typeof getRegionEnemyProfile === 'function' ? getRegionEnemyProfile(selectedRegionId) : null;
+      if (profile && profile.intel) {
+        vars.intel = profile.intel;
+        text += ' ' + pickLine('intel', selectedRegionId, vars, adjutant);
+        if (profile.hostage > 0) text += ' ' + pickLine('hostage', selectedRegionId, vars, adjutant);
+      }
       const crossesRiver = r.neighbors.some((n) => campaign.regions[n] && campaign.regions[n].status === 'secured' && isRiverCrossing(n, selectedRegionId));
       if (crossesRiver) text += ' ' + pickLine('river', selectedRegionId, vars, adjutant);
       const aware = loopAwareLine(selectedRegionId, adjutant);

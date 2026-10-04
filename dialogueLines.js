@@ -18,6 +18,7 @@
     { key: 'brave_attack',    icon: '🔥', label: '신뢰의 돌격',           desc: '호감도 70 이상인데 승률 50% 미만인 공격을 받아들일 때' },
     { key: 'forced_attack',   icon: '😤', label: '광폭화 강제 돌격',      desc: '호감도가 낮지만 지휘관 광폭화로 억지로 공격할 때' },
     { key: 'enemy_defeated',  icon: '⚔️', label: '적 격파',              desc: '공격으로 적을 쓰러뜨렸을 때 (35% 확률로 출력)' },
+    { key: 'captive_taken', icon: '⛓️', label: '아군 포로 발생', desc: '쓰러진 아군이 적에게 붙잡혔을 때 부관이 하는 말 · {target} {ransom}' },
     { key: 'adjutant_appointed', icon: '🎖️', label: '부관 임명',          desc: '작전지도/지휘관 창에서 부관으로 임명됐을 때' },
 
     // 부관 브리핑 (작전지도 말풍선). campaignMap.js가 'brief_' 뒤의 이름으로 요청한다.
@@ -25,6 +26,8 @@
     //       {region|은/는} 처럼 쓰면 받침에 맞는 조사를 붙인다.
     { key: 'brief_welcome',         group: 'briefing', icon: '📋', label: '브리핑: 인사',            desc: '작전지도에서 구역을 고르기 전 · {adjutant}' },
     { key: 'brief_available',       group: 'briefing', icon: '🧭', label: '브리핑: 진입 가능 구역',  desc: '진입할 수 있는 구역을 골랐을 때 · {title} {region} {desc} {threat}' },
+    { key: 'brief_intel',           group: 'briefing', icon: '🔎', label: '브리핑: 적의 인상',       desc: '진입 가능 구역 브리핑에 덧붙음 · 수치 없이 적의 성향만 말한다 · {region} {intel} (입니다/이죠 등 조사는 {intel|이죠/죠}처럼)' },
+    { key: 'brief_hostage',         group: 'briefing', icon: '⛓️', label: '브리핑: 포로를 잡는 나라', desc: '쓰러진 아군을 포로로 잡아 몸값을 요구하는 구역일 때 덧붙음 · {region}' },
     { key: 'brief_final',           group: 'briefing', icon: '☠️', label: '브리핑: 최종 구역',       desc: '마지막 구역을 골랐을 때 · {title} {region}' },
     { key: 'brief_locked',          group: 'briefing', icon: '🔒', label: '브리핑: 미확인 구역',     desc: '아직 갈 수 없는 구역을 골랐을 때 · {region}' },
     { key: 'brief_secured',         group: 'briefing', icon: '🏴', label: '브리핑: 확보한 구역',     desc: '이미 확보한 구역을 골랐을 때 · {region}' },
@@ -418,6 +421,72 @@
         '{title}이지요. {desc}. 위협도 {threat}, 가볍게 볼 곳은 아니랍니다.',
         '{region} 방면 보고를 올리지요. {desc}. 위협도는 {threat}입니다.',
         '{title}... {desc}. 우리 이름을 새기기에 나쁘지 않은 무대군요.'
+      ]
+    },
+    brief_intel: {
+      timid: [
+        '정찰병 말로는 적은 {intel|이래요/래요}... 조심해요, 우리.',
+        '{region} 쪽 병사들은 {intel|이라고 해요/라고 해요}... 괜찮을까요?'
+      ],
+      cold: [
+        '정찰 결과, 상대는 {intel|이죠/죠}. 알아서 대비하시죠.',
+        '{region} 병력은 {intel|이라는군요/라는군요}. 예상한 대로예요.'
+      ],
+      loyal: [
+        '적은 {intel}입니다.',
+        '{region} 방면 적군은 {intel}입니다. 유의하십시오.'
+      ],
+      rough: [
+        '{region} 놈들은 {intel|이라는 거지/라는 거지}? 부숴주마!',
+        '상대는 {intel|이란 말이지/란 말이지}. 해볼 만하겠는데!'
+      ],
+      cheerful: [
+        '정찰 보고예요! 적은 {intel|이래요/래요}!',
+        '{region} 쪽 병사들은 {intel|이라고 해요/라고 해요}! 두근두근하네요!'
+      ],
+      noble: [
+        '듣자 하니 적은 {intel|이지요/지요}.',
+        '{region}의 병력은 {intel|이라 하더군요/라 하더군요}. 방심은 금물이지요.'
+      ]
+    },
+    brief_hostage: {
+      timid: [
+        '그리고... {region|은/는} 쓰러진 사람을 포로로 잡아간대요... 몸값을 내면 돌려준다는데... 무서워요.'
+      ],
+      cold: [
+        '참고로 {region|은/는} 쓰러진 병사를 포로로 잡아 몸값을 요구하는 곳입니다. 죽는 것보단 낫지만 공짜는 아니죠.'
+      ],
+      loyal: [
+        '또한 {region|은/는} 쓰러진 아군을 포로로 잡아 몸값을 요구하는 일이 잦다고 합니다. 붙잡힌 자는 반드시 되찾겠습니다.'
+      ],
+      rough: [
+        '그리고 {region|은/는} 쓰러진 놈을 끌고 가서 돈을 뜯어낸다더군. 잡히면 몸값 내고 데려오면 되지!'
+      ],
+      cheerful: [
+        '그리고요! {region}에선 쓰러져도 포로로 잡혀갈 수 있대요. 돈만 내면 돌려받을 수 있으니까 다행이죠?'
+      ],
+      noble: [
+        '덧붙이자면 {region|은/는} 쓰러진 자를 포로로 잡아 몸값을 요구하는 관행이 있지요. 값을 치르면 돌아올 수 있답니다.'
+      ]
+    },
+    captive_taken: {
+      timid: [
+        '{target}이(가) 적에게 붙잡혔어요...! 어떡해요, 몸값을 내야 해요!'
+      ],
+      cold: [
+        '{target}이(가) 붙잡혔군요. 몸값을 내면 돌려받을 수 있습니다. 비용은 감수하셔야죠.'
+      ],
+      loyal: [
+        '{target}이(가) 포로로 잡혔습니다. 몸값을 치르고 반드시 데려오겠습니다.'
+      ],
+      rough: [
+        '젠장, {target} 녀석이 잡혀갔어! 돈 내고 찾아와야겠군!'
+      ],
+      cheerful: [
+        '앗, {target}이(가) 잡혀갔어요! 하지만 괜찮아요, 몸값만 내면 돌아올 거예요!'
+      ],
+      noble: [
+        '{target}이(가) 포로가 되었군요. 몸값을 지불해 정중히 모셔 오지요.'
       ]
     },
     brief_final: {

@@ -1049,7 +1049,8 @@
    */
   const BASE_PRICES = Object.freeze({
     ACADEMY_UPGRADE: 300, // 왕실 아카데미 진급 훈련
-    CAPTURE_BRIBE: 80     // 포섭 방침 "금화 회유": 포섭 성공 시 지불
+    CAPTURE_BRIBE: 80,    // 포섭 방침 "금화 회유": 포섭 성공 시 지불
+    CAPTIVE_RANSOM: 300   // 적에게 붙잡힌 아군의 기본 몸값 (레벨·승급에 따라 가산)
   });
   const ECONOMY = {
     inflation: 1.0,

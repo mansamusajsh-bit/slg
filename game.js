@@ -1911,8 +1911,10 @@
           }
         } else {
           // B. 적군(AI)의 공격 성공 -> 아군 유닛 영구 전사
-          addLog(`💀 [아군 전사 (Permadeath)] 적 ${attacker.name}의 치명적인 공격에 아군 ${defender.name}이(가) 전사하여 영구 삭제되었습니다!`, 'danger');
-          addLog(`💡 앗! 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
+          if (!tryCaptureAlly(defender, attacker)) {
+            addLog(`💀 [아군 전사 (Permadeath)] 적 ${attacker.name}의 치명적인 공격에 아군 ${defender.name}이(가) 전사하여 영구 삭제되었습니다!`, 'danger');
+            addLog(`💡 앗! 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
+          }
 
           // 인접 아군 유닛들에게 스플래시 피해
           const splashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
@@ -1958,8 +1960,10 @@
         }
 
         if (isPlayerAttacker) {
-          addLog(`💀 [영구 사망 (Permadeath)] ${attacker.name}이(가) 치명타를 입고 전사하여 영구 삭제되었습니다!`, 'danger');
-          addLog(`💡 앗! 실수인가요? 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
+          if (!tryCaptureAlly(attacker, defender)) {
+            addLog(`💀 [영구 사망 (Permadeath)] ${attacker.name}이(가) 치명타를 입고 전사하여 영구 삭제되었습니다!`, 'danger');
+            addLog(`💡 앗! 실수인가요? 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
+          }
         } else {
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
@@ -3697,13 +3701,13 @@
     const ENEMY_DIFFICULTY_SCALE = {
       EASY: { level: 1, mult: 0.8 },
       NORMAL: { level: 2, mult: 1.0 },
-      HARD: { level: 4, mult: 1.25 },
-      NIGHTMARE: { level: 6, mult: 1.6 }
+      HARD: { level: 3, mult: 1.15 },
+      NIGHTMARE: { level: 4, mult: 1.3 }
     };
     const ENEMY_NODE_TYPE_SCALE = {
       battle: { levelBonus: 0, mult: 1.0 },
-      elite: { levelBonus: 1, mult: 1.2 },
-      boss: { levelBonus: 2, mult: 1.5 }
+      elite: { levelBonus: 1, mult: 1.1 },
+      boss: { levelBonus: 1, mult: 1.25 }
     };
 
     // 캐릭터 풀이 아직 로드되지 않았다면(전투를 너무 일찍 시작한 경우) 한 번 불러온다.
@@ -3719,16 +3723,40 @@
       }
     }
 
-    function buildEnemyPool(sector, nodeType) {
+    // 국가(구역)별 적 보정: REGION_COMBAT 특색 + 위협도(1~6) 공통 보정(위협도 1당 스탯 +2%, 위협도 4부터 레벨 +1).
+    // regionId가 없거나 모르는 구역이면 중립(보정 없음).
+    function getRegionEnemyProfile(regionId) {
+      const neutral = { hp: 1, atk: 1, def: 1, level: 0, count: 0, hostage: 0, intel: '' };
+      const region = typeof REGIONS !== 'undefined' ? REGIONS[regionId] : null;
+      if (!region) return neutral;
+      const c = (typeof REGION_COMBAT !== 'undefined' && REGION_COMBAT[regionId]) || neutral;
+      const threatMult = 1 + ((Number(region.threat) || 1) - 1) * 0.02;
+      return {
+        hp: (c.hp || 1) * threatMult,
+        atk: (c.atk || 1) * threatMult,
+        def: (c.def || 1) * threatMult,
+        level: (c.level || 0) + ((Number(region.threat) || 1) >= 4 ? 1 : 0),
+        count: c.count || 0,
+        hostage: c.hostage || 0,
+        intel: c.intel || ''
+      };
+    }
+    window.getRegionEnemyProfile = getRegionEnemyProfile;
+
+    function buildEnemyPool(sector, nodeType, regionId) {
       const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
       const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
+      const prof = getRegionEnemyProfile(regionId);
       return getStoredCustomCharacters()
         .filter(c => c && c.id && c.name && (c.classType || c.unitClass))
         .map(c => characterRecordToUnit(c, {
           id: c.id,
           owner: 'ENEMY',
-          level: diff.level + typ.levelBonus,
+          level: diff.level + typ.levelBonus + prof.level,
           statMultiplier: diff.mult * typ.mult,
+          hpMult: prof.hp,
+          atkMult: prof.atk,
+          defMult: prof.def,
           fullHp: true
         }));
     }
@@ -3756,10 +3784,10 @@
       return enemyIntelTemplateCache.get(templateId);
     }
 
-    function getEnemyLevelFor(sector, nodeType) {
+    function getEnemyLevelFor(sector, nodeType, regionId) {
       const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
       const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
-      return diff.level + typ.levelBonus;
+      return diff.level + typ.levelBonus + getRegionEnemyProfile(regionId).level;
     }
 
     // ========================================================================
@@ -3797,8 +3825,11 @@
     /** @returns {[number, number]} 이 노드 전투의 적 인원 [최소, 최대] */
     function getEnemyCountRange(node) {
       const r = ENEMY_COUNT_RULE;
-      const min = Math.min(r.max, r.base + getSectorProgressIndex(node && node.sectorId) * r.perSector + (r.typeBonus[node && node.type] || 0));
-      return [min, Math.min(r.max, min + r.spread)];
+      // 적 최대 출전 수 = 플레이어 최대 출전 수(통솔력) - 1
+      const cap = Math.max(1, Math.min(r.max, getLeadership() - 1));
+      const countBonus = getRegionEnemyProfile(node && node.regionId).count; // 국가 특색 (수가 많은/적은 나라)
+      const min = Math.max(1, Math.min(cap, r.base + getSectorProgressIndex(node && node.sectorId) * r.perSector + (r.typeBonus[node && node.type] || 0) + countBonus));
+      return [min, Math.min(cap, min + r.spread)];
     }
     window.getEnemyCountRange = getEnemyCountRange;
 
@@ -3830,7 +3861,7 @@
         const sum = manual.reduce((s, u) => s + calculateUnitPower(u), 0);
         return { min: sum, max: sum, exact: true };
       }
-      const pool = buildEnemyPool(sector, node.type);
+      const pool = buildEnemyPool(sector, node.type, node.regionId);
       if (!pool.length) return null;
       const avg = pool.reduce((s, u) => s + calculateUnitPower(u), 0) / pool.length;
       const [min, max] = getEnemyCountRange(node);
@@ -3929,9 +3960,9 @@
 
     /** 템플릿 없이 알 수 있는 부분 (후보·레벨). 템플릿을 불러오면 summarizeNodeEnemies가 인원까지 채운다. */
     function summarizeNodeEnemiesQuick(node, sector) {
-      const pool = buildEnemyPool(sector, node.type);
+      const pool = buildEnemyPool(sector, node.type, node.regionId);
       if (!pool.length) return '캐릭터 풀을 불러오는 중…';
-      return `Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
+      return `Lv.${getEnemyLevelFor(sector, node.type, node.regionId)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
     }
 
     async function summarizeNodeEnemies(node, sector) {
@@ -3952,11 +3983,11 @@
         // 맵에 직접 배치한 적 = 고정 전투. 매번 같은 적이 나온다.
         return `적 ${manual.length}명 (고정 배치): ${formatEnemyNames(manual, 6)}`;
       }
-      const pool = buildEnemyPool(sector, node.type);
+      const pool = buildEnemyPool(sector, node.type, node.regionId);
       if (!pool.length) return '적으로 쓸 캐릭터가 없습니다';
       const [min, max] = getEnemyCountRange(node);
       const count = min === max ? `${min}명` : `${min}~${max}명`;
-      return `적 ${count} · Lv.${getEnemyLevelFor(sector, node.type)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
+      return `적 ${count} · Lv.${getEnemyLevelFor(sector, node.type, node.regionId)} · 후보 ${pool.length}명: ${formatEnemyNames(pool)}`;
     }
 
     // el에 출현 적 정보를 채운다 (먼저 바로 아는 부분, 템플릿을 불러온 뒤 전체). 그 사이 노드가 바뀌면 덮어쓰지 않는다.
@@ -4063,7 +4094,7 @@
       // 생기는 즉시 여기 하나만 채우면 랜덤 적 스폰이 켜진다. 그때까지는 지형/보물 상자만
       // 매 진입마다(같은 노드는 항상 같게) 달라진다.
       await ensureCharacterPoolLoaded();
-      const enemyPool = buildEnemyPool(sector, node.type);
+      const enemyPool = buildEnemyPool(sector, node.type, node.regionId);
 
       if (typeof window.enterBattleWithSeed !== 'function') {
         const msg = 'enterBattleWithSeed를 찾을 수 없습니다 (seedEngine.js 로드를 확인하세요).';
@@ -4776,9 +4807,27 @@
       let totalUpkeep = 0;
 
       const rosterContainer = document.getElementById('strat-characters-roster-wrap');
+      // 포로: 적에게 붙잡힌 영웅. 몸값을 내면 명단으로 돌아온다.
+      const captiveHtml = getCaptives().map(u => {
+        const ransom = Number(u.captive.ransom) || getCaptiveRansom(u);
+        const affordable = state.gold >= ransom;
+        return `
+          <div class="strat-char-roster-item is-benched" title="${escapeGachaHtml(u.name)} — ${escapeGachaHtml(u.captive.captor)}에게 붙잡힘">
+            <span class="strat-char-roster-check">⛓️</span>
+            <div class="strat-char-roster-avatar">${renderPortrait(u, { emojiSize: '15px' })}</div>
+            <div class="strat-char-roster-info">
+              <div class="strat-char-roster-name-row">
+                <span class="strat-char-roster-name">${escapeGachaHtml(u.name)}</span>
+                <span class="strat-char-lv-badge">Lv.${u.level || 1}</span>
+              </div>
+              <div class="strat-char-roster-stats"><span>포로 · ${escapeGachaHtml(u.captive.captor)}에게 붙잡힘</span></div>
+            </div>
+            <button type="button" class="strat-char-roster-badge ${affordable ? 'ready' : 'benched'}" ${affordable ? '' : 'disabled'} onclick="event.stopPropagation(); payCaptiveRansom('${u.id}')">몸값 ${ransom}G</button>
+          </div>`;
+      }).join('');
       if (rosterContainer) {
         if (activeUnits.length === 0) {
-          rosterContainer.innerHTML = `<div style="text-align: center; color: #94a3b8; font-size: 11px; padding: 14px;">현재 생존 중인 아군 영웅이 없습니다.</div>`;
+          rosterContainer.innerHTML = `<div style="text-align: center; color: #94a3b8; font-size: 11px; padding: 14px;">현재 생존 중인 아군 영웅이 없습니다.</div>` + captiveHtml;
         } else {
           rosterContainer.innerHTML = activeUnits.map((u, idx) => {
             const cls = u.classType || u.unitClass || 'KNIGHT';
@@ -4817,7 +4866,7 @@
                 </div>
               </div>
             `;
-          }).join('');
+          }).join('') + captiveHtml;
         }
       } else {
         // Fallback calculations if roster container missing
@@ -6401,15 +6450,17 @@
     function characterRecordToUnit(target, o = {}) {
       const clone = (v) => JSON.parse(JSON.stringify(v));
       const mult = Number(o.statMultiplier) || 1;
-      const scale = (v) => Math.max(1, Math.round((Number(v) || 0) * mult));
+      // 스탯별 추가 배율 (국가 특색 등). 없으면 1.
+      const hpMult = Number(o.hpMult) || 1, atkMult = Number(o.atkMult) || 1, defMult = Number(o.defMult) || 1;
+      const scale = (v, extra = 1) => Math.max(1, Math.round((Number(v) || 0) * mult * extra));
       const baseStats = target.stats || { hp: 100, maxHp: 100, atk: 40, def: 30, mobility: 2 };
-      const maxHp = scale(baseStats.maxHp || baseStats.hp || 100);
-      const hp = o.fullHp ? maxHp : scale(baseStats.hp || 100);
-      const atk = scale(baseStats.atk || 40);
-      const def = scale(baseStats.def || 30);
+      const maxHp = scale(baseStats.maxHp || baseStats.hp || 100, hpMult);
+      const hp = o.fullHp ? maxHp : scale(baseStats.hp || 100, hpMult);
+      const atk = scale(baseStats.atk || 40, atkMult);
+      const def = scale(baseStats.def || 30, defMult);
       const ap = Number(baseStats.mobility) || 2;
       const stats = clone(baseStats);
-      if (mult !== 1) Object.assign(stats, { hp, maxHp, atk, def });
+      if (mult !== 1 || hpMult !== 1 || atkMult !== 1 || defMult !== 1) Object.assign(stats, { hp, maxHp, atk, def });
       return {
         id: o.id || ('custom_' + Date.now()),
         owner: o.owner || 'PLAYER',
@@ -6640,6 +6691,65 @@
       captureEnemyUnit(enemy, affection, x, y);
       return true;
     }
+
+    // ------------------------------------------------------------------------
+    // 포로: 쓰러진 아군은 보통 영구 사망이지만, 국가 특색에 따라 적에게 붙잡히기도 한다.
+    //   확률 = 그 구역의 hostage (REGION_COMBAT). 포로를 잡는 국가(나루·루마·실바)에서만 일어나고, 그 외 국가는 항상 영구 사망.
+    //   포로는 isDead 상태 그대로 출전 명단에 남고(전투·편성에서 빠진다) unit.captive에 몸값이 적힌다.
+    //   몸값 = 기본가(CAPTIVE_RANSOM) × 레벨 보정 × 승급 보정. 전투 밖에서 골드를 내면 되찾는다.
+    // ------------------------------------------------------------------------
+    const CAPTIVE_RANSOM_PER_LEVEL = 0.20;  // 레벨 1을 넘는 레벨마다 +20%
+    const CAPTIVE_RANSOM_PER_RANK = 0.25;   // 병과 승급 단계마다 +25%
+
+    function getCaptiveRansom(unit) {
+      const base = typeof window.getGamePrice === 'function' ? window.getGamePrice('CAPTIVE_RANSOM') : 300;
+      const level = Math.max(1, Number(unit && unit.level) || 1);
+      const rank = Math.max(0, Number(unit && unit.promotions && unit.promotions.combatRank) || 0);
+      const cost = (base || 300) * (1 + (level - 1) * CAPTIVE_RANSOM_PER_LEVEL) * (1 + rank * CAPTIVE_RANSOM_PER_RANK);
+      return Math.max(10, Math.round(cost / 10) * 10);
+    }
+    window.getCaptiveRansom = getCaptiveRansom;
+
+    function getCaptives() {
+      return (state.playerUnits || []).filter(u => u && u.isDead && u.captive);
+    }
+    window.getCaptives = getCaptives;
+
+    /** 방금 쓰러진 아군을 포로로 만들지 판정한다. 붙잡혔으면 true (이미 isDead 처리된 유닛에 captive만 붙인다). */
+    function tryCaptureAlly(unit, captor) {
+      if (!unit || unit.owner === 'ENEMY') return false;
+      const regionId = getCurrentRegionId();
+      const chance = Math.min(0.95, getRegionEnemyProfile(regionId).hostage);
+      if (!(chance > 0) || Math.random() >= chance) return false;
+      const ransom = getCaptiveRansom(unit);
+      unit.captive = { regionId: regionId || null, captor: (captor && captor.name) || '적군', ransom };
+      addLog(`⛓️ [포로] ${unit.name}이(가) ${unit.captive.captor}에게 붙잡혔습니다! 전략맵 출전 편성에서 몸값 ${ransom}G를 내고 되찾을 수 있습니다.`, 'warning');
+      window.UI?.showToast?.(`⛓️ ${unit.name} 포로로 붙잡힘 — 몸값 ${ransom}G`, 'warning');
+      const adj = typeof getAdjutantUnit === 'function' ? getAdjutantUnit() : null;
+      if (adj && adj.id !== unit.id) speakUnitLine(adj, 'captive_taken', 'warning', { target: unit.name, ransom });
+      return true;
+    }
+
+    function payCaptiveRansom(unitId) {
+      const unit = (state.playerUnits || []).find(u => u && u.id === unitId && u.isDead && u.captive);
+      if (!unit) return false;
+      const warn = msg => { addLog(msg, 'warning'); window.UI?.showToast?.(msg, 'warning'); return false; };
+      if (state.currentBattle || state.isCombatActive) return warn('⚠️ 전투 중에는 몸값을 지불할 수 없습니다.');
+      const cost = Number(unit.captive.ransom) || getCaptiveRansom(unit);
+      if (state.gold < cost) return warn(`⚠️ 몸값이 부족합니다. (필요 ${cost}G / 보유 ${state.gold}G)`);
+      state.gold -= cost;
+      unit.captive = null;
+      unit.isDead = false;
+      unit.isInactivated = false;
+      unit.hp = Math.max(1, Math.ceil((unit.maxHp || 100) * 0.5)); // 풀려난 직후라 반쯤 다친 상태
+      if (unit.stats) unit.stats.hp = unit.hp;
+      unit.ap = unit.baseAP || unit.ap || 2;
+      addLog(`🔓 [몸값 지불] ${unit.name}을(를) 되찾았습니다! (-${cost}G)`, 'gold');
+      saveGameState(true);
+      renderAll();
+      return true;
+    }
+    window.payCaptiveRansom = payCaptiveRansom;
 
     function setCaptureDoctrine(id) {
       if (!CAPTURE_DOCTRINES[id] || !state.commander) return;
@@ -11076,7 +11186,7 @@
       try {
         const template = await loadTacticalMapTemplate(templateId);
         await ensureCharacterPoolLoaded();
-        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type), enemyCount: getEnemyCountRange(node), sectorId: node.sectorId });
+        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type, node.regionId), enemyCount: getEnemyCountRange(node), sectorId: node.sectorId });
         if (!map) throw new Error('전장 생성 실패');
         const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1, power: calculateUnitPower(e) }));
         const rewards = MapSchema.generateEncounterRewards(seed, { enemyCount: enemies.length, type: node.type });
@@ -11771,7 +11881,7 @@
       const deployed = Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [];
       const casualties = (state.playerUnits || [])
         .filter(u => deployed.includes(u.id) && (u.isDead || (typeof u.hp === 'number' && u.hp <= 0)))
-        .map(u => ({ id: u.id, name: u.name }));
+        .map(u => ({ id: u.id, name: u.name, captive: !!u.captive }));
 
       // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화 (스킬 해금권은 기억 계승으로만 얻는다)
       cancelSkillTargeting(true);
