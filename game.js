@@ -2404,6 +2404,13 @@
       renderAll();
     }
 
+    // 유닛 1기의 턴당 유지비. 턴 종료 정산과 전략 화면 표시가 같은 값을 쓴다 (값이 없으면 10G).
+    function getUnitUpkeep(u) {
+      const v = Number(u && u.upkeep);
+      return Number.isFinite(v) && v >= 0 ? v : 10;
+    }
+    window.getUnitUpkeep = getUnitUpkeep;
+
     async function executeEndTurn() {
       if (isEnemyTurnProcessing) return;
       if (getDeployPhase()) { addLog('👁️ [기시감] 먼저 아군 배치를 끝내세요 ("배치 완료").', 'warning'); return; }
@@ -2425,7 +2432,7 @@
           unit.isInactivated = false;
           safeUnits++;
         } else {
-          totalUpkeepNeeded += unit.upkeep;
+          totalUpkeepNeeded += getUnitUpkeep(unit);
           fieldUnits.push(unit);
         }
       });
@@ -2442,8 +2449,8 @@
         fieldUnits.sort((a, b) => b.level - a.level);
         let curGold = state.gold;
         fieldUnits.forEach(u => {
-          if (curGold >= u.upkeep) {
-            curGold -= u.upkeep;
+          if (curGold >= getUnitUpkeep(u)) {
+            curGold -= getUnitUpkeep(u);
             u.isInactivated = false;
           } else {
             u.isInactivated = true;
@@ -4605,7 +4612,7 @@
         if (selNode && selNodeIsBattle) renderNodeEnemyPower(powerEl, selNode, curSec);
         else clearNodeEnemyPower(powerEl);
       }
-      if (upkeepEl) upkeepEl.textContent = `${curSec.upkeep}G / 턴`;
+      // 예상 턴당 유지비: 섹터 고정값이 아니라 출전 편성 유닛 유지비 합계 (아래 로스터 계산 후 채운다)
       if (rewardEl) rewardEl.textContent = curSec.clearReward;
       if (!selNodeIsBattle) {
         // 이벤트/상점 노드에는 적이 없다.
@@ -4657,7 +4664,7 @@
             const cls = u.classType || u.unitClass || 'KNIGHT';
             const clsMeta = (typeof CLASS_META !== 'undefined' && CLASS_META[cls]) ? CLASS_META[cls] : { name: cls, avatar: '👤' };
             const uPower = calculateUnitPower(u);
-            const uUpkeep = (u.upkeep !== undefined) ? u.upkeep : 10;
+            const uUpkeep = getUnitUpkeep(u);
             const isSelected = selectedIds.includes(u.id);
             if (isSelected) {
               totalPower += uPower;
@@ -4696,7 +4703,7 @@
         // Fallback calculations if roster container missing
         activeUnits.filter(u => selectedIds.includes(u.id)).forEach(u => {
           totalPower += calculateUnitPower(u);
-          totalUpkeep += (u.upkeep !== undefined ? u.upkeep : 10);
+          totalUpkeep += getUnitUpkeep(u);
         });
       }
 
@@ -4721,6 +4728,10 @@
       }
       if (armyPowerEl) armyPowerEl.textContent = `${Math.round(totalPower)} PWR`;
       if (armyUpkeepEl) armyUpkeepEl.textContent = `${Math.round(totalUpkeep)}G / 턴`;
+      if (upkeepEl && selNodeIsBattle) {
+        upkeepEl.textContent = `${Math.round(totalUpkeep)}G / 턴`;
+        upkeepEl.title = `출전 편성 ${totalUnits}기의 유지비 합계 (턴 종료마다 청구, 마을·도시 칸에 주둔한 유닛은 면제)`;
+      }
 
       // Bottom Action Summary
       const destSummary = document.getElementById('strat-action-summary-dest');

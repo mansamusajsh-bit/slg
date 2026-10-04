@@ -55,6 +55,12 @@ with sync_playwright() as pw:
     roster=page.inner_text('#strat-characters-roster-wrap')
     c.ok(f"{u['p']} PWR" in roster, f"로스터에 공통 공식 전투력 {u['p']} 표시")
 
+    print('\n=== 예상 턴당 유지비 = 출전 편성 유지비 합계 ===')
+    exp=page.evaluate("getSelectedDeployUnits().reduce((s,u)=>s+getUnitUpkeep(u),0)")
+    up=page.inner_text('#strat-sector-upkeep')
+    c.ok(up==f'{exp}G / 턴', f'섹터 패널 유지비 = 편성 합계 {exp}G (got {up!r})')
+    c.ok(page.inner_text('#strat-army-upkeep')==up, '부대 유지비 표시와 일치')
+
     print('\n=== 기억 계승 스탯 상승 ===')
     r=page.evaluate("""(id)=>{
       const u=state.playerUnits.find(x=>x.id===id);
