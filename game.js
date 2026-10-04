@@ -6333,9 +6333,9 @@
         return `
           <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); gap: 10px;">
             <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
-              <div style="width: 38px; height: 38px; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0;">
+              <button type="button" onclick="changeCustomCharacterImage('${c.id}')" title="클릭해서 일러스트 변경" style="width: 38px; height: 38px; padding: 0; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; cursor: pointer;">
                 ${imgDisplay}
-              </div>
+              </button>
               <div style="min-width: 0;">
                 <div style="display: flex; align-items: center; gap: 6px;">
                   <strong style="font-size: 12px; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${c.name}</strong>
@@ -7602,6 +7602,51 @@
       });
     }
     window.openCharacterPortraitEditor = openCharacterPortraitEditor;
+
+    // 보관함 캐릭터의 일러스트 교체 (DEV 목록의 얼굴 클릭). 저장 후 새 그림에 맞춰 얼굴 위치를 바로 잡게 한다.
+    function changeCustomCharacterImage(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record) return;
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = 'image/png, image/jpeg, image/webp';
+      input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (!file) return;
+        if (!file.type.startsWith('image/')) {
+          addLog('⚠️ 지원되지 않는 이미지 파일입니다. PNG, JPG, WebP 파일을 선택해주세요.', 'warning');
+          return;
+        }
+        addLog(`⏳ ${record.name}의 일러스트를 최적화하는 중...`, 'system');
+        const dataUrl = await compressImageDataUrl(file, 640, 960, 0.8);
+        if (!dataUrl) return;
+        let url = dataUrl;
+        if (typeof window.uploadCharacterAvatar === 'function') {
+          try {
+            url = await window.uploadCharacterAvatar(dataUrl, record.name || record.id) || dataUrl;
+          } catch (err) {
+            console.warn('Character image upload failed, saving data URL:', err);
+          }
+        }
+        record.imageUrl = url;
+        delete record.portraitFocus; // 이전 그림 기준 얼굴 위치는 새 그림에 맞지 않는다
+        if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+        [...(state.playerUnits || []), ...(state.reserveUnits || []), ...(state.enemyUnits || [])].forEach(u => {
+          if (!u || u === record) return;
+          if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+          u.imageUrl = url;
+          delete u.portraitFocus;
+        });
+        saveGameState(true);
+        renderAll();
+        renderCustomCharactersList();
+        updateFullShotOverlay();
+        addLog(`🖼️ [일러스트 변경] ${record.name}의 일러스트를 교체했습니다.`, 'gold');
+        openCharacterPortraitEditor(record.id);
+      };
+      input.click();
+    }
+    window.changeCustomCharacterImage = changeCustomCharacterImage;
 
     // 생성 폼: 아직 저장 전인 캐릭터의 얼굴 위치
     function openNewCharacterPortraitEditor() {
