@@ -1441,10 +1441,44 @@
     /* --------------------------------------------------------------------------
        상황별 캐릭터 대사 (dialogueLines.js) + 일러스트 말풍선 연출
        -------------------------------------------------------------------------- */
+    // ------------------------------------------------------------------------
+    // 일러스트 로드 실패 대비: 외부 사이트(civitai 등) 이미지는 그쪽 사정으로 언제든 막힐 수 있다.
+    // 처음 쓰는 URL은 몰래 한 번 불러 보고, 실패하면 빈칸 대신 병과 이미지 → 이모지 순으로 대체해 다시 그린다.
+    // ------------------------------------------------------------------------
+    const brokenImageUrls = new Set();
+    const probedImageUrls = new Set();
+    let brokenImageRerenderTimer = null;
+    function probeImageUrl(url) {
+      if (!url || url.startsWith('data:') || probedImageUrls.has(url) || typeof Image === 'undefined') return;
+      probedImageUrls.add(url);
+      const img = new Image();
+      img.onerror = () => {
+        brokenImageUrls.add(url);
+        console.warn('[일러스트] 이미지를 불러오지 못해 대체 이미지로 표시합니다:', url);
+        clearTimeout(brokenImageRerenderTimer);
+        brokenImageRerenderTimer = setTimeout(() => {
+          try { renderAll(); renderCustomCharactersList(); if (document.getElementById('pool-list')) renderCharacterPool(); } catch (e) { /* 화면 갱신 실패는 무시 */ }
+        }, 300);
+      };
+      img.src = url;
+    }
+    function isImageUrlBroken(url) { return !!url && brokenImageUrls.has(String(url).trim()); }
+    window.isImageUrlBroken = isImageUrlBroken;
+    /** 후보 중 깨지지 않은 첫 이미지 URL (모두 없거나 깨졌으면 '') */
+    function pickLoadableImage(...urls) {
+      for (const u of urls) {
+        const url = String(u || '').trim();
+        if (!url) continue;
+        probeImageUrl(url);
+        if (!brokenImageUrls.has(url)) return url;
+      }
+      return '';
+    }
+
     function getUnitIllustration(unit) {
       if (!unit) return '';
-      return unit.imageUrl || customClassImages[unit.classType]
-        || (typeof SAMPLE_CLASS_IMAGES !== 'undefined' ? SAMPLE_CLASS_IMAGES[unit.classType] : '') || '';
+      return pickLoadableImage(unit.imageUrl, customClassImages[unit.classType],
+        typeof SAMPLE_CLASS_IMAGES !== 'undefined' ? SAMPLE_CLASS_IMAGES[unit.classType] : '');
     }
 
     /* --------------------------------------------------------------------------
@@ -1472,7 +1506,7 @@
      */
     function renderPortrait(char, opts = {}) {
       const cls = char?.classType || char?.unitClass;
-      const url = (char?.imageUrl || customClassImages[cls] || '').trim();
+      const url = pickLoadableImage(char?.imageUrl, customClassImages[cls]);
       const name = escapeGachaHtml(char?.name || '');
       const extra = opts.className ? ` ${opts.className}` : '';
       if (!url) {
@@ -6280,7 +6314,13 @@
         return;
       }
 
-      container.innerHTML = list.map(c => {
+      const externalCount = list.filter(c => isExternalImageUrl(c.imageUrl)).length;
+      const archiveBar = externalCount ? `
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 10px; background:#fffbeb; border:1px solid #fde68a; border-radius:8px; font-size:10.5px; color:#92400e;">
+            <span>외부 사이트 그림 ${externalCount}개 — 그 사이트가 막히면 사라질 수 있습니다.</span>
+            <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #0d9488; flex-shrink:0;" onclick="archiveExternalIllustrations()">☁️ 전부 보관</button>
+          </div>` : '';
+      container.innerHTML = archiveBar + list.map(c => {
         const meta = CLASS_META[c.unitClass || c.classType] || { icon: c.avatar || '👤', name: c.unitClass || '영웅' };
         const tree = Array.isArray(c.skillTree) ? c.skillTree : [];
         const starts = tree.filter(n => n.startsLearned).map(n => n.name);
@@ -6298,6 +6338,7 @@
               <div style="min-width: 0;">
                 <div style="display: flex; align-items: center; gap: 6px;">
                   <strong style="font-size: 12px; color: #0f172a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${c.name}</strong>
+                  ${isImageUrlBroken(c.imageUrl) ? '<span style="font-size: 9px; font-weight: 700; color: #b91c1c; background: #fee2e2; padding: 1px 5px; border-radius: 4px;" title="그림을 불러오지 못해 대체 그림으로 표시 중">⚠️ 그림 깨짐</span>' : ''}
                   <span style="font-size: 9px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 1px 5px; border-radius: 4px;">${meta.name.split(' ')[0]}</span>
                 </div>
                 <div style="font-size: 10px; color: #64748b; margin-top: 2px;">
@@ -6310,6 +6351,9 @@
             </div>
 
             <div style="display: flex; gap: 4px; flex-shrink: 0;">
+              <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #b45309;" onclick="openCharacterIllustrationEditor('${c.id}')" title="일러스트 변경 · 내 저장소로 보관">
+                🖼️ 그림
+              </button>
               <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #7c3aed;" onclick="openCharacterRenameEditor('${c.id}')" title="이름 변경">
                 ✏️ 이름
               </button>
@@ -6974,6 +7018,8 @@
         if (e.unit) actions.push(`<button type="button" class="pool-btn ghost" data-pool-dismiss="${esc(e.id)}" ${locked ? 'disabled' : ''}>명단 제외</button>`);
         else actions.push(`<button type="button" class="pool-btn primary" data-pool-enlist="${esc(e.id)}" ${canEnlist && !locked ? '' : 'disabled'}>${e.reserve ? '복귀' : '편입 (사본 1)'}</button>`);
         if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 계승</button>`);
+        const illustId = (e.record && e.record.id) || (owned && (owned.sourceCharacterId || owned.id));
+        if (illustId) actions.push(`<button type="button" class="pool-btn ghost" data-pool-illust="${esc(String(illustId))}" title="일러스트 변경">🖼️ 그림</button>`);
         return `
           <div class="pool-card ${e.unit ? 'in-roster' : ''}">
             <button type="button" class="gacha-card-image pool-portrait-btn" data-pool-view="${esc(e.id)}" title="캐릭터 창 열기">${getGachaAvatarHtml(src)}</button>
@@ -6995,6 +7041,7 @@
         renderStrategyView();
       };
       listEl.querySelectorAll('[data-pool-view]').forEach(b => { b.onclick = () => openPoolCharacterWindow(b.dataset.poolView); });
+      listEl.querySelectorAll('[data-pool-illust]').forEach(b => { b.onclick = () => openCharacterIllustrationEditor(b.dataset.poolIllust); });
       listEl.querySelectorAll('[data-pool-enlist]').forEach(b => { b.onclick = () => after(enlistCharacterFromPool(b.dataset.poolEnlist)); });
       listEl.querySelectorAll('[data-pool-dismiss]').forEach(b => { b.onclick = () => after(dismissCharacterToPool(b.dataset.poolDismiss)); });
       listEl.querySelectorAll('[data-pool-absorb]').forEach(b => {
@@ -7190,6 +7237,186 @@
       input.select();
     }
     window.openCharacterRenameEditor = openCharacterRenameEditor;
+
+    // ------------------------------------------------------------------------
+    // 일러스트 변경: 보관함·용병 명부에서 캐릭터 그림을 바꾸거나, 외부 그림을 내 저장소(Supabase Storage)로 옮긴다.
+    // 저장하면 캐릭터 레코드와 그 캐릭터에서 나온 모든 유닛(출전·대기·적)의 그림이 함께 바뀐다.
+    // ------------------------------------------------------------------------
+    function isOwnStorageImageUrl(url) {
+      const base = (window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url) || '';
+      return !!url && !!base && String(url).startsWith(base);
+    }
+    function isExternalImageUrl(url) {
+      return /^https?:\/\//.test(String(url || '')) && !isOwnStorageImageUrl(url);
+    }
+
+    function blobToDataUrl(blob) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = () => reject(r.error || new Error('파일 읽기 실패'));
+        r.readAsDataURL(blob);
+      });
+    }
+
+    /** data URL 또는 외부 URL을 압축해 내 저장소에 올리고 영구 URL을 돌려준다. */
+    async function storeIllustration(source, name) {
+      let dataUrl = source;
+      if (isExternalImageUrl(source)) {
+        const res = await fetch(source);
+        if (!res.ok) throw new Error(`원본 그림을 받지 못했습니다 (HTTP ${res.status})`);
+        dataUrl = await blobToDataUrl(await res.blob());
+      }
+      if (!String(dataUrl).startsWith('data:image/')) throw new Error('이미지 파일이 아닙니다.');
+      const compressed = await compressImageDataUrl(dataUrl, 640, 960, 0.85);
+      const upload = window.uploadCharacterAvatar
+        || (window.SupabaseBridge && window.SupabaseBridge.uploadCharacterImage);
+      if (typeof upload !== 'function') throw new Error('저장소 업로드 기능을 찾을 수 없습니다.');
+      const url = await upload(compressed, name || 'hero');
+      if (!url) throw new Error('저장소 업로드에 실패했습니다.');
+      return url;
+    }
+
+    /** 레코드와 그 캐릭터에서 나온 유닛들의 그림을 바꾼다. keepFocus: 같은 그림을 옮긴 경우 얼굴 위치 유지 */
+    function applyCharacterIllustration(record, newUrl, { keepFocus = false } = {}) {
+      const oldUrl = record.imageUrl || '';
+      record.imageUrl = newUrl;
+      if (!keepFocus) delete record.portraitFocus;
+      brokenImageUrls.delete(newUrl);
+      if (getStoredCustomCharacters().includes(record)) saveCustomCharacterRecord(record);
+      [...(state.playerUnits || []), ...(state.reserveUnits || []), ...(state.enemyUnits || [])].forEach(u => {
+        if (!u || u === record) return;
+        if (String(u.id) !== String(record.id) && String(u.sourceCharacterId) !== String(record.id)) return;
+        // 이 캐릭터의 그림을 쓰던 유닛만 바꾼다 (다른 그림을 따로 지정한 유닛은 그대로)
+        if (u.imageUrl && u.imageUrl !== oldUrl && !isClassImageUrl(u.imageUrl)) return;
+        u.imageUrl = newUrl;
+        if (!keepFocus) delete u.portraitFocus;
+      });
+      saveGameState(true);
+      renderAll();
+      renderCustomCharactersList();
+      if (document.getElementById('pool-list')) renderCharacterPool();
+      if (typeof updateFullShotOverlay === 'function') updateFullShotOverlay();
+    }
+
+    function openCharacterIllustrationEditor(charId) {
+      const record = getStoredCustomCharacters().find(c => String(c.id) === String(charId)) || findCharacterById(charId);
+      if (!record) { addLog('⚠️ 캐릭터 원본을 찾을 수 없어 그림을 바꿀 수 없습니다.', 'warning'); return; }
+      document.getElementById('illust-char-modal')?.remove();
+      const cls = record.classType || record.unitClass;
+      const current = record.imageUrl || '';
+      let pending = null; // { source, keepFocus }
+      const overlay = document.createElement('div');
+      overlay.id = 'illust-char-modal';
+      overlay.className = 'sk-modal-overlay';
+      overlay.innerHTML = `
+        <div class="sk-modal" style="max-width: 380px;">
+          <div class="sk-modal-head"><span>🖼️ ${escapeGachaHtml(record.name || '')} 일러스트</span><button class="btn-close" data-close>✕</button></div>
+          <div class="sk-modal-body">
+            <div style="display:flex; gap:10px; align-items:flex-start;">
+              <div style="width:96px; height:140px; border-radius:8px; background:#f1f5f9; border:1px solid #e2e8f0; overflow:hidden; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+                <img data-preview alt="" style="width:100%; height:100%; object-fit:cover; display:none;">
+                <span data-preview-empty style="font-size:30px;">${escapeGachaHtml(record.avatar || '👤')}</span>
+              </div>
+              <div data-status style="font-size:11px; color:#475569; line-height:1.5;"></div>
+            </div>
+            <label class="dbg-form-label" for="illust-url-input" style="margin-top:10px;">이미지 주소 (URL)</label>
+            <input type="url" id="illust-url-input" class="dbg-form-control" placeholder="https://..." />
+            <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+              <label class="btn-cheat" style="background:#0284c7; cursor:pointer;">📁 파일 선택<input type="file" accept="image/*" data-file style="display:none;"></label>
+              <button class="btn-cheat" style="background:#0d9488;" data-copy ${isExternalImageUrl(current) ? '' : 'disabled'} title="지금 그림을 내 저장소로 옮겨 외부 사이트가 막혀도 사라지지 않게 합니다">☁️ 지금 그림 보관</button>
+              <button class="btn-cheat" style="background:#64748b;" data-clear>병과 기본 그림</button>
+            </div>
+          </div>
+          <div class="sk-modal-foot">
+            <button class="btn-cheat" style="background:#64748b;" data-close>닫기</button>
+            <button class="btn-cheat purple" data-save>💾 저장</button>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+      const q = (sel) => overlay.querySelector(sel);
+      const img = q('[data-preview]'), empty = q('[data-preview-empty]'), status = q('[data-status]'), urlInput = q('#illust-url-input');
+      const showPreview = (src, note) => {
+        const shown = src || pickLoadableImage(customClassImages[cls]);
+        if (shown) {
+          img.onerror = () => { img.style.display = 'none'; empty.style.display = ''; status.textContent = '⚠️ 이 이미지를 불러오지 못했습니다. 다른 그림을 지정하세요.'; };
+          img.onload = () => { img.style.display = ''; empty.style.display = 'none'; };
+          img.src = shown;
+        } else { img.style.display = 'none'; empty.style.display = ''; }
+        status.textContent = note;
+      };
+      const describeCurrent = () => !current ? '고유 그림이 없어 병과 기본 그림을 쓰고 있습니다.'
+        : isImageUrlBroken(current) ? '⚠️ 지금 그림을 불러오지 못하고 있습니다. 새 그림을 지정하세요.'
+        : isOwnStorageImageUrl(current) ? '내 저장소에 보관된 그림입니다.'
+        : '외부 사이트 그림입니다. 그 사이트가 막히면 사라질 수 있어 "지금 그림 보관"을 권합니다.';
+      urlInput.value = current.startsWith('data:') ? '' : current;
+      showPreview(current, describeCurrent());
+
+      urlInput.oninput = () => {
+        const v = urlInput.value.trim();
+        if (/^https?:\/\//.test(v)) { pending = { source: v, keepFocus: v === current }; showPreview(v, '저장하면 이 주소의 그림을 씁니다.'); }
+      };
+      q('[data-file]').onchange = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file || !file.type.startsWith('image/')) return;
+        compressImageDataUrl(file, 640, 960, 0.85).then(dataUrl => {
+          pending = { source: dataUrl, keepFocus: false };
+          urlInput.value = '';
+          showPreview(dataUrl, `선택한 파일: ${file.name} — 저장하면 내 저장소에 올립니다.`);
+        });
+      };
+      q('[data-copy]').onclick = () => {
+        pending = { source: current, keepFocus: true, copy: true };
+        showPreview(current, '저장하면 지금 그림을 내 저장소로 옮깁니다 (그림은 같고 주소만 바뀝니다).');
+      };
+      q('[data-clear]').onclick = () => {
+        pending = { source: '', keepFocus: false };
+        urlInput.value = '';
+        showPreview('', '저장하면 고유 그림을 지우고 병과 기본 그림을 씁니다.');
+      };
+      const close = () => overlay.remove();
+      overlay.querySelectorAll('[data-close]').forEach(b => b.onclick = close);
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
+      q('[data-save]').onclick = async () => {
+        if (!pending) { close(); return; }
+        const btn = q('[data-save]');
+        btn.disabled = true; btn.textContent = '⏳ 저장 중…';
+        try {
+          let url = pending.source;
+          // 파일·보관 요청은 내 저장소에 올린다. URL 직접 입력은 그 주소를 그대로 쓴다.
+          if (url && (url.startsWith('data:') || pending.copy)) url = await storeIllustration(url, record.name);
+          applyCharacterIllustration(record, url, { keepFocus: !!pending.keepFocus });
+          addLog(`🖼️ [일러스트] ${record.name}의 그림을 ${url ? (isOwnStorageImageUrl(url) ? '내 저장소 그림으로' : '새 주소로') : '병과 기본 그림으로'} 바꿨습니다.`, 'gold');
+          close();
+        } catch (err) {
+          btn.disabled = false; btn.textContent = '💾 저장';
+          status.textContent = `⚠️ ${err.message || err}`;
+          addLog(`⚠️ [일러스트] ${record.name} 그림 저장 실패: ${err.message || err}`, 'warning');
+        }
+      };
+    }
+    window.openCharacterIllustrationEditor = openCharacterIllustrationEditor;
+
+    /** 외부 사이트 그림을 쓰는 캐릭터를 모두 내 저장소로 옮긴다 (그림은 같고 주소만 바뀐다). */
+    async function archiveExternalIllustrations() {
+      const targets = getStoredCustomCharacters().filter(c => isExternalImageUrl(c.imageUrl) && !isImageUrlBroken(c.imageUrl));
+      if (!targets.length) { addLog('☁️ 외부 사이트 그림을 쓰는 캐릭터가 없습니다.', 'system'); return { ok: 0, fail: 0 }; }
+      addLog(`☁️ 외부 그림 ${targets.length}개를 내 저장소로 옮기는 중…`, 'system');
+      let ok = 0, fail = 0;
+      for (const c of targets) {
+        try {
+          const url = await storeIllustration(c.imageUrl, c.name);
+          applyCharacterIllustration(c, url, { keepFocus: true });
+          ok++;
+        } catch (err) {
+          fail++;
+          console.warn('[일러스트 보관] 실패:', c.name, err);
+        }
+      }
+      addLog(`☁️ 외부 그림 보관 완료: 성공 ${ok}개${fail ? ` · 실패 ${fail}개 (해당 캐릭터는 🖼️ 버튼으로 다시 지정하세요)` : ''}`, fail ? 'warning' : 'gold');
+      return { ok, fail };
+    }
+    window.archiveExternalIllustrations = archiveExternalIllustrations;
 
     function deleteSavedCustomCharacter(charId) {
       customCharactersCloudCache = customCharactersCloudCache.filter(c => c.id !== charId);
