@@ -8978,6 +8978,11 @@
                 loadGameState(data);
                 addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
+              // 계정마다 같은 기본 이름('레오나르도')이 되지 않도록, 기본 이름 그대로면 이메일 앞부분으로 바꾼다.
+              const acctName = String(user.email || '').split('@')[0].trim().slice(0, 16);
+              if (acctName && state.commander && state.commander.name === createInitialCommander().name) {
+                state.commander.name = acctName;
+              }
               saveGameState(true);
               if (window.ServerEconomy) window.ServerEconomy.start(); // 로그인 계정이면 서버 경제에 연결 (골드 · 지분 · 대출 · 경매)
             }).catch(e => {

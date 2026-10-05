@@ -27,6 +27,8 @@ insert into public.slg_config (key, value) values
   ('spread_bp', 50), ('ltv', 0.6), ('min_loan', 50), ('term_step_hours', 8), ('min_term_hours', 8), ('max_term_hours', 168),
   ('max_active_loans', 3), ('miss_limit', 3), ('loan_total_cap_base', 1500), ('loan_default_ban_hours', 72),
   ('collateral_max_level', 30), ('collateral_max_rank', 4), ('ransom_base', 300),
+  -- 담보 회수 실패 시 채권 회수: 몰수 확인이 없으면 서버 지갑에서 압류하고 모자란 만큼은 빚으로 남아 이후 수입의 일부(%)에서 갚는다
+  ('seize_confirm_ms', 600000), ('seize_verify_ms', 600000), ('debt_garnish_pct', 50),
   -- 경매
   ('auction_hours', 24), ('anti_snipe_ms', 300000), ('min_inc_pct', 5), ('min_inc_flat', 10), ('open_pct', 0.5),
   ('relist_drop_pct', 30), ('min_start_price', 10), ('auction_recent_hours', 24),
@@ -120,7 +122,7 @@ create table if not exists public.slg_events (
 );
 create index if not exists slg_events_user on public.slg_events (user_id, id);
 
--- 플레이어에게 전달할 물건 (경매로 받은 캐릭터 · 상환된 담보). 클라이언트가 받아 적은 뒤 ack.
+-- 플레이어에게 전달할 물건 (경매로 받은 캐릭터 · 몰수 확정된 담보). 클라이언트가 받아 적은 뒤 ack.
 create table if not exists public.slg_inbox (
   id bigserial primary key,
   user_id uuid not null,
@@ -220,6 +222,26 @@ create table if not exists public.slg_loans (
 );
 create index if not exists slg_loans_user on public.slg_loans (user_id, status);
 
+-- 감사 기록: 클라이언트의 주장이 서버가 볼 수 있는 증거(저장된 세이브)와 다를 때 남긴다. 브라우저는 읽지 못한다 (관리자 RPC slg_audit_list 로만).
+create table if not exists public.slg_audit (
+  id bigserial primary key,
+  user_id uuid not null,
+  kind text not null,          -- seize_claim · seize_mismatch · seize_unverified · seize_no_confirm · collateral_substitute
+  detail jsonb not null default '{}'::jsonb,
+  at_ms bigint not null
+);
+create index if not exists slg_audit_user on public.slg_audit (user_id, id);
+-- 몰수 확정 후 담보 회수 상태: pending(확인 대기) · claimed(클라이언트가 몰수했다고 알림 → 저장된 세이브로 검증 대기)
+--   · done(검증 통과) · lost(회수 실패 → 지갑 압류 + 빚)
+alter table public.slg_loans drop constraint if exists slg_loans_seize_state_check;
+alter table public.slg_loans add column if not exists seize_state text;
+alter table public.slg_loans add column if not exists seize_claim_ms bigint;                     -- 몰수했다고 알린 시각
+alter table public.slg_loans add column if not exists claim bigint not null default 0;          -- 몰수 시점의 채권액 (원금 + 밀린 이자)
+alter table public.slg_loans add column if not exists defaulted_ms bigint;
+alter table public.slg_loans add column if not exists seize_seen_ms bigint;                      -- 몰수 우편이 클라이언트에 처음 전달된 시각
+-- 압류하고도 모자란 채권. 회귀해도 남고, 이후 수입에서 일부씩 갚는다 (빚이 있는 동안 새 대출 불가)
+alter table public.slg_players add column if not exists debt bigint not null default 0 check (debt >= 0);
+
 create table if not exists public.slg_auctions (
   id text primary key,
   unit jsonb not null,
@@ -249,7 +271,7 @@ declare t text;
 begin
   foreach t in array array['slg_config','slg_regions','slg_players','slg_wallet_log','slg_admins','slg_admin_emails','slg_events','slg_inbox','slg_econ',
                            'slg_motion','slg_motion_votes','slg_nations','slg_shares','slg_payouts','slg_share_rights','slg_secured',
-                           'slg_loans','slg_auctions']
+                           'slg_loans','slg_auctions','slg_audit']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public', t);
@@ -444,13 +466,23 @@ end $$;
 
 create or replace function public.slg_credit(p_uid uuid, p_amount bigint, p_kind text, p_ref text, p_now bigint, p_tx text default null)
 returns bigint language plpgsql volatile set search_path = public as $$
-declare bal bigint;
+declare bal bigint; d bigint;
 begin
   if p_amount < 0 then raise exception 'negative_credit'; end if;
   update slg_players set gold = gold + p_amount where user_id = p_uid returning gold into bal;
   if bal is null then raise exception 'no_player'; end if;
   insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
   values (p_uid, coalesce(p_tx, 'srv:' || gen_random_uuid()::text), p_kind, p_amount, p_ref, bal, p_now);
+  -- 빚이 있으면 수입(세금 · 지분 대금 · 전리품 · 보상 · 판매 · 회귀 지원금)의 일부를 먼저 갚는다
+  if p_kind in ('tax', 'share_payout', 'earn_loot', 'earn_reward', 'earn_event', 'earn_sell', 'earn_stash') then
+    d := least((select debt from slg_players where user_id = p_uid),
+               floor(p_amount * slg_cfg('debt_garnish_pct') / 100.0)::bigint);
+    if d > 0 then
+      update slg_players set gold = gold - d, debt = debt - d where user_id = p_uid returning gold into bal;
+      insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
+      values (p_uid, 'srv:' || gen_random_uuid()::text, 'debt_garnish', -d, p_kind, bal, p_now);
+    end if;
+  end if;
   return bal;
 end $$;
 
@@ -808,19 +840,96 @@ begin
     if st = 'active' and periods >= total and p_now >= l.due_ms then
       owed := l.principal + arr;
       if slg_debit(p_uid, owed, 'loan_repay', l.id, p_now) then
-        st := 'repaid';
-        insert into slg_inbox (user_id, kind, payload, at_ms)
-          values (p_uid, 'unit', jsonb_build_object('unit', l.collateral, 'source', 'loan_repaid', 'loanId', l.id), p_now);
+        st := 'repaid';   -- 캐릭터는 대출 중에도 플레이어 곁에 있으므로 돌려줄 것이 없다
         perform slg_event(p_uid, 'loan_repaid', jsonb_build_object('loanId', l.id, 'name', v_name, 'amount', owed), p_now);
       else
         st := 'defaulted'; reason := 'maturity';
       end if;
     end if;
-    update slg_loans set periods_done = periods, interest_paid = paid, arrears = arr, missed = miss, status = st where id = l.id;
+    update slg_loans set periods_done = periods, interest_paid = paid, arrears = arr, missed = miss, status = st,
+      seize_state = case when st = 'defaulted' then 'pending' else seize_state end,
+      claim = case when st = 'defaulted' then l.principal + arr else claim end,
+      defaulted_ms = case when st = 'defaulted' then p_now else defaulted_ms end
+    where id = l.id;
     if st = 'defaulted' then
       perform slg_auction_create('auc_' || l.id, l.collateral, l.collateral_value, 'default', p_now);
+      -- 몰수 확정: 클라이언트가 이 우편을 받으면 담보 캐릭터를 자기 명단에서 뺀다
+      insert into slg_inbox (user_id, kind, payload, at_ms)
+        values (p_uid, 'seize', jsonb_build_object('unit', l.collateral, 'loanId', l.id), p_now);
       update slg_players set loan_ban_until_ms = greatest(loan_ban_until_ms, p_now + (slg_cfg('loan_default_ban_hours') * 3600000)::bigint) where user_id = p_uid;
       perform slg_event(p_uid, 'loan_default', jsonb_build_object('loanId', l.id, 'name', v_name, 'reason', reason), p_now);
+    end if;
+  end loop;
+end $$;
+
+-- 담보 회수 실패 → 채권 회수: 지갑에서 압류하고, 모자란 만큼은 빚(slg_players.debt)으로 남긴다
+create or replace function public.slg_loan_garnish(p_uid uuid, p_loan_id text, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare l slg_loans%rowtype; bal bigint; taken bigint; rest bigint;
+begin
+  select * into l from slg_loans where id = p_loan_id and user_id = p_uid and status = 'defaulted' and seize_state in ('pending', 'claimed') for update;
+  if not found then return; end if;
+  select gold into bal from slg_players where user_id = p_uid;
+  taken := least(coalesce(bal, 0), l.claim);
+  if taken > 0 then perform slg_debit(p_uid, taken, 'loan_garnish', l.id, p_now); end if;
+  rest := l.claim - taken;
+  if rest > 0 then update slg_players set debt = debt + rest where user_id = p_uid; end if;
+  update slg_loans set seize_state = 'lost' where id = l.id;
+  perform slg_event(p_uid, 'loan_garnish', jsonb_build_object('loanId', l.id, 'name', coalesce(l.collateral ->> 'name', '담보'), 'taken', taken, 'debt', rest), p_now);
+end $$;
+
+-- 감사 기록 한 줄
+create or replace function public.slg_audit_add(p_uid uuid, p_kind text, p_detail jsonb, p_now bigint) returns void
+language sql volatile set search_path = public as $$
+  insert into slg_audit (user_id, kind, detail, at_ms) values (p_uid, p_kind, coalesce(p_detail, '{}'::jsonb), p_now)
+$$;
+
+-- 서버에 저장된 세이브(slg_records gameState)에 이 캐릭터가 "살아서" 있는가. 세이브가 없거나 읽을 수 없으면 null.
+-- 캐릭터 식별은 클라이언트 getCharacterId 와 같은 순서 (characterId → sourceCharacterId → catalogId → id)
+create or replace function public.slg_saved_has_char(p_uid uuid, p_unit jsonb) returns boolean
+language plpgsql stable set search_path = public as $$
+declare d jsonb; cid text; u jsonb; found boolean := false;
+begin
+  select data into d from slg_records where collection_name = 'gameState' and record_id = p_uid::text;
+  if d is null or jsonb_typeof(d -> 'run') <> 'object' then return null; end if;
+  cid := coalesce(p_unit ->> 'characterId', p_unit ->> 'sourceCharacterId', p_unit ->> 'catalogId', p_unit ->> 'id');
+  for u in select x from jsonb_array_elements(case when jsonb_typeof(d -> 'run' -> 'party') = 'array' then d -> 'run' -> 'party' else '[]'::jsonb end
+                                         || case when jsonb_typeof(d -> 'run' -> 'reserve') = 'array' then d -> 'run' -> 'reserve' else '[]'::jsonb end) x
+  loop
+    if jsonb_typeof(u) = 'object'
+       and coalesce(u ->> 'characterId', u ->> 'sourceCharacterId', u ->> 'catalogId', u ->> 'id') = cid
+       and coalesce(u ->> 'isDead', 'false') <> 'true'
+       and (jsonb_typeof(u -> 'hp') <> 'number' or (u ->> 'hp')::numeric > 0) then
+      found := true; exit;
+    end if;
+  end loop;
+  return found;
+end $$;
+
+-- 몰수 후속 처리:
+--  · pending  : 우편을 받고도 제한시간 안에 확인이 없으면 회수 실패 → 압류 (+ 감사 기록)
+--  · claimed  : "몰수했다"는 주장을 저장된 세이브와 대조 — 세이브에 그 캐릭터가 아직 살아 있으면 거짓 → 압류 (+ 감사 기록)
+create or replace function public.slg_loans_garnish_overdue(p_uid uuid, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare l record; has boolean;
+begin
+  for l in select * from slg_loans where user_id = p_uid and status = 'defaulted' and seize_state = 'pending'
+             and seize_seen_ms is not null and p_now >= seize_seen_ms + slg_cfg('seize_confirm_ms')::bigint loop
+    perform slg_audit_add(p_uid, 'seize_no_confirm', jsonb_build_object('loanId', l.id, 'name', l.collateral ->> 'name', 'seenMs', l.seize_seen_ms), p_now);
+    perform slg_loan_garnish(p_uid, l.id, p_now);
+  end loop;
+  for l in select * from slg_loans where user_id = p_uid and status = 'defaulted' and seize_state = 'claimed'
+             and p_now >= seize_claim_ms + slg_cfg('seize_verify_ms')::bigint loop
+    has := slg_saved_has_char(p_uid, l.collateral);
+    if has is true then
+      perform slg_audit_add(p_uid, 'seize_mismatch', jsonb_build_object('loanId', l.id, 'name', l.collateral ->> 'name',
+        'claimMs', l.seize_claim_ms, 'note', '몰수했다고 알렸지만 저장된 세이브에 캐릭터가 살아 있다'), p_now);
+      perform slg_loan_garnish(p_uid, l.id, p_now);
+    else
+      if has is null then
+        perform slg_audit_add(p_uid, 'seize_unverified', jsonb_build_object('loanId', l.id, 'note', '저장된 세이브가 없어 검증하지 못했다'), p_now);
+      end if;
+      update slg_loans set seize_state = 'done' where id = l.id;
     end if;
   end loop;
 end $$;
@@ -863,6 +972,7 @@ begin
   perform slg_purge_stale();
   perform slg_fed_resolve(p_now);
   perform slg_loans_settle(p_uid, p_now);
+  perform slg_loans_garnish_overdue(p_uid, p_now);
   perform slg_auctions_close(p_now);
   perform slg_settle_player(p_uid, p_now);
 end $$;
@@ -1151,6 +1261,9 @@ begin
   if p_unit is null or jsonb_typeof(p_unit) <> 'object' or jsonb_typeof(p_unit -> 'name') <> 'string' or length(p_unit::text) > 32768 then
     return jsonb_build_object('ok', false, 'error', '담보로 맡길 수 없는 캐릭터입니다.');
   end if;
+  if p.debt > 0 then
+    return jsonb_build_object('ok', false, 'error', '갚지 못한 빚 ' || p.debt || 'G 가 남아 있어 새 대출을 받을 수 없습니다.', 'debt', p.debt);
+  end if;
   if now_ms < p.loan_ban_until_ms then
     return jsonb_build_object('ok', false, 'error', '담보를 몰수당한 직후라 한동안 대출을 받을 수 없습니다.', 'untilMs', p.loan_ban_until_ms);
   end if;
@@ -1191,10 +1304,86 @@ begin
     return jsonb_build_object('ok', false, 'error', '골드가 부족합니다 (필요 ' || owed || 'G)', 'owed', owed);
   end if;
   update slg_loans set status = 'repaid', arrears = 0 where id = l.id;
-  insert into slg_inbox (user_id, kind, payload, at_ms)
-    values (uid, 'unit', jsonb_build_object('unit', l.collateral, 'source', 'loan_repaid', 'loanId', l.id), now_ms);
   select gold into bal from slg_players where user_id = uid;
   return jsonb_build_object('ok', true, 'owed', owed, 'balance', bal);
+end $$;
+
+-- 담보 캐릭터의 최신 모습을 기록한다 (몰수되면 이 모습으로 경매에 올라간다).
+-- p_substitute = true 면 담보 캐릭터가 죽어서 다른 캐릭터로 교체하는 것 (담보가치 · 대출액은 그대로).
+-- false 면 같은 캐릭터여야 한다.
+create or replace function public.slg_loan_collateral(p_id text, p_unit jsonb, p_substitute boolean) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; l slg_loans%rowtype; old_id text; new_id text;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  perform slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  select * into l from slg_loans where id = p_id and user_id = uid and status = 'active';
+  if not found then return jsonb_build_object('ok', false, 'error', '진행 중인 대출이 아닙니다.'); end if;
+  if p_unit is null or jsonb_typeof(p_unit) <> 'object' or jsonb_typeof(p_unit -> 'name') <> 'string' or length(p_unit::text) > 32768 then
+    return jsonb_build_object('ok', false, 'error', '담보로 쓸 수 없는 캐릭터입니다.');
+  end if;
+  old_id := coalesce(l.collateral ->> 'characterId', l.collateral ->> 'sourceCharacterId', l.collateral ->> 'catalogId', l.collateral ->> 'id');
+  new_id := coalesce(p_unit ->> 'characterId', p_unit ->> 'sourceCharacterId', p_unit ->> 'catalogId', p_unit ->> 'id');
+  if not coalesce(p_substitute, false) and old_id is distinct from new_id then
+    return jsonb_build_object('ok', false, 'error', '다른 캐릭터로 바꿀 수 없습니다.');
+  end if;
+  if exists (select 1 from slg_loans o where o.user_id = uid and o.status = 'active' and o.id <> l.id
+             and coalesce(o.collateral ->> 'characterId', o.collateral ->> 'sourceCharacterId', o.collateral ->> 'catalogId', o.collateral ->> 'id') = new_id) then
+    return jsonb_build_object('ok', false, 'error', '이미 다른 대출의 담보입니다.');
+  end if;
+  if coalesce(p_substitute, false) then
+    -- "죽었다"는 주장은 검증하지 못하므로 기록해 둔다 (옛 담보가 저장된 세이브에 살아 있으면 의심 — 관리자 RPC slg_audit_list 로 본다)
+    perform slg_audit_add(uid, 'collateral_substitute', jsonb_build_object('loanId', l.id, 'from', l.collateral ->> 'name', 'to', p_unit ->> 'name',
+      'oldAliveInSave', slg_saved_has_char(uid, l.collateral)), now_ms);
+  end if;
+  update slg_loans set collateral = p_unit where id = l.id;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 관리자 전용: 감사 기록 (최근 순) + 계정별 의심 횟수
+create or replace function public.slg_audit_list(p_limit int default 100) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); rows jsonb; sus jsonb;
+begin
+  if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
+  select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'userId', a.user_id, 'name', p.name, 'kind', a.kind, 'detail', a.detail, 'atMs', a.at_ms) order by a.id desc), '[]'::jsonb)
+    into rows from (select * from slg_audit order by id desc limit least(greatest(coalesce(p_limit, 100), 1), 500)) a left join slg_players p on p.user_id = a.user_id;
+  select coalesce(jsonb_agg(jsonb_build_object('userId', s.user_id, 'name', s.name, 'mismatch', s.m, 'noConfirm', s.n, 'subsAliveInSave', s.x) order by s.m + s.n + s.x desc), '[]'::jsonb)
+    into sus from (
+      select a.user_id, max(p.name) as name,
+             count(*) filter (where a.kind = 'seize_mismatch') as m,
+             count(*) filter (where a.kind = 'seize_no_confirm') as n,
+             count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') as x
+      from slg_audit a left join slg_players p on p.user_id = a.user_id group by a.user_id
+      having count(*) filter (where a.kind in ('seize_mismatch', 'seize_no_confirm')) > 0
+          or count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') > 0) s;
+  return jsonb_build_object('ok', true, 'suspects', sus, 'rows', rows);
+end $$;
+
+-- 몰수 확인: 클라이언트가 담보 캐릭터를 실제로 명단에서 뺐으면 p_removed = true (담보로 충분 → 끝),
+-- 이미 죽었거나 없어서 뺄 게 없었으면 false (회수 실패 → 지갑 압류 + 빚).
+-- 주의: 서버는 로스터를 볼 수 없으므로 거짓 true 는 막지 못한다. 막는 것은 "확인 자체를 피하는" 쪽뿐이다.
+create or replace function public.slg_loan_seized(p_id text, p_removed boolean) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; l slg_loans%rowtype;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  perform slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  select * into l from slg_loans where id = p_id and user_id = uid and status = 'defaulted';
+  if not found then return jsonb_build_object('ok', false, 'error', '몰수된 대출이 아닙니다.'); end if;
+  if l.seize_state = 'pending' then
+    if coalesce(p_removed, false) then
+      -- 바로 믿지 않는다: 저장된 세이브가 따라올 시간을 주고(seize_verify_ms) 그때 세이브와 대조한다
+      update slg_loans set seize_state = 'claimed', seize_claim_ms = now_ms where id = l.id;
+      perform slg_audit_add(uid, 'seize_claim', jsonb_build_object('loanId', l.id, 'name', l.collateral ->> 'name',
+        'savedHasCharNow', slg_saved_has_char(uid, l.collateral)), now_ms);
+    else perform slg_loan_garnish(uid, l.id, now_ms); end if;
+  end if;
+  return jsonb_build_object('ok', true);
 end $$;
 
 -- ---------------------------------------------------------------- 경매 입찰
@@ -1248,6 +1437,10 @@ begin
   perform slg_tick(uid, now_ms);
   if coalesce(p_ack_events, 0) > 0 then delete from slg_events where user_id = uid and id <= p_ack_events; end if;
   if p_ack_inbox is not null and array_length(p_ack_inbox, 1) > 0 then delete from slg_inbox where user_id = uid and id = any (p_ack_inbox); end if;
+  -- 몰수 우편이 처음 전달된 시각을 적는다 (이 시각부터 확인 제한시간이 흐른다 — 오프라인 중에는 흐르지 않는다)
+  update slg_loans set seize_seen_ms = now_ms
+    where user_id = uid and status = 'defaulted' and seize_state = 'pending' and seize_seen_ms is null
+      and id in (select i.payload ->> 'loanId' from slg_inbox i where i.user_id = uid and i.kind = 'seize');
   select * into p from slg_players where user_id = uid;
   recent := now_ms - (slg_cfg('auction_recent_hours') * 3600000)::bigint;
 
@@ -1276,7 +1469,7 @@ begin
 
   return jsonb_build_object(
     'ok', true, 'now', now_ms,
-    'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid)),
+    'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid), 'debt', p.debt),
     'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights,
     'loans', loans, 'auctions', auctions, 'inbox', inbox, 'events', events,
     'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
@@ -1287,7 +1480,7 @@ end $$;
 -- ============================================================================
 do $$
 declare f record; rpc text[] := array['slg_bootstrap','slg_wallet_apply','slg_admin_adjust','slg_is_admin','slg_loop_return','slg_region_secure',
-  'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_auction_bid','slg_sync'];
+  'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_loan_collateral','slg_loan_seized','slg_audit_list','slg_auction_bid','slg_sync'];
 begin
   for f in select p.oid::regprocedure as sig, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'slg\_%'

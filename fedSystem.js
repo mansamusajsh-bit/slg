@@ -291,8 +291,10 @@
     if (!state || !state.run) return [];
     const adj = state.run.adjutant;
     const alive = allOwnedUnits().filter((u) => u && !u.isDead && !u.captive && (typeof u.hp !== 'number' || u.hp > 0));
+    const pledged = new Set([...loansOf().map((l) => l.collateral), ...pledgeJournal().map((j) => j.unit)].filter(Boolean).map(charIdOf));
     return alive
       .filter((u) => !(adj && charIdOf(u) === String(adj.characterId)))
+      .filter((u) => !pledged.has(charIdOf(u)))   // 이미 다른 대출의 담보인 캐릭터는 중복 담보 불가
       .map((u) => ({ unit: u, value: unitValue(u), max: FE.maxLoan(unitValue(u)), where: (state.playerUnits || []).includes(u) ? 'party' : 'reserve' }))
       .filter((c) => c.max >= FE.CONFIG.minLoan)
       .sort((a, b) => b.value - a.value);
@@ -308,6 +310,41 @@
     }
     if (typeof selectedUnitId !== 'undefined' && selectedUnitId === unit.id) selectedUnitId = null;
   }
+
+  /** 몰수 확정: 담보 캐릭터를 내 명단에서 뺀다 (이미 없으면 그대로 성공). 전투 중에는 미룬다(false). */
+  function seizeCharacter(snapshot) {
+    if (!state || !state.run) return false;
+    if (battleLocked()) return false;
+    const cid = charIdOf(snapshot);
+    const hit = allOwnedUnits().filter((u) => u && charIdOf(u) === cid);
+    const removed = hit.some(isAliveUnit);   // 산 캐릭터를 실제로 몰수했는가 (죽었거나 없으면 회수 실패)
+    hit.forEach(removeFromRoster);
+    if (hit.length && typeof renderAll === 'function') renderAll();
+    return removed;
+  }
+  // 서버 모드: 몰수 결과를 서버에 확인시킨다 (실패하면 run 에 남겨 두고 다시 보낸다 — 서버는 확인이 없으면 담보 회수 실패로 본다)
+  function flushSeizeConfirms() {
+    const run = runOf();
+    if (!run || !serverMode() || !Array.isArray(run.seizeConfirms) || !run.seizeConfirms.length || flushSeizeConfirms.busy) return;
+    flushSeizeConfirms.busy = true;
+    const next = run.seizeConfirms[0];
+    global.ServerEconomy.call('slg_loan_seized', { p_id: next.loanId, p_removed: !!next.removed }).then((res) => {
+      if (res && res.network) return;
+      run.seizeConfirms = (run.seizeConfirms || []).filter((x) => x.loanId !== next.loanId);
+      if (typeof saveGameState === 'function') saveGameState(true);
+      global.ServerEconomy.sync('now');
+    }).catch(() => {}).finally(() => { flushSeizeConfirms.busy = false; });
+  }
+  if (global.ServerEconomy) global.ServerEconomy.onSeize = (p) => {
+    if (battleLocked()) return false;
+    const removed = seizeCharacter(p.unit);
+    const run = runOf();
+    if (!Array.isArray(run.seizeConfirms)) run.seizeConfirms = [];
+    if (p.loanId && !run.seizeConfirms.some((x) => x.loanId === p.loanId)) run.seizeConfirms.push({ loanId: p.loanId, removed });
+    if (typeof saveGameState === 'function') saveGameState(true);   // 서버가 저장된 세이브와 대조하므로, 몰수한 로스터를 바로 올려 둔다
+    flushSeizeConfirms();
+    return true;
+  };
 
   function returnToReserve(unit) {
     if (!Array.isArray(state.reserveUnits)) state.reserveUnits = [];
@@ -367,19 +404,81 @@
         if (e.type === 'interest') log(`🏦 [대출 이자] ${loanLabel(loan)} 담보 대출 이자 -${e.amount}G (${res.loan.periodsDone}/${total}회)`);
         else if (e.type === 'missed') log(`⚠️ [이자 미납] ${loanLabel(loan)} 담보 대출 이자 ${e.amount}G를 내지 못했습니다! (연속 ${res.loan.missed}회 / ${FE.CONFIG.missLimit}회에 몰수)`, 'warning');
         else if (e.type === 'repaid') {
-          log(`✅ [대출 상환] ${loanLabel(loan)} 담보 대출 만기 상환 -${e.amount}G — 담보 캐릭터가 돌아왔습니다.`, 'success');
+          log(`✅ [대출 상환] ${loanLabel(loan)} 담보 대출 만기 상환 -${e.amount}G — 담보에서 풀렸습니다.`, 'success');
         } else if (e.type === 'default') {
+          const last = liveCollateral(res.loan);
+          if (last) res.loan.collateral = copy(last);   // 마지막 모습(현재 레벨·장비)으로 경매에 올린다
+          seizeCharacter(res.loan.collateral);
           log(`⛓️ [담보 몰수] ${loanLabel(loan)}을(를) 연준에 빼앗겼습니다. (${e.reason === 'missed' ? '이자 연체' : '만기 미상환'}) — 캐릭터 경매시장에 올라갑니다.`, 'danger');
           toast(`⛓️ 담보 몰수: ${loanLabel(loan)}`, 'warning');
         }
       });
       if (res.loan.status === 'repaid') {
-        returnToReserve(res.loan.collateral);
         list.splice(list.indexOf(res.loan), 1);
       }
     });
     if (changed && typeof renderAll === 'function' && !battleLocked()) renderAll();
     return changed;
+  }
+
+  // ---- 담보 유지 ----
+  // 1) 담보 캐릭터가 자라면 기록도 최신으로 (몰수되면 "마지막 모습"으로 경매에 올라간다)
+  // 2) 담보 캐릭터가 죽거나 사라지면(포로 포함) 가치가 가장 비슷한 다른 캐릭터를 강제로 담보 잡는다 — 죽어서 빚을 면하는 악용 방지
+  const collateralSent = {};   // 서버 모드: loanId → 마지막으로 보낸 기록 (같은 내용을 되풀이해 보내지 않는다)
+  const collateralBusy = {};
+  const isAliveUnit = (u) => !!u && !u.isDead && !u.captive && (typeof u.hp !== 'number' || u.hp > 0);
+  const liveCollateral = (loan) => {
+    const cid = charIdOf(loan.collateral);
+    return allOwnedUnits().find((u) => u && charIdOf(u) === cid && isAliveUnit(u)) || null;
+  };
+
+  function pickSubstitute(loan) {
+    const adj = state.run.adjutant;
+    const pledged = new Set(loansOf().filter((l) => l !== loan && l.status === 'active').map((l) => charIdOf(l.collateral)));
+    pledgeJournal().forEach((j) => pledged.add(charIdOf(j.unit)));
+    const target = Number(loan.collateralValue) || 0;
+    return allOwnedUnits()
+      .filter((u) => isAliveUnit(u) && !(adj && charIdOf(u) === String(adj.characterId)) && !pledged.has(charIdOf(u)))
+      .map((u) => ({ u, d: Math.abs(unitValue(u) - target) }))
+      .sort((a, b) => a.d - b.d)[0]?.u || null;
+  }
+
+  function maintainCollateral() {
+    if (!state || !state.run || battleLocked() || runOf().returnPending) return;
+    loansOf().filter((l) => l.status === 'active' && l.collateral).forEach((loan) => {
+      const live = liveCollateral(loan);
+      let unit = live, substitute = false;
+      if (!live) {
+        unit = pickSubstitute(loan);
+        if (!unit) return;   // 대신 잡을 캐릭터가 없다 (모두 죽으면 회귀로 대출이 소멸한다)
+        substitute = true;
+      }
+      const slim = slimUnit(unit);
+      const sig = JSON.stringify(slim);
+      if (sig === JSON.stringify(loan.collateral)) return;
+      if (!substitute && collateralSent[loan.id] === sig) return;
+      if (serverMode()) {
+        if (collateralBusy[loan.id] || sig.length > 30000) return;
+        collateralBusy[loan.id] = true;
+        global.ServerEconomy.call('slg_loan_collateral', { p_id: loan.id, p_unit: slim, p_substitute: substitute }).then((res) => {
+          if (res && res.ok) {
+            collateralSent[loan.id] = sig;
+            if (substitute) {
+              log(`⛓️ [담보 교체] ${loanLabel(loan)}이(가) 담보를 잃어, 연준이 ${unit.name}을(를) 대신 담보로 잡았습니다.`, 'danger');
+              toast(`⛓️ 담보 교체: ${unit.name}`, 'warning');
+            }
+          }
+        }).catch(() => {}).finally(() => { collateralBusy[loan.id] = false; });
+      } else {
+        const old = loanLabel(loan);
+        loan.collateral = copy(unit);
+        if (substitute) {
+          log(`⛓️ [담보 교체] ${old}이(가) 담보를 잃어, 연준이 ${unit.name}을(를) 대신 담보로 잡았습니다.`, 'danger');
+          toast(`⛓️ 담보 교체: ${unit.name}`, 'warning');
+        }
+        saveGameState(true);
+      }
+    });
   }
 
   // 몰수된 담보를 경매에 올린다. 경매 id가 대출 id에서 나오므로 중복 등록되지 않는다 (실패하면 다음 갱신에 다시 시도).
@@ -427,10 +526,10 @@
         const run = runOf();
         if (run) run.pledgeJournal = pledgeJournal().filter((x) => x.id !== j.id);
         if (res && res.ok) {
-          log(`🏦 [담보 대출] ${j.unit.name}을(를) 맡기고 ${j.principal}G 대출`);
+          log(`🏦 [담보 대출] ${j.unit.name}을(를) 담보로 ${j.principal}G 대출 (캐릭터는 그대로 사용 가능, 못 갚으면 몰수)`);
         } else {
-          returnToReserve(j.fullUnit || j.unit);
-          log(`⚠️ [담보 대출] ${j.unit.name} 대출이 거절되어 캐릭터가 돌아왔습니다: ${(res && res.error) || '알 수 없는 오류'}`, 'warning');
+          if (j.fullUnit) returnToReserve(j.fullUnit);   // 예전 방식(맡기자마자 명단에서 뺌)으로 저널에 남은 요청만 되돌린다
+          log(`⚠️ [담보 대출] ${j.unit.name} 대출이 거절되었습니다: ${(res && res.error) || '알 수 없는 오류'}`, 'warning');
           toast(`⚠️ 대출 거절: ${(res && res.error) || ''}`, 'warning');
         }
         if (typeof saveGameState === 'function') saveGameState(true);
@@ -458,12 +557,10 @@
     if (allOwnedUnits().filter((u) => u && !u.isDead && u !== cand.unit).length < 1) return fail('마지막 남은 생존 캐릭터는 담보로 맡길 수 없습니다.');
     const slim = slimUnit(cand.unit);
     if (JSON.stringify(slim).length > 30000) return fail('캐릭터 데이터가 너무 커서 담보로 맡길 수 없습니다.');
-    // 1) 먼저 명단에서 빼고 저널에 적는다 (서버가 받았는데 창이 닫혀도 캐릭터가 두 곳에 있게 되지 않는다)
+    // 캐릭터는 명단에 그대로 둔다 (몰수는 서버가 연체를 확정했을 때만). 요청은 저널에 적어 두고 같은 id 로 재시도한다.
     const unit = cand.unit;
-    removeFromRoster(unit);
-    pledgeJournal().push({ id: newLoanId(), unit: slim, fullUnit: copy(unit), principal: amount, termHours, at: Date.now() });
+    pledgeJournal().push({ id: newLoanId(), unit: slim, principal: amount, termHours, at: Date.now() });
     if (typeof saveGameState === 'function') saveGameState(true);
-    if (typeof renderAll === 'function') renderAll();
     // 2) 서버에 요청 → 결과 처리는 resolvePledges 가 한다
     await resolvePledges();
     if (pledgeJournal().length) {
@@ -493,8 +590,7 @@
       if (amount < FE.CONFIG.minLoan || amount > cand.max) return fail(`대출액은 ${FE.CONFIG.minLoan}G ~ ${cand.max}G 사이여야 합니다.`);
       if (allOwnedUnits().filter((u) => u && !u.isDead && u !== cand.unit).length < 1) return fail('마지막 남은 생존 캐릭터는 담보로 맡길 수 없습니다.');
       const rateBp = FE.lendingRateBp(fed);
-      const unit = cand.unit;
-      removeFromRoster(unit);
+      const unit = cand.unit;   // 명단에 그대로 둔다 — 갚지 못했을 때만 몰수
       const loan = FE.createLoan({
         id: `loan_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
         principal: amount, termHours, rateBp,
@@ -503,7 +599,7 @@
       loansOf().push(loan);
       state.gold += amount;
       const q = FE.quoteLoan(amount, loan.termHours, rateBp);
-      log(`🏦 [담보 대출] ${unit.name}을(를) 맡기고 ${amount}G 대출 — 이자율 ${(rateBp / 100).toFixed(2)}%/8h (회당 ${q.perPeriod}G) · ${loan.termHours}시간 만기`);
+      log(`🏦 [담보 대출] ${unit.name}을(를) 담보로 ${amount}G 대출 (캐릭터는 그대로 사용 가능, 못 갚으면 몰수) — 이자율 ${(rateBp / 100).toFixed(2)}%/8h (회당 ${q.perPeriod}G) · ${loan.termHours}시간 만기`);
       toast(`🏦 대출 +${amount}G`, 'success');
       saveGameState(true);
       if (typeof renderAll === 'function') renderAll();
@@ -517,7 +613,7 @@
     if (battleLocked()) { toast('⚠️ 전투 중에는 상환할 수 없습니다.', 'warning'); return false; }
     const res = await global.ServerEconomy.call('slg_loan_repay', { p_id: loanId });
     if (!res || res.ok === false) { toast(`⚠️ ${(res && res.error) || '상환하지 못했습니다.'}`, 'warning'); await global.ServerEconomy.sync('now'); return false; }
-    log(`✅ [대출 상환] 담보 대출을 조기 상환했습니다 (-${res.owed}G) — 담보 캐릭터가 곧 예비 명단으로 돌아옵니다.`, 'success');
+    log(`✅ [대출 상환] 담보 대출을 조기 상환했습니다 (-${res.owed}G) — 담보에서 풀렸습니다.`, 'success');
     toast('✅ 대출 상환 완료', 'success');
     await global.ServerEconomy.sync('now');   // 우편함의 캐릭터가 이때 들어온다
     if (typeof renderAll === 'function') renderAll();
@@ -537,8 +633,7 @@
     if (gold() < owed) { toast(`💸 골드가 부족합니다 (필요 ${owed}G)`, 'warning'); return false; }
     financial(() => { state.gold -= owed; });
     list.splice(list.indexOf(live), 1);
-    returnToReserve(live.collateral);
-    log(`✅ [대출 상환] ${loanLabel(live)} 담보 대출을 조기 상환했습니다 (-${owed}G) — 담보 캐릭터가 예비 명단으로 돌아왔습니다.`, 'success');
+    log(`✅ [대출 상환] ${loanLabel(live)} 담보 대출을 조기 상환했습니다 (-${owed}G) — 담보에서 풀렸습니다.`, 'success');
     toast('✅ 대출 상환 완료', 'success');
     saveGameState(true);
     if (typeof renderAll === 'function') renderAll();
@@ -818,7 +913,8 @@
     const full = loans.length >= FE.CONFIG.maxActiveLoans;
     const locked = battleLocked();
     const banUntil = serverMode() ? Number(global.ServerEconomy.snapshot.loanBanUntil) || 0 : 0;
-    const banned = banUntil > now;
+    const debt = serverMode() ? Number(global.ServerEconomy.snapshot.player.debt) || 0 : 0;
+    const banned = banUntil > now || debt > 0;
     let form;
     if (!cands.length) form = '<p class="fed-empty">담보로 맡길 수 있는 캐릭터가 없습니다. (부관·포로 제외, 담보가치 기준 최소 대출액 이상)</p>';
     else {
@@ -836,12 +932,13 @@
         <div class="fed-field"><label for="fed-loan-term">상환 기간 <b id="fed-loan-term-out">${ui.loanTerm}시간 (${(ui.loanTerm / 24).toFixed(ui.loanTerm % 24 ? 1 : 0)}일)</b></label>
           <input type="range" id="fed-loan-term" min="${FE.CONFIG.minTermHours}" max="${FE.CONFIG.maxTermHours}" step="${FE.CONFIG.termStepHours}" value="${ui.loanTerm}"></div>
         <div class="fed-quote" id="fed-loan-quote">${loanQuoteHtml(q, ui.loanAmount, rate)}</div>
-        <button type="button" class="fed-btn is-primary" data-fed-act="borrow" ${full || locked || banned ? 'disabled' : ''}>${locked ? '전투 중에는 불가' : banned ? '담보 몰수 직후라 대출 불가' : full ? `동시 ${FE.CONFIG.maxActiveLoans}건까지` : '🏦 담보 대출 받기'}</button>
-        ${banned ? `<div class="fed-note">담보를 몰수당해 ${cd(banUntil)} 동안 새 대출을 받을 수 없습니다.</div>` : ''}`;
+        <button type="button" class="fed-btn is-primary" data-fed-act="borrow" ${full || locked || banned ? 'disabled' : ''}>${locked ? '전투 중에는 불가' : banned ? (debt > 0 ? '빚이 남아 대출 불가' : '담보 몰수 직후라 대출 불가') : full ? `동시 ${FE.CONFIG.maxActiveLoans}건까지` : '🏦 담보 대출 받기'}</button>
+        ${debt > 0 ? `<div class="fed-note">담보를 회수하지 못해 <b>빚 ${debt}G</b>가 남아 있습니다. 이후 수입(세금·전리품·보상 등)의 일부로 갚아 나가며, 다 갚기 전에는 새 대출을 받을 수 없습니다.</div>`
+          : banUntil > now ? `<div class="fed-note">담보를 몰수당해 ${cd(banUntil)} 동안 새 대출을 받을 수 없습니다.</div>` : ''}`;
     }
 
     return `
-      <p class="fed-help">캐릭터를 맡기고 골드를 빌립니다. 이자는 대출 시점부터 <b>8시간마다</b> 자동으로 나가고, 대출금리는 그때의 정책금리 + ${fmtPct(FE.CONFIG.spreadBp)}로 고정됩니다.
+      <p class="fed-help">캐릭터를 담보로 골드를 빌립니다(캐릭터는 계속 쓸 수 있습니다). 이자는 대출 시점부터 <b>8시간마다</b> 자동으로 나가고, 대출금리는 그때의 정책금리 + ${fmtPct(FE.CONFIG.spreadBp)}로 고정됩니다.
         만기(최대 ${FE.CONFIG.maxTermHours / 24}일)에 원금을 갚지 못하거나 이자를 ${FE.CONFIG.missLimit}회 연속 못 내면 <b>담보 캐릭터를 빼앗기고 경매에 넘어갑니다.</b></p>
       ${loans.length ? `<h3 class="fed-h">내 대출 <small>${loans.length}/${FE.CONFIG.maxActiveLoans}건</small></h3>${cards}` : ''}
       <h3 class="fed-h">새 대출 <small>현재 대출금리 ${fmtPct(rate)} / 8시간</small></h3>
@@ -1007,6 +1104,8 @@
       // 이자 정산은 8시간 경계마다 일어나므로 몇 초에 한 번씩만 본다
       if (Date.now() - lastSettleCheck > 4000) {
         lastSettleCheck = Date.now();
+        maintainCollateral();
+        flushSeizeConfirms();
         if (settleLoans()) {
           saveGameState(true);
           flushDefaults().then(() => refresh(true)).then(() => { if (ui.open) renderModal(); updateBadges(); });

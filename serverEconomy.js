@@ -227,8 +227,9 @@
       case 'share_payout': return [`💰 [지분 매각] ${(global.REGIONS && global.REGIONS[p.regionId] ? global.REGIONS[p.regionId].title.ko : p.regionId)} 지분 일부가 다른 플레이어에게 매입됨 — 대금 +${p.gold}G`, 'gold'];
       case 'loan_interest': return [`🏦 [대출 이자] ${p.name} 담보 대출 이자 -${p.amount}G (${p.done}/${p.total}회)`, 'gold'];
       case 'loan_missed': return [`⚠️ [이자 미납] ${p.name} 담보 대출 이자 ${p.amount}G를 내지 못했습니다! (연속 ${p.missed}회 / ${p.limit}회에 몰수)`, 'warning'];
-      case 'loan_repaid': return [`✅ [대출 상환] ${p.name} 담보 대출 만기 상환 -${p.amount}G — 담보 캐릭터가 돌아왔습니다.`, 'success'];
+      case 'loan_repaid': return [`✅ [대출 상환] ${p.name} 담보 대출 만기 상환 -${p.amount}G — 담보에서 풀렸습니다.`, 'success'];
       case 'loan_default': return [`⛓️ [담보 몰수] ${p.name}을(를) 연준에 빼앗겼습니다. (${p.reason === 'missed' ? '이자 연체' : '만기 미상환'}) — 캐릭터 경매시장에 올라갑니다.`, 'danger', `⛓️ 담보 몰수: ${p.name}`, 'warning'];
+      case 'loan_garnish': return [`⛓️ [채권 회수] ${p.name} 담보를 회수하지 못해 지갑에서 ${p.taken}G를 압류했습니다.${p.debt > 0 ? ` 모자란 ${p.debt}G는 빚으로 남아 이후 수입에서 갚아 나갑니다.` : ''}`, 'danger', `⛓️ 채권 회수: -${p.taken}G${p.debt > 0 ? ` · 빚 ${p.debt}G` : ''}`, 'warning'];
       case 'auction_outbid': return [`🔨 [경매 환급] ${p.name} 경매에서 밀려난 입찰금 +${p.refund}G 반환`, 'gold'];
       default: return null;
     }
@@ -256,6 +257,7 @@
       if (r.inboxDone.includes(it.id)) return;          // 이미 받았다 (ack 가 아직 서버에 닿지 않았을 뿐)
       let done = false;
       if (it.kind === 'unit' && SE.onUnit) { try { done = !!SE.onUnit(it.payload || {}); } catch (e) { console.warn('[ServerEconomy] 캐릭터 전달 실패', e); } }
+      if (it.kind === 'seize' && SE.onSeize) { try { done = !!SE.onSeize(it.payload || {}); } catch (e) { console.warn('[ServerEconomy] 담보 몰수 처리 실패', e); } }
       if (done) { r.inboxDone.push(it.id); delivered = true; }
       else ackInbox.pop();                              // 못 받았으면 ack 하지 않고 다음에 다시
     });
@@ -398,6 +400,7 @@
     start, sync, call, rpc, onReturnByDeath, serverNow, reconcile,
     onSnapshot(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     set onUnit(fn) { SE.onUnit = fn; },
+    set onSeize(fn) { SE.onSeize = fn; },
     _SE: SE
   };
   global.Wallet = Wallet;

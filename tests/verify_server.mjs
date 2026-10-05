@@ -381,21 +381,25 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   const rep = await s.rpc('slg_loan_repay', ['loan_aaa6'], 'a');
   ok(rep.ok && rep.owed === 100, '조기 상환 = 원금(밀린 이자 없음)');
   sn = await sync('a');
-  const back = sn.inbox.find((i) => i.payload.loanId === 'loan_aaa6');
-  ok(back && back.kind === 'unit' && back.payload.unit.name === '용병', '상환하면 담보 캐릭터가 우편함으로 돌아온다');
+  ok(!sn.inbox.some((i) => i.payload.loanId === 'loan_aaa6'), '상환해도 우편함에 캐릭터가 오지 않는다 (대출 중에도 캐릭터는 내 곁에 있다)');
   ok((await s.rpc('slg_loan_repay', ['loan_aaa6'], 'a')).ok === false, '이미 갚은 대출은 다시 상환할 수 없다');
   ok((await s.rpc('slg_loan_repay', ['loan_aaa3'], 'b')).ok === false, '남의 대출은 상환할 수 없다');
-  await s.rpc('slg_sync', [null, sn.events.at(-1).id, [back.id]], 'a');
+  await s.rpc('slg_sync', [null, sn.events.at(-1).id, []], 'a');
   const cleared = await sync('a');
-  ok(!cleared.inbox.some((i) => i.id === back.id) && !cleared.events.some((e) => e.id === sn.events[0].id), '우편함 · 소식은 ack 하면 비워진다');
+  ok(!cleared.events.some((e) => e.id === sn.events[0].id), '소식은 ack 하면 비워진다');
   // 만기 자동 상환
   await setGold('a', 5000);
   await s.at(LT + 24 * H);
   sn = await sync('a');
   ok(!sn.loans.some((l) => l.id === 'loan_aaa1') && sn.events.some((e) => e.kind === 'loan_repaid' && e.payload.loanId === 'loan_aaa1'), '만기에 골드가 있으면 원금이 자동 상환된다');
-  ok(sn.inbox.some((i) => i.payload.loanId === 'loan_aaa1'), '담보가 돌아온다');
+  ok(!sn.inbox.some((i) => i.payload.loanId === 'loan_aaa1'), '만기 상환해도 캐릭터를 우편으로 돌려주지 않는다 (몰수된 적이 없다)');
   // 이자 연체 → 몰수 (loan_aaa3: 168시간)
   await setGold('a', 0);
+  ok((await s.rpc('slg_loan_collateral', ['loan_aaa3', unit({ level: 9 }), false], 'a')).ok === true, '담보 캐릭터의 최신 모습을 기록할 수 있다');
+  ok((await s.rpc('slg_loan_collateral', ['loan_aaa3', unit({ id: 'u_y', level: 9 }), false], 'a')).ok === false, '다른 캐릭터로는 (교체 사유 없이) 바꿀 수 없다');
+  ok((await s.rpc('slg_loan_collateral', ['loan_aaa3', unit({ level: 9 }), false], 'b')).ok === false, '남의 대출 담보는 건드릴 수 없다');
+  ok((await s.rpc('slg_loan_collateral', ['loan_aaa3', unit({ id: 'u_y', level: 9 }), true], 'a')).ok === true, '담보 캐릭터가 죽으면 다른 캐릭터로 교체할 수 있다');
+  ok((await s.rpc('slg_loan_collateral', ['loan_aaa3', unit({ level: 9 }), true], 'a')).ok === true, '(테스트용) 원래 캐릭터로 되돌림');
   await s.at(LT + 24 * H + 8 * H);
   sn = await sync('a');
   const l3 = sn.loans.find((l) => l.id === 'loan_aaa3');
@@ -403,11 +407,32 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   await s.at(LT + 24 * H + 24 * H);
   sn = await sync('a');
   ok(!sn.loans.some((l) => l.id === 'loan_aaa3') && sn.events.some((e) => e.kind === 'loan_default' && e.payload.reason === 'missed'), '이자 3회 연속 미납 → 만기 전이라도 담보 몰수');
+  ok(sn.inbox.some((i) => i.kind === 'seize' && i.payload.loanId === 'loan_aaa3'), '몰수가 확정되면 클라이언트가 명단에서 뺄 seize 우편이 온다');
   const auc = sn.auctions.find((a) => a.id === 'auc_loan_aaa3');
+  ok(auc && auc.unit.level === 9, '경매에는 대출 당시가 아니라 마지막으로 기록된 모습이 올라간다');
   ok(auc && auc.status === 'open' && auc.unit.name === '용병' && auc.startPrice === Math.round(auc.value * 0.5), '몰수된 담보가 경매에 올라간다 (시작가 = 감정가 50%)');
   ok(sn.loanBanUntil > LT, '몰수당하면 한동안 대출 금지');
   r = await loanTake('a', 'loan_aaa9', unit({ level: 5 }), 100, 24);
   ok(r.ok === false && /몰수/.test(r.error), '대출 금지 기간에는 새 대출 불가');
+  // 담보 회수 실패 → 지갑 압류 + 빚 (a 는 일부러 돈을 다 쓴 상태: 골드 0)
+  const claim3 = Number((await q1("select claim from slg_loans where id = 'loan_aaa3'")).claim);
+  ok(claim3 >= 200 && (await q1("select seize_state s from slg_loans where id = 'loan_aaa3'")).s === 'pending', '몰수 직후 담보 회수는 확인 대기(pending)이고 채권액이 적힌다');
+  ok((await s.rpc('slg_loan_seized', ['loan_aaa3', false], 'b')).ok === false, '남의 대출은 몰수 확인할 수 없다');
+  ok((await s.rpc('slg_loan_seized', ['loan_aaa3', false], 'a')).ok === true, '담보 캐릭터가 이미 없었다고 알리면 회수 실패 처리');
+  let pa = await q1('select gold, debt from slg_players where user_id = $1', [await s.user('a')]);
+  ok(Number(pa.gold) === 0 && Number(pa.debt) === claim3, '지갑이 비어 있으면 채권액 전부가 빚으로 남는다');
+  sn = await sync('a');
+  ok(sn.events.some((e) => e.kind === 'loan_garnish' && e.payload.loanId === 'loan_aaa3' && e.payload.debt === claim3) && sn.player.debt === claim3, '압류 소식과 빚이 동기화에 실린다');
+  await s.q('update slg_players set loan_ban_until_ms = 0');
+  r = await loanTake('a', 'loan_aaa8', unit({ level: 5 }), 100, 24);
+  ok(r.ok === false && /빚/.test(r.error), '빚이 있으면 새 대출을 받을 수 없다');
+  const w1 = await wallet('a', [tx('earn_loot', 100, null)]);
+  pa = await q1('select gold, debt from slg_players where user_id = $1', [await s.user('a')]);
+  ok(Number(pa.gold) === 50 && Number(pa.debt) === claim3 - 50, '수입의 50% 는 빚 상환에 먼저 쓰인다');
+  await s.q('update slg_players set debt = 0 where user_id = $1', [await s.user('a')]);
+  r = await loanTake('a', 'loan_aaa8', unit({ level: 5 }), 100, 24);
+  ok(r.ok === true, '빚을 다 갚으면 다시 대출 가능');
+  await s.q("update slg_loans set status = 'void' where id = 'loan_aaa8'");
   // 만기에 못 갚으면 몰수
   await s.q('update slg_players set loan_ban_until_ms = 0'); await setGold('b', 1000);
   await s.at(LT + 200 * H);
@@ -417,6 +442,57 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   await s.at(LT + 200 * H + 8 * H);
   sn = await sync('b');
   ok(sn.events.some((e) => e.kind === 'loan_default' && e.payload.reason === 'maturity') && sn.auctions.some((a) => a.id === 'auc_loan_bbb1'), '만기에 원금을 못 갚으면 몰수 → 경매');
+  // 확인 없이 제한시간이 지나면 회수 실패 (몰수 우편을 받고도 확인을 피하는 경우) — 지갑에서 압류
+  await setGold('b', 500);
+  await s.at(LT + 200 * H + 8 * H + 5 * 60000);
+  sn = await sync('b');
+  ok(!sn.events.some((e) => e.kind === 'loan_garnish'), '제한시간 안에는 아직 압류하지 않는다');
+  await s.at(LT + 200 * H + 8 * H + 5 * 60000 + 11 * 60000);
+  sn = await sync('b');
+  ok(sn.events.some((e) => e.kind === 'loan_garnish' && e.payload.loanId === 'loan_bbb1' && e.payload.debt === 0), '확인이 없으면 담보와 별개로 채권액을 지갑에서 압류한다');
+  ok((await gold('b')) === 500 - Number((await q1("select claim from slg_loans where id = 'loan_bbb1'")).claim), '압류액만큼 지갑이 줄어든다');
+  await setGold('b', 1000);
+
+  // "몰수했다"는 주장 검증 — 저장된 세이브와 대조 (거짓 true 를 걸러낸다)
+  const NOW = LT + 200 * H + 8 * H + 16 * 60000 + 60000;
+  const uidA = await s.user('a');
+  const putSave = (party) => s.q(`insert into slg_records (collection_name, record_id, data) values ('gameState', $1, $2::jsonb)
+    on conflict (collection_name, record_id) do update set data = excluded.data`, [uidA, JSON.stringify({ run: { party, reserve: [] } })]);
+  const fakeDefault = async (id, u, at = NOW) => s.q(`insert into slg_loans (id, user_id, "loop", principal, rate_bp, started_ms, term_hours, due_ms, status, collateral, collateral_value, seize_state, claim, defaulted_ms, seize_seen_ms)
+    values ($1, $2, 0, 100, 200, 0, 8, 0, 'defaulted', $3::jsonb, 200, 'pending', 120, $4, $4)`, [id, uidA, JSON.stringify(u), at]);
+  await s.at(NOW);
+  await setGold('a', 1000);
+  await q1('update slg_players set debt = 0 where user_id = $1', [uidA]);
+  // 거짓 주장: 세이브에 캐릭터가 그대로 있다
+  await fakeDefault('loan_liar1', unit({ id: 'u_z', name: '거짓말쟁이' }));
+  await putSave([unit({ id: 'u_z', name: '거짓말쟁이', hp: 50 })]);
+  ok((await s.rpc('slg_loan_seized', ['loan_liar1', true], 'a')).ok, '몰수했다고 알린다 (거짓)');
+  eq((await q1("select seize_state s from slg_loans where id = 'loan_liar1'")).s, 'claimed', '주장은 바로 믿지 않고 검증 대기(claimed)가 된다');
+  await s.at(NOW + 11 * 60000);
+  await sync('a');
+  eq((await q1("select seize_state s from slg_loans where id = 'loan_liar1'")).s, 'lost', '세이브에 캐릭터가 살아 있으면 거짓 주장 → 회수 실패');
+  ok((await gold('a')) === 1000 - 120, '거짓 주장이면 채권액이 압류된다');
+  ok((await q1("select count(*)::int c from slg_audit where user_id = $1 and kind = 'seize_mismatch'", [uidA])).c === 1, '감사 기록(seize_mismatch)이 남는다');
+  // 정직한 주장: 세이브에서 캐릭터가 사라졌다
+  await s.at(NOW + 12 * 60000);
+  await fakeDefault('loan_honest1', unit({ id: 'u_w', name: '정직한자' }), NOW + 12 * 60000);
+  await putSave([unit({ id: 'u_other', name: '다른 캐릭터' })]);
+  await s.rpc('slg_loan_seized', ['loan_honest1', true], 'a');
+  await s.at(NOW + 24 * 60000);
+  await sync('a');
+  eq((await q1("select seize_state s from slg_loans where id = 'loan_honest1'")).s, 'done', '세이브에서도 사라졌으면 검증 통과(done)');
+  ok((await gold('a')) === 1000 - 120, '정직한 경우는 추가 압류가 없다');
+  // 죽은 캐릭터는 "있다"고 치지 않는다
+  await fakeDefault('loan_dead1', unit({ id: 'u_d', name: '고인' }), NOW + 24 * 60000);
+  await putSave([unit({ id: 'u_d', name: '고인', isDead: true, hp: 0 })]);
+  await s.rpc('slg_loan_seized', ['loan_dead1', true], 'a');
+  await s.at(NOW + 36 * 60000);
+  await sync('a');
+  eq((await q1("select seize_state s from slg_loans where id = 'loan_dead1'")).s, 'done', '세이브에 죽은 상태로 남은 캐릭터는 몰수 주장과 모순되지 않는다');
+  // 관리자 감사 조회
+  ok((await s.rpc('slg_audit_list', [100], 'a').then((r) => r, (e) => ({ err: String(e.message) }))).err !== undefined, '일반 계정은 감사 기록을 볼 수 없다');
+  await q1('update slg_players set gold = 1000 where user_id = $1', [uidA]);
+  await s.q("delete from slg_records where collection_name = 'gameState' and record_id = $1", [uidA]);
 }
 
 // ------------------------------------------------------------ 경매
