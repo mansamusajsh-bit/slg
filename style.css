@@ -612,6 +612,19 @@
       padding: 2px !important;
     }
 
+    /* 칸을 항상 정사각형으로: 에디터(36px 정사각 칸)·배경 그림(칸당 정사각)과 같은 비율.
+       남는 공간에 늘려 채우면 칸이 납작해지고 배경 그림이 찌그러진다.
+       --grid-cols/--grid-rows는 renderGrid가 맵 크기대로 넣는다. */
+    #viewport { container-type: size; }
+    #grid-map {
+      flex: 0 0 auto;
+      align-self: center;
+      margin: auto 0;
+      box-sizing: border-box;
+      width: min(100cqw, 100cqh * var(--grid-cols, 8) / var(--grid-rows, 14));
+      height: min(100cqh, 100cqw * var(--grid-rows, 14) / var(--grid-cols, 8));
+    }
+
     .tile-terrain-icon {
       font-size: 11px;
       opacity: 0.55;

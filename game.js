@@ -3049,6 +3049,8 @@
       mapEl.style.display = 'grid';
       mapEl.style.gridTemplateColumns = `repeat(${colCount}, 1fr)`;
       mapEl.style.gridTemplateRows = `repeat(${rowCount}, 1fr)`;
+      mapEl.style.setProperty('--grid-cols', colCount);
+      mapEl.style.setProperty('--grid-rows', rowCount);
       if (colCount === 8 && rowCount === 14) {
         mapEl.classList.add('grid-8x14');
       } else {
@@ -11201,10 +11203,7 @@
       return text + (code >= 0 && code <= 11171 && code % 28 !== 0 ? withFinal : withoutFinal);
     }
 
-    function getUnitAffection(unit) {
-      const v = Number(unit && unit.affection);
-      return Number.isFinite(v) ? v : (Number(unit && unit.favorability) || 50);
-    }
+    // getUnitAffection은 아래 유물 보상 구역에 하나만 둔다 (기본값 규칙: affection → favorability → 50).
 
     // 전투 코드는 affection, 캐릭터 레코드는 favorability를 읽으므로 둘을 같이 바꾼다.
     function changeUnitAffection(unit, delta) {
