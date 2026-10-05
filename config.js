@@ -183,7 +183,7 @@
       effects: {
         firstStrikes: 1,
         counterBonus: 0.10,
-        description: '선제 타격 1회 보장 및 반격 우선권 +10%'
+        description: '선제 타격 1회(받는 피해 -5%) 및 방어 시 반격 피해 +10%'
       },
       prereqs: []
     },
@@ -196,7 +196,7 @@
       effects: {
         firstStrikes: 2,
         counterBonus: 0.20,
-        description: '선제 타격 2회 보장 및 반격 피해 +20%'
+        description: '선제 타격 2회(받는 피해 -10%) 및 방어 시 반격 피해 +20%'
       },
       prereqs: ['drill_1']
     },
@@ -209,7 +209,7 @@
       effects: {
         firstStrikes: 3,
         counterBonus: 0.35,
-        description: '선제 타격 3회 보장 및 반격 피해 +35%'
+        description: '선제 타격 3회(받는 피해 -15%) 및 방어 시 반격 피해 +35%'
       },
       prereqs: ['drill_2']
     },
@@ -222,7 +222,7 @@
       effects: {
         firstStrikes: 4,
         counterBonus: 0.50,
-        description: '선제 타격 4회 보장 및 선제 반격 발동'
+        description: '선제 타격 4회(받는 피해 -20%) 및 방어 시 반격 피해 +50%'
       },
       prereqs: ['drill_3']
     },
@@ -251,7 +251,7 @@
       effects: {
         hillDefBonus: 0.50,
         movementHillBonus: 1,
-        description: '언덕/산악 타일에서 방어력 +50% 및 언덕 이동 비용 감소'
+        description: '언덕/산악 타일에서 방어력 +50% 및 산악 진입 AP -1 (최소 1)'
       },
       prereqs: ['guerilla_1']
     },
@@ -276,7 +276,7 @@
       effects: {
         forestDefBonus: 0.50,
         movementForestBonus: 1,
-        description: '숲/밀림 타일에서 방어력 +50% 및 숲 이동 페널티 면제'
+        description: '숲/밀림 타일에서 방어력 +50% 및 숲 진입 AP -1 (최소 1)'
       },
       prereqs: ['woodsman_1']
     },
@@ -293,7 +293,8 @@
       effects: {
         healAdjacentPercent: 0.10,
         healSelfPercent: 0.10,
-        description: '턴 종료 시 동일 타일 및 인접 1칸 아군 HP +10% 회복'
+        healRange: 1,
+        description: '턴 종료 시 본인 최대 HP +10%, 같은 타일·인접 1칸 아군 최대 HP +10% 회복'
       },
       prereqs: []
     },
@@ -306,7 +307,8 @@
       effects: {
         healAdjacentPercent: 0.20,
         healSelfPercent: 0.20,
-        description: '턴 종료 시 동일 타일 및 인접 2칸 아군 HP +20% 회복'
+        healRange: 2,
+        description: '턴 종료 시 본인 최대 HP +20%, 같은 타일·2칸 이내 아군 최대 HP +20% 회복'
       },
       prereqs: ['medic_1']
     }

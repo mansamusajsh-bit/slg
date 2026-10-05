@@ -38,8 +38,12 @@
     commander: Object.freeze(['army', 'battle', 'run'])
   });
   // 유물 효과 어휘. 값의 의미(단위)는 RELIC_STAT_LABELS에 적는다.
-  // 게임에 실제로 적용되는 것: 장착한 지휘관 유물의 통솔력(leadership, deploySlots — game.js getRelicLeadershipBonus),
-  // 선물 유물의 atk/def/hp/ap/mobility/affection (선물할 때 능력치에 더함 — game.js GIFT_RELIC_APPLIERS). 나머지는 데이터만 있다.
+  // 게임에서의 적용 (game.js):
+  //  - 지휘관 유물(장착한 것만): 통솔력(leadership/deploySlots), 군 전체 atk/def, 전투 중 ap/mobility, hp(= 전투 시작 보호막),
+  //    critRate/evasion/lifesteal/counterDmg/terrainDef/range/regen/shield/firstTurnAp/healAfterBattle/skillCooldown/expGain/spGain,
+  //    goldGain/shopDiscount/affection(승리 시)/rewinder(획득 시 1회)
+  //  - 선물 유물: atk/def/hp/ap/mobility/affection은 선물할 때 능력치에 더하고, 나머지는 받은 캐릭터가 전투에서 적용한다.
+  //    (goldGain/shopDiscount/rewinder/leadership/deploySlots는 군 전체 효과라 선물 유물에서는 쓰이지 않는다)
   const RELIC_STAT_LABELS = Object.freeze({
     atk: '공격력 (+)', def: '방어력 (+)', hp: '최대 HP (+)', mobility: '이동력 (+)', ap: '행동력 AP (+)',
     critRate: '치명타율 (%p)', evasion: '회피율 (%p)', lifesteal: '흡혈 (피해의 %)', counterDmg: '반격 피해 (%)',

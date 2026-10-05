@@ -969,7 +969,7 @@
     }
 
     const state = global.state || {};
-    const catalog = (global.TOWN_UNIT_SHOP_CATALOG || global.unitShopSystem?.TOWN_UNIT_SHOP_CATALOG || []).map(u => ({ ...u, cost: global.scaleGold ? global.scaleGold(u.cost) : u.cost })); // 기준가 × 물가
+    const catalog = (global.TOWN_UNIT_SHOP_CATALOG || global.unitShopSystem?.TOWN_UNIT_SHOP_CATALOG || []).map(u => ({ ...u, cost: global.scaleShopGold ? global.scaleShopGold(u.cost) : (global.scaleGold ? global.scaleGold(u.cost) : u.cost) })); // 기준가 × 물가
 
     // 안전 거점 정보 계산 (safeZoneTile이 null일 경우에도 안전하게 마을 거점 정보로 폴백)
     const safeZoneTile = (typeof global.unitShopSystem?.isPlayerAtSafeZone === 'function')

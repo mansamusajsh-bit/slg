@@ -721,8 +721,11 @@
 
     caster.ap = Math.max(0, num(caster.ap) - skill.costAP);
     if (!caster.skillCooldowns) caster.skillCooldowns = {};
-    if (skill.coolDown > 0) caster.skillCooldowns[skill.id] = skill.coolDown;
-    if (skill.isSignature) caster.customSkillCooldown = skill.coolDown;
+    // 유물(skillCooldown)이 재사용 대기를 늘리거나 줄인다 (대기가 있는 스킬은 최소 1턴)
+    const cdMod = typeof ctx.getCooldownModifier === 'function' ? num(ctx.getCooldownModifier(caster)) : 0;
+    const cooldown = skill.coolDown > 0 ? Math.max(1, skill.coolDown + cdMod) : 0;
+    if (cooldown > 0) caster.skillCooldowns[skill.id] = cooldown;
+    if (skill.isSignature) caster.customSkillCooldown = cooldown;
     if (hostileUsed) breakStealth(caster);
 
     const names = [...new Set(targets.map(u => u.name))];

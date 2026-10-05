@@ -64,6 +64,20 @@
         desc: '포섭 유닛의 초기 호감도 +25 추가 보정 (총 50 호감도로 시작)',
         cost: 1,
         prerequisite: 'CommanderLeadership'
+      },
+      DefendersLeader: {
+        id: 'DefendersLeader',
+        name: '수비의 리더 (DefendersLeader)',
+        desc: '아군이 수세(적 승률 50% 초과)에서 방어할 때 선제 타격 2회(받는 피해 -10%) 및 반격 피해 +20%',
+        cost: 1,
+        prerequisite: 'Ironclad'
+      },
+      TacticalRetreat: {
+        id: 'TacticalRetreat',
+        name: '전략적 후퇴 (TacticalRetreat)',
+        desc: '아군이 절대적 위기(적 승률 70% 초과)에서 방어하다 패배하면 퇴각 확률 +20%, 퇴각에 성공하면 HP 50% 회복',
+        cost: 1,
+        prerequisite: 'DefendersLeader'
       }
     };
 
@@ -294,6 +308,8 @@
                        (typeof unit.atk === 'number') ? unit.atk : 10;
         // 지휘력 보정(사망회귀 보상)은 방어력 계산의 이 한 곳에서만 더한다.
         baseStrength += getCommandBonusDef(unit);
+        // 지휘관 유물(군 전체 방어력 보정)
+        baseStrength = Math.max(0, baseStrength + getArmyRelicBonus(unit, 'def'));
       } else if (statType === 'strength') {
         baseStrength = typeof unit.strength === 'number' ? unit.strength :
                        typeof unit.atk === 'number' ? unit.atk :
@@ -305,6 +321,8 @@
                        typeof unit.strength === 'number' ? unit.strength :
                        (unit.stats && typeof unit.stats.atk === 'number') ? unit.stats.atk :
                        (typeof unit.attackPower === 'number') ? unit.attackPower : 10;
+        // 지휘관 유물(군 전체 공격력 보정)
+        baseStrength = Math.max(1, baseStrength + getArmyRelicBonus(unit, 'atk'));
       }
 
       return baseStrength * hpPercentage;
@@ -336,9 +354,33 @@
         counterDamage = Math.round(atkPower * winRate * 0.25);
       }
 
+      let defenderDamage = attackerWon ? primaryDamage : counterDamage;
+      let attackerDamage = attackerWon ? counterDamage : primaryDamage;
+
+      // 승급 효과: 제식 훈련 — 방어 시 반격 피해 증가, 선제 타격 1회당 받는 피해 -5% (최대 -20%)
+      const atkPromo = getPromotionEffectSummary(attacker);
+      const defPromo = getPromotionEffectSummary(defender);
+      // 유물: 반격 피해(counterDmg) / 지휘관 패시브: 수비의 리더(수세에서 선제 타격 2 + 반격 +20%) · 철갑 외피(아군 피격 피해 -30%)
+      const cmdSkills = (state && state.commander && state.commander.unlockedSkills) || {};
+      const attackerIsPlayer = isPlayerSideUnit(attacker);
+      const defenderIsPlayer = isPlayerSideUnit(defender);
+      let defCounter = defPromo.counterBonus + getRelicStatFor(defender, 'counterDmg') / 100;
+      let defStrikes = defPromo.firstStrikes;
+      if (defenderIsPlayer && cmdSkills.DefendersLeader && (Number(winChance) || 50) > 50) {
+        defStrikes = Math.max(defStrikes, 2);
+        defCounter += 0.20;
+      }
+      attackerDamage *= Math.max(0, 1 + defCounter);
+      attackerDamage *= 1 - Math.min(0.20, atkPromo.firstStrikes * 0.05);
+      defenderDamage *= 1 - Math.min(0.20, defStrikes * 0.05);
+      if (cmdSkills.Ironclad) {
+        if (attackerIsPlayer) attackerDamage *= 0.70;
+        if (defenderIsPlayer) defenderDamage *= 0.70;
+      }
+
       return {
-        defenderDamage: Math.max(0, Math.round(attackerWon ? primaryDamage : counterDamage)),
-        attackerDamage: Math.max(0, Math.round(attackerWon ? counterDamage : primaryDamage))
+        defenderDamage: Math.max(0, Math.round(defenderDamage)),
+        attackerDamage: Math.max(0, Math.round(attackerDamage))
       };
     }
 
@@ -372,6 +414,9 @@
     function grantCommanderExp(amount, reason) {
       const commander = state.commander;
       if (!commander || !(amount > 0)) return;
+      // 유물 경험치 획득(%): 지휘관 유물만 (지휘관 경험치에는 선물 유물이 걸리지 않는다)
+      const expPct = clampPercent(getCommanderRelicStat('expGain'), -50, 300);
+      if (expPct) amount = Math.max(1, roundStochastic(amount * (1 + expPct / 100)));
       commander.exp = (commander.exp || 0) + amount;
       if (reason) addLog(`👑 ${reason}: 지휘관 경험치 +${amount} EXP`, 'gold');
       const noticeLines = [];
@@ -781,6 +826,8 @@
       SkillEngine.configure({
         getState: () => state,
         getTile: (x, y) => getTile(x, y),
+        // 유물 스킬 재사용 대기(skillCooldown): 시전자에게 걸린 유물 수치만큼 쿨다운이 늘고 준다
+        getCooldownModifier: (unit) => Math.round(getRelicStatFor(unit, 'skillCooldown')),
         log: (msg, type) => addLog(msg, type),
         onUnitKilled: (unit) => {
           if (unit.owner === 'ENEMY') {
@@ -1467,7 +1514,7 @@
        -------------------------------------------------------------------------- */
     function getEnemiesInRange(unit) {
       if (!unit || unit.isDead || unit.isInactivated || unit.ap <= 0) return [];
-      const range = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
+      const range = getUnitAttackRange(unit); // 신속한 진격 + 유물 사거리
       const inRange = [];
       state.enemyUnits.forEach(e => {
         if (!e.isDead) {
@@ -1671,12 +1718,18 @@
 
       // 1. 공격력 산출 (Effective Strength = Base Strength * (HP / 100))
       let atkBonus = 1.0;
-      if (attacker.promotions && attacker.promotions.combatRank) {
-        atkBonus += attacker.promotions.combatRank * 0.10;
-      }
+      // 병과 승급 효과 (전투 단계 · 도시 공격 · 지형 방어). 옛 combatRank 저장 형식도 getCombatRank가 읽는다.
+      const atkPromo = getPromotionEffectSummary(attacker);
+      const defPromo = getPromotionEffectSummary(defender);
+      const tileFlags = getPromotionTileFlags(targetTile);
+      atkBonus += atkPromo.atkPercent;
+      if (tileFlags.isCityTile) atkBonus += atkPromo.cityAtkBonus;
       if (isPlayerAttacker && skills.BearDown && isFirstUnit) {
         atkBonus += 0.20; // BearDown: 첫 유닛 공격력 +20%
       }
+      // 유물 치명타율: 치명타는 피해 +50%이므로 기대값으로 공격력에 반영한다 (치명타율 10%p → 공격력 +5%)
+      const critRate = clampPercent(getRelicStatFor(attacker, 'critRate'), 0, 100);
+      if (critRate) atkBonus += (critRate / 100) * 0.5;
       // 스킬 패시브 · 오라 · 버프/디버프 (skillEngine)
       const atkMods = window.SkillEngine ? SkillEngine.getCombatModifiers(attacker) : { atk: 0 };
       atkBonus = Math.max(0.1, atkBonus + atkMods.atk / 100);
@@ -1693,10 +1746,17 @@
       if (isPlayerAttacker && skills.Precision) {
         tileDefBonus = 0; // Precision: 적 지형 방어 보너스 무시
       }
+      // 유물 지형 방어(terrainDef): 방어 보너스가 있는 지형에서 그 보너스를 키운다
+      const terrainRelic = getRelicStatFor(defender, 'terrainDef');
+      if (terrainRelic && tileDefBonus > 0) tileDefBonus = Math.max(0, tileDefBonus + terrainRelic / 100);
       defBonus += tileDefBonus;
       if (isPlayerDefender && skills.ShieldWall) {
         defBonus += 0.15; // ShieldWall: 아군 방어력 +15%
       }
+      // 승급: 도시 주둔 · 게릴라(언덕/산악) · 삼림 전문 방어 보너스
+      if (tileFlags.isCityTile) defBonus += defPromo.cityDefBonus;
+      if (tileFlags.isHillTile) defBonus += defPromo.hillDefBonus;
+      if (tileFlags.isForestTile) defBonus += defPromo.forestDefBonus;
       // 방어 태세 (GUARD stance) 보너스 +30% 적용
       if (defender.isGuarding || defender.stance === 'GUARD') {
         defBonus += (defender.guardBonusDef || 0.30);
@@ -1717,6 +1777,9 @@
       const weightedAtk = finalAtk * wAtk;
       const weightedDef = finalDef * wDef;
       let P = (weightedAtk + weightedDef > 0) ? (weightedAtk / (weightedAtk + weightedDef)) : 0.5;
+      // 유물 회피율: 방어자가 공격을 피할 확률만큼 공격자 승률이 줄어든다 (음수면 오히려 맞기 쉬워진다)
+      const evasion = clampPercent(getRelicStatFor(defender, 'evasion'), -50, 75);
+      if (evasion) P = Math.max(0, Math.min(1, P * (1 - evasion / 100)));
 
       let isCheat = false;
       if (debugParams.forcedBattleResult === 'FORCE_WIN') {
@@ -1741,6 +1804,7 @@
         weightedDef,
         P,
         winPercent,
+        evasion,
         isCheat,
         isDangerAffection
       };
@@ -1749,9 +1813,180 @@
     /** 스플래시 피해: HP를 최소 1까지만 깎는다 (전사시키지 않음). 실제로 깎인 양을 돌려준다. */
     function applySplashDamage(unit, amount) {
       const before = unit.hp;
+      // 철갑 외피: 아군이 받는 2차 스플래시 피해 -30%
+      if (isPlayerSideUnit(unit) && state.commander?.unlockedSkills?.Ironclad) amount *= 0.70;
+      amount = absorbShield(unit, Math.max(0, Math.round(amount)));
       unit.hp = Math.max(Math.min(1, before), before - amount);
       if (unit.stats) unit.stats.hp = unit.hp;
       return before - unit.hp;
+    }
+
+    function isPlayerSideUnit(unit) {
+      return !!unit && (unit.owner === 'PLAYER' || !unit.owner);
+    }
+
+    /** 보호막(SHIELD 상태)이 피해를 먼저 흡수한다. 흡수하고 남은 피해량을 돌려준다. */
+    function absorbShield(unit, amount) {
+      let dmg = Math.max(0, Math.round(amount));
+      if (!unit || !Array.isArray(unit.statuses) || dmg <= 0) return dmg;
+      unit.statuses.filter(s => s.type === 'SHIELD').forEach(sh => {
+        if (dmg <= 0) return;
+        const absorbed = Math.min(Number(sh.value) || 0, dmg);
+        sh.value -= absorbed;
+        dmg -= absorbed;
+      });
+      unit.statuses = unit.statuses.filter(s => s.type !== 'SHIELD' || s.value > 0);
+      return dmg;
+    }
+
+    /** 교전 교환 피해: 보호막이 먼저 막고, HP는 1 아래로 내려가지 않는다 (전사는 승패 판정이 따로 정한다). */
+    function applyExchangeDamage(unit, amount) {
+      unit.hp = Math.max(1, Math.round(unit.hp - absorbShield(unit, amount)));
+      if (unit.stats) unit.stats.hp = unit.hp;
+    }
+
+    /* --------------------------------------------------------------------------
+       유물 효과 (지휘관 유물: 장착한 것만 / 선물 유물: 받은 캐릭터만)
+       - atk/def (army)는 읽을 때 더한다(calculateEffectiveStrength). ap/mobility (army)는 전투 동안 baseAP에 얹었다가 전투가 끝나면 뺀다.
+       - hp (army)는 최대 HP가 100으로 고정된 구조라 전투 시작 보호막으로 준다. (선물 유물의 hp/atk/def/ap/mobility/affection은 선물할 때 능력치에 직접 더한다)
+       -------------------------------------------------------------------------- */
+    const RELIC_PASSIVE_STATS = ['critRate', 'evasion', 'lifesteal', 'counterDmg', 'terrainDef', 'range', 'regen', 'shield', 'firstTurnAp', 'healAfterBattle', 'skillCooldown', 'expGain', 'spGain'];
+    const RELIC_ARMY_STATS = ['atk', 'def', 'hp', 'ap', 'mobility'];
+    const RELIC_GLOBAL_STATS = ['goldGain', 'shopDiscount', 'affection', 'rewinder'];
+
+    function sumRelicEffects(relics, stat) {
+      let sum = 0;
+      (relics || []).forEach(r => (r && r.effects || []).forEach(fx => {
+        if (fx && fx.stat === stat) sum += Number(fx.value) || 0;
+      }));
+      return sum;
+    }
+
+    /** 이 유닛에게 적용되는 유물 수치: 장착한 지휘관 유물(아군 전체) + 이 유닛이 받은 선물 유물. 적 유닛은 0. */
+    function getRelicStatFor(unit, stat) {
+      if (!isPlayerSideUnit(unit)) return 0;
+      return sumRelicEffects(getEquippedCommanderRelics(), stat) + sumRelicEffects(unit.giftRelics, stat);
+    }
+
+    /** 지휘관 유물만 (상점 할인·골드 획득처럼 군 전체에 걸리는 수치) */
+    function getCommanderRelicStat(stat) {
+      return sumRelicEffects(getEquippedCommanderRelics(), stat);
+    }
+
+    /** 장착한 지휘관 유물이 아군에게 주는 능력치 보정 (atk/def/hp/ap/mobility) */
+    function getArmyRelicBonus(unit, stat) {
+      return isPlayerSideUnit(unit) ? sumRelicEffects(getEquippedCommanderRelics(), stat) : 0;
+    }
+
+    function clampPercent(value, min, max) {
+      return Math.max(min, Math.min(max, Number(value) || 0));
+    }
+
+    /** 유물 골드 획득(%)을 수입에 얹는다. 서버가 건당 상한을 검사하므로 +100%까지만. */
+    function applyRelicGoldGain(amount) {
+      const pct = clampPercent(getCommanderRelicStat('goldGain'), -50, 100);
+      return pct ? Math.max(1, Math.round(amount * (1 + pct / 100))) : amount;
+    }
+
+    /** 물가가 반영된 수입에 유물 골드 획득(%)까지 얹는다. 골드를 버는 곳은 모두 이 함수를 쓴다. */
+    function scaleIncomeWithRelics(base) {
+      return applyRelicGoldGain(scaleIncome(base));
+    }
+
+    /** 유물 상점 할인(%)을 이미 물가가 반영된 가격에 건다. */
+    function applyRelicShopDiscount(price) {
+      const pct = clampPercent(getCommanderRelicStat('shopDiscount'), 0, 75);
+      return pct ? Math.max(1, Math.round(price * (1 - pct / 100))) : price;
+    }
+    /** 상점·고용 기준가 → 물가 × 유물 할인 */
+    function scaleShopGold(base) { return applyRelicShopDiscount(scaleGold(base)); }
+    window.scaleShopGold = scaleShopGold;
+
+    /** 유물 경험치 획득(%) 배율 (유닛용: 지휘관 유물 + 선물 유물) */
+    function getRelicExpMultiplier(unit) {
+      return Math.max(0, 1 + clampPercent(getRelicStatFor(unit, 'expGain'), -50, 300) / 100);
+    }
+
+    /** 사거리 보정: 지휘관 신속한 진격(이동·공격 2칸) 위에 유물 사거리를 얹는다 (공격만 늘어난다). */
+    function getUnitAttackRange(unit) {
+      const base = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
+      return Math.max(1, base + Math.round(getRelicStatFor(unit, 'range')));
+    }
+
+    /** 전투 시작: 이동력(ap/mobility)·보호막(shield/hp)·첫 턴 AP(firstTurnAp)를 아군 출전 유닛에게 건다. */
+    function applyRelicBattleStart() {
+      const deployed = (state.playerUnits || []).filter(u => !u.isDead && u.isDeployed !== false && u.x >= 0);
+      const lines = [];
+      deployed.forEach(u => {
+        // 이전 전투에서 남은 보정이 있으면 먼저 걷어낸다
+        if (u.relicApBonus) { u.baseAP = Math.max(1, (Number(u.baseAP) || 1) - u.relicApBonus); u.relicApBonus = 0; }
+        const apBonus = Math.round(getArmyRelicBonus(u, 'ap') + getArmyRelicBonus(u, 'mobility'));
+        if (apBonus) {
+          const before = Number(u.baseAP) || 1;
+          u.baseAP = Math.max(1, before + apBonus);
+          u.relicApBonus = u.baseAP - before;
+        }
+        const firstTurn = Math.round(getRelicStatFor(u, 'firstTurnAp'));
+        u.ap = Math.max(0, (Number(u.baseAP) || 1) + firstTurn);
+
+        const shield = Math.round(getRelicStatFor(u, 'shield') + getArmyRelicBonus(u, 'hp'));
+        if (shield > 0) {
+          if (!Array.isArray(u.statuses)) u.statuses = [];
+          u.statuses = u.statuses.filter(s => !(s.type === 'SHIELD' && s.source === '유물'));
+          u.statuses.push({ type: 'SHIELD', value: shield, turns: 50, casterId: null, source: '유물' });
+        }
+        if (apBonus || firstTurn || shield > 0) {
+          lines.push(`${u.name}${shield > 0 ? ` 🔰${shield}` : ''}${firstTurn ? ` ⚡첫 턴 AP ${firstTurn > 0 ? '+' : ''}${firstTurn}` : ''}${apBonus ? ` 🏃AP ${apBonus > 0 ? '+' : ''}${apBonus}` : ''}`);
+        }
+      });
+      if (lines.length) addLog(`💎 [유물 효과] 전투 시작 — ${lines.join(' · ')}`, 'gold');
+    }
+
+    /** 전투 종료: 전투 동안 얹었던 이동력 보정을 걷어낸다. */
+    function removeRelicBattleBonuses() {
+      (state.playerUnits || []).forEach(u => {
+        if (u.relicApBonus) {
+          u.baseAP = Math.max(1, (Number(u.baseAP) || 1) - u.relicApBonus);
+          u.ap = Math.min(Number(u.ap) || 0, u.baseAP);
+          u.relicApBonus = 0;
+        }
+      });
+    }
+
+    /** 아군 턴 시작: 유물 재생(regen)으로 HP 회복 (음수면 HP가 깎이지만 1 아래로는 내려가지 않는다). */
+    function applyRelicRegen() {
+      (state.playerUnits || []).filter(u => !u.isDead && u.isDeployed !== false).forEach(u => {
+        const regen = Math.round(getRelicStatFor(u, 'regen'));
+        if (!regen) return;
+        const maxHp = Number(u.maxHp) > 0 ? Number(u.maxHp) : 100;
+        const before = u.hp;
+        u.hp = regen > 0 ? Math.min(maxHp, before + regen) : Math.max(1, before + regen);
+        if (u.stats) u.stats.hp = u.hp;
+        if (u.hp !== before) addLog(`💎 [유물 재생] ${u.name} HP ${u.hp > before ? '+' : ''}${u.hp - before} (${u.hp}/${maxHp})`, u.hp > before ? 'success' : 'warning');
+      });
+    }
+
+    /** 전투 승리 정산: 전투 후 회복(healAfterBattle)·승리 SP(spGain)·호감도(affection, 지휘관 유물). */
+    function applyRelicVictoryRewards() {
+      const deployedIds = Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [];
+      const survivors = (state.playerUnits || []).filter(u => !u.isDead && u.hp > 0 && deployedIds.includes(u.id));
+      const affection = Math.round(getCommanderRelicStat('affection'));
+      survivors.forEach(u => {
+        const heal = clampPercent(getRelicStatFor(u, 'healAfterBattle'), 0, 100);
+        if (heal > 0) {
+          const maxHp = Number(u.maxHp) > 0 ? Number(u.maxHp) : 100;
+          const before = u.hp;
+          u.hp = Math.min(maxHp, before + Math.max(1, Math.round(maxHp * heal / 100)));
+          if (u.stats) u.stats.hp = u.hp;
+          if (u.hp > before) addLog(`💎 [전투 후 회복] ${u.name} HP +${u.hp - before} (${u.hp}/${maxHp})`, 'success');
+        }
+        const sp = Math.round(getRelicStatFor(u, 'spGain'));
+        if (sp > 0) {
+          u.skillPoints = (Number(u.skillPoints) || 0) + sp;
+          addLog(`💎 [유물] ${u.name} 스킬 해금권 +${sp}`, 'gold');
+        }
+        if (affection) GIFT_RELIC_APPLIERS.affection(u, affection);
+      });
     }
 
     /**
@@ -1780,12 +2015,12 @@
       const odds = getCombatOdds(attacker, defender);
       if (!odds) return;
 
-      const { finalAtk, finalDef, tileDefBonus, weightedAtk, weightedDef, P, winPercent } = odds;
+      const { finalAtk, finalDef, tileDefBonus, weightedAtk, weightedDef, P, winPercent, evasion } = odds;
       const skills = state.commander.unlockedSkills;
       const isPlayerAttacker = (attacker.owner === 'PLAYER' || !attacker.owner);
 
       addLog(`⚔️ [전투 개시] ${attacker.name}(공 ${finalAtk.toFixed(1)}) VS ${defender.name}(방 ${finalDef.toFixed(1)}${tileDefBonus > 0 ? ` [지형+${(tileDefBonus*100).toFixed(0)}%]` : ''})`, 'combat');
-      addLog(`📊 [확률 산출] 승리 확률 P = ${weightedAtk.toFixed(1)} / (${weightedAtk.toFixed(1)} + ${weightedDef.toFixed(1)}) = ${winPercent}%`, 'combat');
+      addLog(`📊 [확률 산출] 승리 확률 P = ${weightedAtk.toFixed(1)} / (${weightedAtk.toFixed(1)} + ${weightedDef.toFixed(1)}) = ${winPercent}%${evasion ? ` (유물 회피 ${evasion > 0 ? '-' : '+'}${Math.abs(evasion)}%)` : ''}`, 'combat');
 
       // 4. 호감도/체력 공포 명령 거부 및 자동 방어 태세 전환 가드 (플레이어 유닛 전용)
       if (isPlayerAttacker && checkCommandRefusal(attacker, defender, P)) {
@@ -1842,25 +2077,19 @@
       if (loserRetreated) {
         const loserDmg = isWin ? roundDmg.defenderDamage : roundDmg.attackerDamage;
         const winnerDmg = isWin ? roundDmg.attackerDamage : roundDmg.defenderDamage;
-        combatLoser.hp = Math.max(1, Math.round(combatLoser.hp - loserDmg));
+        applyExchangeDamage(combatLoser, loserDmg);
         if (loserMods.retreatHpRecovery > 0) {
           const maxHp = combatLoser.maxHp || 100;
           combatLoser.hp = Math.min(maxHp, combatLoser.hp + Math.round(maxHp * loserMods.retreatHpRecovery));
         }
         if (combatLoser.stats) combatLoser.stats.hp = combatLoser.hp;
-        if (winnerDmg > 0) {
-          combatWinnerUnit.hp = Math.max(1, Math.round(combatWinnerUnit.hp - winnerDmg));
-          if (combatWinnerUnit.stats) combatWinnerUnit.stats.hp = combatWinnerUnit.hp;
-        }
+        if (winnerDmg > 0) applyExchangeDamage(combatWinnerUnit, winnerDmg);
         addLog(`🏃 [퇴각 성공] ${combatLoser.name}이(가) 패배했지만 ${Math.round(loserRetreatChance * 100)}% 퇴각 판정에 성공해 살아남았습니다. (HP ${combatLoser.hp}/${combatLoser.maxHp || 100})`, 'warning');
         awardPromotionXp(combatLoser, PROMOTION_XP_GAIN.retreat, '퇴각 성공');
       } else if (loserSaved) {
         const combatWinner = isWin ? attacker : defender;
         const winnerDmg = isWin ? roundDmg.attackerDamage : roundDmg.defenderDamage;
-        if (winnerDmg > 0) {
-          combatWinner.hp = Math.max(1, Math.round(combatWinner.hp - winnerDmg));
-          if (combatWinner.stats) combatWinner.stats.hp = combatWinner.hp;
-        }
+        if (winnerDmg > 0) applyExchangeDamage(combatWinner, winnerDmg);
         addLog(`🕊️ [교전 무승부] ${combatLoser.name}이(가) 불굴로 버텨 전선이 유지됩니다. (${combatWinner.name} HP ${combatWinner.hp}/${combatWinner.maxHp})`, 'warning');
       } else if (isWin) {
         // 승리: 피격자(defender) 사망 (HP 0)
@@ -1875,8 +2104,7 @@
 
         // 수비측 반격 교환 피해 적용 (HP 1 이상 정수 유지)
         if (roundDmg.attackerDamage > 0) {
-          attacker.hp = Math.max(1, Math.round(attacker.hp - roundDmg.attackerDamage));
-          if (attacker.stats) attacker.stats.hp = attacker.hp;
+          applyExchangeDamage(attacker, roundDmg.attackerDamage);
           addLog(`🛡️ [수비측 반격] ${defender.name}의 저항으로 ${attacker.name}에게 ${roundDmg.attackerDamage} 피해 (잔여 HP: ${attacker.hp}/${attacker.maxHp})`, 'warning');
         }
 
@@ -1903,7 +2131,7 @@
 
           // 포섭 판정: 확률·초기 호감도는 지휘관의 포섭 방침이 정한다. 포섭하지 못하면 전리품.
           if (!tryCaptureEnemy(defender, defender.x, defender.y)) {
-            const lootGold = scaleIncome(Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult));
+            const lootGold = scaleIncomeWithRelics(Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult));
             Wallet.earn('earn_loot', lootGold);
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
@@ -1916,7 +2144,10 @@
 
           // 승리 시 적진 돌파 및 타일 전진 점령 (해당 타일에 남은 적이 없을 때)
           const remainingEnemiesAtTile = state.enemyUnits.filter(e => !e.isDead && e.x === defender.x && e.y === defender.y);
-          if (remainingEnemiesAtTile.length === 0) {
+          // 유물 사거리로 멀리서 쏜 공격은 그 자리에서 쏜 것이라 전진하지 않는다 (이동 범위 안일 때만 점령 전진)
+          const advanceRange = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
+          const strikeDist = Math.abs(attacker.x - defender.x) + Math.abs(attacker.y - defender.y);
+          if (remainingEnemiesAtTile.length === 0 && strikeDist <= advanceRange) {
             const startX = attacker.x;
             const startY = attacker.y;
             const targetX = defender.x;
@@ -1981,8 +2212,7 @@
 
         // 수비자 교환 피해 적용 (HP 1 이상 정수 유지)
         if (roundDmg.defenderDamage > 0) {
-          defender.hp = Math.max(1, Math.round(defender.hp - roundDmg.defenderDamage));
-          if (defender.stats) defender.stats.hp = defender.hp;
+          applyExchangeDamage(defender, roundDmg.defenderDamage);
           addLog(`🗡️ [공격측 발악 타격] ${attacker.name}의 돌격으로 ${defender.name}에게 ${roundDmg.defenderDamage} 피해 (잔여 HP: ${defender.hp}/${defender.maxHp})`, 'warning');
         }
 
@@ -1994,13 +2224,26 @@
         } else {
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
-          const lootGold = scaleIncome(Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult));
+          const lootGold = scaleIncomeWithRelics(Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult));
           Wallet.earn('earn_loot', lootGold);
           addLog(`🏆 [적 격퇴 전리품] +${lootGold}G 국고 획득!`, 'gold');
           grantCommanderExp(20, '반격 섬멸');
 
           // 반격 승리 시 적 포섭 판정 (포섭 방침)
           tryCaptureEnemy(attacker, defender.x, defender.y);
+        }
+      }
+
+      // 유물 흡혈(lifesteal): 승자가 입힌 피해의 일부만큼 HP를 회복한다
+      const lifestealPct = clampPercent(getRelicStatFor(combatWinnerUnit, 'lifesteal'), 0, 100);
+      if (lifestealPct > 0 && !combatWinnerUnit.isDead) {
+        const dealt = isWin ? roundDmg.defenderDamage : roundDmg.attackerDamage;
+        if (dealt > 0) {
+          const maxHp = Number(combatWinnerUnit.maxHp) > 0 ? Number(combatWinnerUnit.maxHp) : 100;
+          const beforeHp = combatWinnerUnit.hp;
+          combatWinnerUnit.hp = Math.min(maxHp, beforeHp + Math.max(1, Math.round(dealt * lifestealPct / 100)));
+          if (combatWinnerUnit.stats) combatWinnerUnit.stats.hp = combatWinnerUnit.hp;
+          if (combatWinnerUnit.hp > beforeHp) addLog(`🩸 [유물 흡혈] ${combatWinnerUnit.name} HP +${combatWinnerUnit.hp - beforeHp} (${combatWinnerUnit.hp}/${maxHp})`, 'success');
         }
       }
 
@@ -2042,11 +2285,13 @@
       const startY = unit.y;
       const targetTile = getTile(targetX, targetY);
       // 지형별 진입 AP: 물·암벽은 더 든다 (도로가 깔리면 1)
-      const costAP = MapSchema.getTileMoveCost(targetTile);
+      // (게릴라 II · 삼림 전문 II 승급은 산악/숲 진입 AP를 줄인다. 부대 이동은 가장 비싼 부대원 기준)
+      let costAP = getUnitMoveCost(unit, targetTile);
 
       // 출발 타일에 주둔 중인 아군 유닛 수집
       const friendlyAtStart = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY);
       const isStackMove = !!state.stackMoveEnabled && friendlyAtStart.length > 1;
+      if (isStackMove) costAP = Math.max(...friendlyAtStart.map(m => getUnitMoveCost(m, targetTile)));
 
       if (isStackMove) {
         // [사용자 요구사항] 부대가 중첩되었을 때 함께이동(ON) 상태면 최소 AP 기준으로 움직임.
@@ -2554,6 +2799,10 @@
         return;
       }
 
+      // 의무병 승급: 턴 종료 시 본인·인접 아군 회복
+      applyMedicHealing();
+      renderAll();
+
       // 3. 적 AI 턴 시작 (processEnemyTurn)
       await processEnemyTurn();
 
@@ -2580,6 +2829,7 @@
       // 아군 턴 시작: 지속 피해/회복, 기절·둔화, 패시브 AP, 스킬 쿨다운 감소
       if (window.SkillEngine) {
         SkillEngine.startSideTurn('PLAYER');
+        applyRelicRegen();
         if (typeof checkPartyWipeout === 'function') checkPartyWipeout();
         if (typeof window.checkTacticalVictory === 'function') window.checkTacticalVictory();
       }
@@ -2718,7 +2968,15 @@
       unit.hp = unit.maxHp;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
       if (!unit.promotions) unit.promotions = {};
-      unit.promotions.combatRank = (unit.promotions.combatRank || 0) + 1;
+      if (Array.isArray(unit.promotions)) {
+        // 승급(배열) 형식: 단계는 unit.combatRank에 쌓고, 전투 승급 사다리(combat_1~4)도 맞춰 준다.
+        unit.combatRank = getCombatRank(unit) + 1;
+        for (let i = 1; i <= Math.min(unit.combatRank, 4); i++) {
+          if (!unit.promotions.includes(`combat_${i}`)) unit.promotions.push(`combat_${i}`);
+        }
+      } else {
+        unit.promotions.combatRank = (unit.promotions.combatRank || 0) + 1;
+      }
 
       addLog(`⚔️ [아카데미 진급] ${unit.name} 레벨업! (Lv.${unit.level}, 공 +8, 방 +6, 최대 HP +20, 스킬 해금권 +1) -${cost}G`, 'gold');
       closeAllModals();
@@ -2821,13 +3079,14 @@
       if (!skillTargeting && selUnit && !selUnit.isDead && !selUnit.isInactivated && selUnit.ap > 0) {
         // 이동 범위 (상하좌우 1~2칸 맨해튼 거리)
         const range = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
+        const attackRange = getUnitAttackRange(selUnit); // 유물 사거리는 공격에만 더해진다
         currentTiles.forEach(t => {
           const dist = Math.abs(t.x - selUnit.x) + Math.abs(t.y - selUnit.y);
-          if (dist > 0 && dist <= range) {
+          if (dist > 0 && dist <= attackRange) {
             const hasEnemy = state.enemyUnits.some(e => !e.isDead && e.x === t.x && e.y === t.y);
             if (hasEnemy) {
               attackTiles.push(t);
-            } else if (MapSchema.getTileMoveCost(t) <= selUnit.ap) {
+            } else if (dist <= range && getUnitMoveCost(selUnit, t) <= selUnit.ap) {
               // 적이 없는 타일은 빈 타일 및 아군 유닛이 이미 있는 타일 모두 이동/중첩 가능! (AP가 지형 비용 이상일 때)
               moveTiles.push(t);
             }
@@ -2871,7 +3130,7 @@
         if (canAttack) {
           actionIcon = '<span class="tile-action-indicator attack" title="클릭 시 즉시 자동 전투 개시!">⚔️</span>';
         } else if (canMove) {
-          const moveCost = MapSchema.getTileMoveCost(t);
+          const moveCost = getUnitMoveCost(selUnit, t);
           actionIcon = moveCost > 1
             ? `<span class="tile-action-indicator move" title="클릭 시 즉시 이동 (AP ${moveCost} 소모)">👟${moveCost}</span>`
             : '<span class="tile-action-indicator move" title="클릭 시 즉시 이동">👟</span>';
@@ -3052,6 +3311,7 @@
       if (selUnit && !selUnit.isDead) {
         const dist = Math.abs(tile.x - selUnit.x) + Math.abs(tile.y - selUnit.y);
         const range = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
+        const attackRange = getUnitAttackRange(selUnit); // 유물 사거리는 공격에만 더해진다
 
         // 1-A. 동일 타일(자기 자신 주둔지) 터치 시: 중첩 유닛 순환 선택
         if (dist === 0) {
@@ -3070,7 +3330,7 @@
         }
 
         // 1-B. 이동/사거리 범위 내 타일 터치 시 (dist <= range)
-        if (dist <= range && !selUnit.isInactivated && selUnit.ap > 0) {
+        if (dist <= (eUnits.length > 0 ? attackRange : range) && !selUnit.isInactivated && selUnit.ap > 0) {
           // ⚔️ 적이 주둔 중인 타일 -> 자동 즉시 전투 (Auto-Combat) 개시!
           if (eUnits.length > 0) {
             const targetDefender = eUnits.find(e => e.id === cardInspectedEnemyId) || eUnits.find(e => e.id === debugInspectedEnemyId) || eUnits.slice().sort((a, b) => b.def - a.def)[0];
@@ -3625,7 +3885,7 @@
     function applyNodeEffects(effects, ref) {
       const lines = [];
       (effects || []).forEach(e => {
-        if (e.type === 'gold') { const g = scaleIncome(e.amount); Wallet.earn('earn_event', g, ref); lines.push(`+${g}G`); }
+        if (e.type === 'gold') { const g = scaleIncomeWithRelics(e.amount); Wallet.earn('earn_event', g, ref); lines.push(`+${g}G`); }
         else if (e.type === 'rewinder') { state.rewinders += e.amount; lines.push(`리와인더 +${e.amount}`); }
         else if (e.type === 'heal_all') { healAllPlayerUnits(); lines.push('전원 체력 회복'); }
       });
@@ -3683,7 +3943,7 @@
         };
         card.appendChild(ok);
       } else {
-        const offers = RunEngine.getShopOffers(run, node).map(o => ({ ...o, cost: scaleGold(o.cost) })); // 기준가 × 물가
+        const offers = RunEngine.getShopOffers(run, node).map(o => ({ ...o, cost: scaleShopGold(o.cost) })); // 기준가 × 물가 × 유물 할인
         const bought = new Set();
         card.appendChild(el('div', 'font-size:40px;', '🛒'));
         card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', '보급 상점'));
@@ -3827,9 +4087,9 @@
     // ========================================================================
     function calculateUnitPower(u) {
       if (!u || u.isDead) return 0;
-      const atk = Number(u.atk ?? (u.stats && u.stats.atk)) || 40;
-      const def = (Number(u.def ?? (u.stats && u.stats.def)) || 30) + getCommandBonusDef(u);
-      const rank = Number(u.promotions && u.promotions.combatRank) || 0;
+      const atk = (Number(u.atk ?? (u.stats && u.stats.atk)) || 40) + getArmyRelicBonus(u, 'atk');
+      const def = (Number(u.def ?? (u.stats && u.stats.def)) || 30) + getCommandBonusDef(u) + getArmyRelicBonus(u, 'def');
+      const rank = getCombatRank(u);
       const maxHp = Number(u.maxHp ?? (u.stats && u.stats.maxHp)) || 100;
       const hp = (typeof u.hp === 'number' && !isNaN(u.hp)) ? Math.min(maxHp, Math.max(0, u.hp)) : maxHp;
       return Math.round((atk * (1 + rank * 0.1) + def) * (hp / maxHp) * 2);
@@ -4231,6 +4491,7 @@
         state.run.dejavuEliteFree = false;
         startDeployPhase(battle, 'card');
       }
+      applyRelicBattleStart();
       applyEchoAtBattleStart();
       speakBattleStartLine(battle);
 
@@ -4380,7 +4641,7 @@
     // ========================================================================
     let gachaLastResults = [];
     const GACHA_HIRE_BASE = 100;          // 용병 고용 1회 (기준가 — 실제 가격은 인플레이션 반영: getGachaHireCost)
-    const getGachaHireCost = () => scaleGold(GACHA_HIRE_BASE);
+    const getGachaHireCost = () => scaleShopGold(GACHA_HIRE_BASE);
     const EMERGENCY_RECRUIT_BASE = 200;   // 전멸 후 긴급 모집 1회 (무작위, 기준가)
     const getEmergencyRecruitCost = () => scaleGold(EMERGENCY_RECRUIT_BASE);
 
@@ -6745,7 +7006,7 @@
     function getCaptiveRansom(unit) {
       const base = typeof window.getGamePrice === 'function' ? window.getGamePrice('CAPTIVE_RANSOM') : 300;
       const level = Math.max(1, Number(unit && unit.level) || 1);
-      const rank = Math.max(0, Number(unit && unit.promotions && unit.promotions.combatRank) || 0);
+      const rank = getCombatRank(unit);
       const cost = (base || 300) * (1 + (level - 1) * CAPTIVE_RANSOM_PER_LEVEL) * (1 + rank * CAPTIVE_RANSOM_PER_RANK);
       return Math.max(10, Math.round(cost / 10) * 10);
     }
@@ -9091,6 +9352,14 @@
     window.checkCommandRefusal = checkCommandRefusal;
     window.executeAttack = executeAttack;
     window.applyPromotion = applyPromotion;
+    window.getCombatRank = getCombatRank;
+    window.getPromotionEffectSummary = getPromotionEffectSummary;
+    window.getUnitMoveCost = getUnitMoveCost;
+    window.applyMedicHealing = applyMedicHealing;
+    Object.assign(window, {
+      getRelicStatFor, applyRelicBattleStart, applyRelicRegen, applyRelicVictoryRewards, removeRelicBattleBonuses,
+      scaleIncomeWithRelics, applyExchangeDamage, absorbShield, grantRelic, ensureRewardDataLoaded
+    });
     window.awardPromotionXp = awardPromotionXp;
     window.calculateCombatModifiers = calculateCombatModifiers;
     window.addSkillToTree = addSkillToTree;
@@ -9153,9 +9422,14 @@
       if (isPlayer && state.commander?.unlockedSkills?.CommanderLeadership) {
         gained = roundStochastic(amount * (1 + LEADERSHIP_XP_BONUS));
       }
+      // 유물 경험치 획득(%): 지휘관 유물 + 이 캐릭터가 받은 선물 유물
+      if (isPlayer) {
+        const relicMult = getRelicExpMultiplier(unit);
+        if (relicMult !== 1) gained = roundStochastic(gained * relicMult);
+      }
       unit.xp = (unit.xp || 0) + gained;
       if (isPlayer) {
-        const bonusText = gained > amount ? ` (통솔 +${gained - amount})` : '';
+        const bonusText = gained !== amount ? ` (보너스 ${gained > amount ? '+' : ''}${gained - amount})` : '';
         addLog(`🎖️ [병과 경험치] ${unit.name} ${reason}: +${gained} XP${bonusText} (보유 ${unit.xp} XP)`, 'gold');
         // 경험치를 받을 때마다 승급할 수 있는 상태면 안내 (같은 유닛 창이 열려 있으면 내용만 갱신)
         const affordable = getAffordablePromotions(unit);
@@ -9205,6 +9479,8 @@
       } else if (!Array.isArray(unit.promotions)) {
         const legacyArr = [];
         if (unit.promotions.combatRank) {
+          // 4단계를 넘는 아카데미 진급 단계도 잃지 않도록 unit.combatRank에 보존한다.
+          unit.combatRank = Math.max(unit.combatRank || 0, Number(unit.promotions.combatRank) || 0);
           for (let i = 1; i <= Math.min(unit.promotions.combatRank, 4); i++) {
             legacyArr.push(`combat_${i}`);
           }
@@ -9282,49 +9558,118 @@
       return res;
     }
 
+    // 병과 승급 단계(전투 I~IV). 옛 형식({combatRank}) · 새 형식(승급 ID 배열 + unit.combatRank) 모두 읽는다.
+    function getCombatRank(unit) {
+      if (!unit) return 0;
+      const promos = unit.promotions;
+      if (promos && !Array.isArray(promos)) return Math.max(0, Number(promos.combatRank) || 0);
+      let rank = Math.max(0, Number(unit.combatRank) || 0);
+      if (Array.isArray(promos)) {
+        promos.forEach((id) => {
+          const m = /^combat_(\d+)$/.exec(String(id));
+          if (m) rank = Math.max(rank, Number(m[1]));
+        });
+      }
+      return rank;
+    }
+
+    // 승급 효과 합계. 같은 계열 승급(전투 I→II…)은 값이 누적 표기라 합산하지 않고 가장 높은 값만 쓴다.
+    const PROMOTION_EFFECT_KEYS = [
+      'cityAtkBonus', 'cityDefBonus', 'hillDefBonus', 'forestDefBonus',
+      'firstStrikes', 'counterBonus', 'retreatChance',
+      'movementHillBonus', 'movementForestBonus',
+      'healSelfPercent', 'healAdjacentPercent', 'healRange'
+    ];
+    function getPromotionEffectSummary(unit) {
+      const summary = { atkPercent: getCombatRank(unit) * 0.10 };
+      PROMOTION_EFFECT_KEYS.forEach((k) => { summary[k] = 0; });
+      const promoDataMap = window.PROMOTION_DATA || {};
+      getUnitPromotionIds(unit).forEach((id) => {
+        const effects = promoDataMap[id] && promoDataMap[id].effects;
+        if (!effects) return;
+        if (Number(effects.atkPercent) > summary.atkPercent) summary.atkPercent = Number(effects.atkPercent);
+        PROMOTION_EFFECT_KEYS.forEach((k) => {
+          if (Number(effects[k]) > summary[k]) summary[k] = Number(effects[k]);
+        });
+      });
+      return summary;
+    }
+
+    // 승급 효과가 참조하는 타일 분류 (도시/거점 · 언덕/산악 · 숲)
+    function getPromotionTileFlags(tile) {
+      const tileType = String((tile && (tile.terrain || tile.type)) || 'plain').toLowerCase();
+      const tileStructure = String((tile && tile.structure) || '').toLowerCase();
+      return {
+        tileType,
+        isCityTile: ['city', 'village'].includes(tileStructure) || ['city', 'base', 'headquarters', 'castle'].includes(tileType),
+        isHillTile: ['hill', 'mountain'].includes(tileType),
+        isForestTile: ['forest', 'jungle'].includes(tileType) || tileStructure === 'tree'
+      };
+    }
+
+    // 유닛이 이 타일에 들어갈 때 드는 AP. 게릴라 II(언덕/산악) · 삼림 전문 II(숲)는 1 줄여 준다 (최소 1).
+    function getUnitMoveCost(unit, tile) {
+      const base = MapSchema.getTileMoveCost(tile);
+      if (base <= 1 || !unit) return base;
+      const promo = getPromotionEffectSummary(unit);
+      const flags = getPromotionTileFlags(tile);
+      let reduction = 0;
+      if (flags.isHillTile) reduction = Math.max(reduction, promo.movementHillBonus);
+      if (flags.isForestTile) reduction = Math.max(reduction, promo.movementForestBonus);
+      return Math.max(1, base - reduction);
+    }
+
+    // 턴 종료 시 의무병 승급 회복: 본인은 healSelfPercent, 같은 타일·사거리 안 아군은 healAdjacentPercent (최대 HP 기준).
+    // 한 유닛이 여러 의무병 범위에 들어가도 가장 큰 회복 하나만 받는다.
+    function applyMedicHealing() {
+      const living = state.playerUnits.filter(u => !u.isDead);
+      const heals = new Map();
+      living.forEach((medic) => {
+        const promo = getPromotionEffectSummary(medic);
+        if (!(promo.healSelfPercent > 0) && !(promo.healAdjacentPercent > 0)) return;
+        const range = Math.max(1, promo.healRange);
+        living.forEach((ally) => {
+          let pct = 0;
+          if (ally === medic) pct = promo.healSelfPercent;
+          else if (Math.abs(ally.x - medic.x) + Math.abs(ally.y - medic.y) <= range) pct = promo.healAdjacentPercent;
+          if (pct > 0 && pct > (heals.get(ally)?.pct || 0)) heals.set(ally, { pct, medic });
+        });
+      });
+      heals.forEach(({ pct, medic }, unit) => {
+        const maxHp = Number(unit.maxHp) > 0 ? Number(unit.maxHp) : 100;
+        const before = unit.hp;
+        unit.hp = Math.min(maxHp, before + Math.max(1, Math.round(maxHp * pct)));
+        if (unit.stats) unit.stats.hp = unit.hp;
+        if (unit.hp > before) {
+          addLog(`🩹 [의무병 회복] ${unit === medic ? `${unit.name} 자가 치료` : `${medic.name} → ${unit.name}`}: HP +${unit.hp - before} (${unit.hp}/${maxHp})`, 'success');
+        }
+      });
+    }
+
     function calculateCombatModifiers(attacker, defender, commanderSkills) {
       const skills = commanderSkills || state?.commander?.unlockedSkills || {};
-      const promoDataMap = window.PROMOTION_DATA || {};
 
       const attackerPromos = getUnitPromotionIds(attacker);
       const defenderPromos = getUnitPromotionIds(defender);
 
       const targetTile = defender ? getTile(defender.x, defender.y) : null;
-      const tileType = String(targetTile?.terrain || targetTile?.type || 'plain').toLowerCase();
-      const tileStructure = String(targetTile?.structure || '').toLowerCase();
-      const isCityTile = ['city', 'village'].includes(tileStructure) || ['city', 'base', 'headquarters', 'castle'].includes(tileType);
-      const isHillTile = ['hill', 'mountain'].includes(tileType);
-      const isForestTile = ['forest', 'jungle'].includes(tileType) || tileStructure === 'tree';
+      const { tileType, isCityTile, isHillTile, isForestTile } = getPromotionTileFlags(targetTile);
 
-      let attackerAtkMultiplier = 1.0;
-      let attackerFirstStrikes = 0;
-      let attackerRetreatChance = 0.0;
+      // 같은 계열 승급은 누적 표기 값이라 합산하지 않고 최댓값만 쓴다 (getPromotionEffectSummary).
+      const atkPromo = getPromotionEffectSummary(attacker);
+      const defPromo = getPromotionEffectSummary(defender);
 
-      attackerPromos.forEach((pId) => {
-        const p = promoDataMap[pId];
-        if (!p || !p.effects) return;
-        if (p.effects.atkPercent) attackerAtkMultiplier += p.effects.atkPercent;
-        if (isCityTile && p.effects.cityAtkBonus) attackerAtkMultiplier += p.effects.cityAtkBonus;
-        if (p.effects.firstStrikes) attackerFirstStrikes = Math.max(attackerFirstStrikes, p.effects.firstStrikes);
-        if (p.effects.retreatChance) attackerRetreatChance = Math.max(attackerRetreatChance, p.effects.retreatChance);
-      });
+      let attackerAtkMultiplier = 1.0 + atkPromo.atkPercent + (isCityTile ? atkPromo.cityAtkBonus : 0);
+      let attackerFirstStrikes = atkPromo.firstStrikes;
+      let attackerRetreatChance = atkPromo.retreatChance;
 
-      let defenderDefMultiplier = 1.0;
-      let defenderFirstStrikes = 0;
-      let defenderCounterBonus = 0.0;
-      let defenderRetreatChance = 0.0;
-
-      defenderPromos.forEach((pId) => {
-        const p = promoDataMap[pId];
-        if (!p || !p.effects) return;
-        if (p.effects.atkPercent) defenderDefMultiplier += p.effects.atkPercent * 0.5;
-        if (isCityTile && p.effects.cityDefBonus) defenderDefMultiplier += p.effects.cityDefBonus;
-        if (isHillTile && p.effects.hillDefBonus) defenderDefMultiplier += p.effects.hillDefBonus;
-        if (isForestTile && p.effects.forestDefBonus) defenderDefMultiplier += p.effects.forestDefBonus;
-        if (p.effects.firstStrikes) defenderFirstStrikes = Math.max(defenderFirstStrikes, p.effects.firstStrikes);
-        if (p.effects.counterBonus) defenderCounterBonus += p.effects.counterBonus;
-        if (p.effects.retreatChance) defenderRetreatChance = Math.max(defenderRetreatChance, p.effects.retreatChance);
-      });
+      let defenderDefMultiplier = 1.0
+        + (isCityTile ? defPromo.cityDefBonus : 0)
+        + (isHillTile ? defPromo.hillDefBonus : 0)
+        + (isForestTile ? defPromo.forestDefBonus : 0);
+      let defenderFirstStrikes = defPromo.firstStrikes;
+      let defenderCounterBonus = defPromo.counterBonus;
+      let defenderRetreatChance = defPromo.retreatChance;
 
       if (defender.isGuarding || defender.stance === 'GUARD') {
         defenderDefMultiplier += (defender.guardBonusDef || 0.30);
@@ -9335,15 +9680,18 @@
       const calculatedAtk = effectiveAtk * attackerAtkMultiplier;
       const calculatedDef = effectiveDef * defenderDefMultiplier;
 
+      // 수비 측 승률: 실제 전투 승률 공식(getCombatOdds)과 같은 값을 쓴다
+      const oddsNow = getCombatOdds(attacker, defender);
       const totalPower = calculatedAtk + calculatedDef;
-      const defenderWinChance = totalPower > 0 ? (calculatedDef / totalPower) : 0.5;
+      const defenderWinChance = oddsNow ? 1 - oddsNow.P : (totalPower > 0 ? (calculatedDef / totalPower) : 0.5);
+      const defenderIsPlayer = isPlayerSideUnit(defender);
 
       const activeSynergies = [];
       let defenderRetreatHpRecovery = 0.0;
 
       // Synergy 1: Defender's Leader
       const hasDefendersLeader = !!(skills.DefendersLeader || skills.defendersLeader || skills["Defender's Leader"]);
-      if (hasDefendersLeader && defenderWinChance < 0.50) {
+      if (defenderIsPlayer && hasDefendersLeader && defenderWinChance < 0.50) {
         defenderFirstStrikes = Math.max(defenderFirstStrikes, 2);
         defenderCounterBonus += 0.20;
         activeSynergies.push({
@@ -9355,7 +9703,7 @@
 
       // Synergy 2: Tactical Retreat
       const hasTacticalRetreat = !!(skills.TacticalRetreat || skills.tacticalRetreat || skills["Tactical Retreat"]);
-      if (hasTacticalRetreat && defenderWinChance < 0.30) {
+      if (defenderIsPlayer && hasTacticalRetreat && defenderWinChance < 0.30) {
         defenderRetreatChance = Math.min(1.0, defenderRetreatChance + 0.20);
         defenderRetreatHpRecovery = 0.50;
         activeSynergies.push({
@@ -9846,8 +10194,8 @@
       const battleRewards = battle && Array.isArray(battle.rewards) ? battle.rewards : null;
       if (!battleRewards) console.warn('[Victory] state.currentBattle.rewards가 없어 표시용 기본값을 사용합니다.');
       const goldEarned = battleRewards
-        ? battleRewards.filter(r => r && r.type === 'gold').reduce((sum, r) => sum + scaleIncome(Number(r.amount) || 0), 0)
-        : scaleIncome(totalDefeatedCount * 100);
+        ? battleRewards.filter(r => r && r.type === 'gold').reduce((sum, r) => sum + scaleIncomeWithRelics(Number(r.amount) || 0), 0)
+        : scaleIncomeWithRelics(totalDefeatedCount * 100);
       const rewinderGranted = battleRewards
         ? battleRewards.some(r => r && r.type === 'rewinder' && Number(r.amount) > 0)
         : false;
@@ -10257,7 +10605,7 @@
         return { success: false, message: errorMsg, remainingGold: state.gold };
       }
 
-      const unitCost = scaleGold(template.cost); // 기준가 × 물가
+      const unitCost = scaleShopGold(template.cost); // 기준가 × 물가 × 유물 할인
       const townLevel = getTownLevel(safeTile);
       const safeTownName = safeTile?.name || '안전 거점';
       if (townLevel < template.reqTownLevel) {
@@ -11269,7 +11617,7 @@
     window.previewNode = previewNode;
 
     function describeRewards(rewards) {
-      return (rewards || []).map(r => r.type === 'gold' ? `${scaleIncome(r.amount)}G` : r.type === 'rewinder' ? `리와인더 ${r.amount}` : `${r.type} ${r.amount}`).join(' · ') || '없음';
+      return (rewards || []).map(r => r.type === 'gold' ? `${scaleIncomeWithRelics(r.amount)}G` : r.type === 'rewinder' ? `리와인더 ${r.amount}` : `${r.type} ${r.amount}`).join(' · ') || '없음';
     }
 
     // 전략맵 상세 패널: 선택한 노드의 예지/기시감 정보와 예지 카드 사용 버튼
@@ -11634,7 +11982,7 @@
     window.setRelicEquipped = setRelicEquipped;
 
     // ---- 선물 유물: 캐릭터에게 주면 그 캐릭터의 능력치가 영구히 오른다 (런이 끝나면 캐릭터와 함께 사라진다) ----
-    // 바로 능력치에 더하는 효과. 나머지 효과는 유물에 기록만 남는다 (아직 전투 공식에 없음).
+    // 바로 능력치에 더하는 효과. 크리티컬·회피·재생 같은 나머지는 캐릭터가 유물을 들고 있는 동안 전투에서 적용된다 (getRelicStatFor).
     const GIFT_RELIC_APPLIERS = {
       atk: (u, v) => { u.atk = Math.max(1, (Number(u.atk) || 0) + v); },
       def: (u, v) => { u.def = Math.max(0, (Number(u.def) || 0) + v); },
@@ -11649,6 +11997,12 @@
         u.favorability = u.affection;
       }
     };
+
+    // 지휘관 유물에서 실제로 적용되는 효과 (통솔력 · 능력치 · 전투/턴/보상 효과 전부)
+    function isCommanderRelicStatApplied(stat) {
+      return LEADERSHIP_RELIC_STATS.includes(stat) || RELIC_PASSIVE_STATS.includes(stat)
+        || RELIC_ARMY_STATS.includes(stat) || RELIC_GLOBAL_STATS.includes(stat);
+    }
 
     function isGiftEffectApplied(fx) {
       return !!(fx && GIFT_RELIC_APPLIERS[fx.stat]);
@@ -11682,6 +12036,7 @@
       (relic.effects || []).forEach(fx => {
         const value = Number(fx && fx.value) || 0;
         const apply = fx && GIFT_RELIC_APPLIERS[fx.stat];
+        if (fx && RELIC_PASSIVE_STATS.includes(fx.stat) && value) applied.push(`${relicStatText(fx)} (전투에서 적용)`);
         if (!apply || !value) return;
         apply(unit, value);
         applied.push(relicStatText(fx));
@@ -11777,6 +12132,13 @@
         acquiredAt: new Date().toISOString()
       };
       state.run.relics.push(entry);
+      // 지휘관 유물의 시공간 리와인더(rewinder): 얻는 즉시 한 번만 리와인더를 채워 준다
+      const rewinderGain = entry.kind === 'commander' ? Math.round(sumRelicEffects([entry], 'rewinder')) : 0;
+      if (rewinderGain > 0) {
+        state.rewinders = (Number(state.rewinders) || 0) + rewinderGain;
+        entry.rewinderGranted = rewinderGain;
+        addLog(`⏳ [유물] ${entry.name}: 리와인더 +${rewinderGain}개 (보유 ${state.rewinders})`, 'gold');
+      }
       // 지휘관 유물은 빈 슬롯이 있으면 바로 장착한다
       if (entry.kind === 'commander' && getEquippedCommanderRelics().length < COMMANDER_RELIC_SLOTS) {
         state.run.equippedRelics = [...getEquippedCommanderRelics().map(r => r.instanceId), entry.instanceId];
@@ -11845,7 +12207,7 @@
       const kindLabel = relic.kind === 'gift' ? '선물' : '지휘관';
       const effects = (relic.effects || []).map(fx => {
         // 지휘관 유물: 장착 중인 통솔력 효과만 적용 / 선물 유물: 선물하면 바로 오르는 능력치인지 표시
-        const works = relic.kind === 'gift' ? isGiftEffectApplied(fx) : LEADERSHIP_RELIC_STATS.includes(fx.stat);
+        const works = relic.kind === 'gift' ? (isGiftEffectApplied(fx) || RELIC_PASSIVE_STATS.includes(fx.stat)) : isCommanderRelicStatApplied(fx.stat);
         const active = relic.kind === 'commander' && works && opts.equipped;
         const tag = active ? ' <b>적용 중</b>' : (works ? '' : ' <small>준비 중</small>');
         return `<li class="relic-fx${active ? ' active' : ''}">${escapeGachaHtml(relicStatText(fx))}${tag}</li>`;
@@ -11954,6 +12316,9 @@
 
       // 2-1) 스킬: 전투 중 상태이상/쿨다운 초기화 (스킬 해금권은 기억 계승으로만 얻는다)
       cancelSkillTargeting(true);
+      // 유물: 승리하면 전투 후 회복·승리 SP·호감도, 끝나면 전투 동안 얹은 이동력 보정을 걷는다
+      if (victory) applyRelicVictoryRewards();
+      removeRelicBattleBonuses();
       (state.playerUnits || []).forEach(u => {
         if (window.SkillEngine) SkillEngine.resetBattleState(u);
       });
@@ -11961,7 +12326,7 @@
       // 3) 보상 지급 (승리 시에만, 전투 진입 때 seed로 정해 둔 battle.rewards 그대로)
       const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];
       // 골드는 전투 하나당 한 번만 청구한다 (서버가 같은 전투 id 로 두 번 받지 못하게 막는다)
-      const goldReward = rewards.filter(r => r.type === 'gold').reduce((sum, r) => sum + scaleIncome(Number(r.amount) || 0), 0);
+      const goldReward = rewards.filter(r => r.type === 'gold').reduce((sum, r) => sum + scaleIncomeWithRelics(Number(r.amount) || 0), 0);
       if (goldReward > 0) Wallet.earn('earn_reward', goldReward, `${Number(state.player && state.player.loopCount) || 0}:${battle.id}`);
       rewards.forEach(r => {
         if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
@@ -12005,7 +12370,7 @@
       // 6) 로그
       const secLabel = `${battle.sectorId}`;
       if (victory) {
-        const rewardText = rewards.map(r => r.type === 'gold' ? `+${scaleIncome(r.amount)}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
+        const rewardText = rewards.map(r => r.type === 'gold' ? `+${scaleIncomeWithRelics(r.amount)}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
         addLog(`🚩 [작전 완수] ${battle.nodeId} (${secLabel}) 클리어 — 보상: ${rewardText || '없음'} · 다음 노드: ${unlockedNodes.join(', ') || '없음'}`, 'gold');
         if (casualties.length) addLog(`🕯️ [사상자] ${casualties.map(c => c.name).join(', ')}`, 'warning');
         if (secured) {
