@@ -16,6 +16,8 @@
 //   무주 지분부터 사고, 모자라면 다른 보유자 지분을 비율대로 사 온다(보유자 몫은 할증 가격, 대금은 보유자에게).
 // 세금: 서버 시각 기준 고정 주기(8h → 보유 플레이어가 늘면 4h → 1h)의 경계마다 지분율대로 지급.
 //   시간당 세수는 주기와 무관하게 같다 (주기가 짧아지면 자주, 조금씩 받는다).
+//   세수는 국가마다 다르다: (base + 위협도 × perThreat) × 국가 세율(region.taxMult). 받을 때 물가(인플레이션)가 곱해진다.
+// 유물: 정산 때마다 그 국가 지분 1위가 아닌 보유자에게 확률로 유물이 나온다. 종류·등급 분포는 국가 성향(RELIC_PROFILES)이 정한다.
 // ============================================================
 
 (function (global) {
@@ -41,10 +43,24 @@
       { minHolders: 10, hours: 4 },
       { minHolders: 0, hours: 8 }
     ],
+    // 지분 1위가 아닌 보유자가 정산 1회마다 유물을 받을 확률 = base + 위협도 × perThreat (국가별)
+    relicChanceBase: 0.2,
+    relicChancePerThreat: 0.04,
+    maxRelicsPerPayout: 5,   // 오래 접속하지 않아 한꺼번에 정산해도 한 번에 받는 유물 수 상한
     // 처음 만드는 국가에 섞어 넣는 더미 플레이어
     dummyCount: [2, 4],
     dummyTotalBp: [3000, 7000]
   };
+
+  // 국가 성향별 유물 분포: kind = 선물/지휘관 가중치, rarity = 등급 가중치 (campaignRegions.js의 region.relicProfile)
+  const RELIC_PROFILES = {
+    frontier: { label: '변경 · 보급품',   kind: { gift: 100, commander: 0 },  rarity: { common: 90, rare: 10, epic: 0, legendary: 0 } },
+    merchant: { label: '상업 · 선물 위주', kind: { gift: 80, commander: 20 },  rarity: { common: 50, rare: 40, epic: 10, legendary: 0 } },
+    tribal:   { label: '부족 · 균형',     kind: { gift: 60, commander: 40 },  rarity: { common: 55, rare: 35, epic: 9, legendary: 1 } },
+    martial:  { label: '군사 · 지휘관 위주', kind: { gift: 30, commander: 70 }, rarity: { common: 30, rare: 45, epic: 22, legendary: 3 } },
+    mystic:   { label: '신비 · 고등급',   kind: { gift: 40, commander: 60 },  rarity: { common: 5, rare: 25, epic: 50, legendary: 20 } }
+  };
+  const DEFAULT_RELIC_PROFILE = 'tribal';
 
   const DUMMY_NAMES = [
     '철혈백작', 'Lumi_K', '금저울상단', 'Guest_4821', '붉은매용병단', 'Arden', '북부곡물왕',
@@ -122,7 +138,8 @@
   // ---- 세수 / 주기 ----
   function taxPerHour(region) {
     const threat = Number(region && region.threat) || 1;
-    return CONFIG.taxPerHourBase + threat * CONFIG.taxPerHourPerThreat;
+    const mult = Number(region && region.taxMult);
+    return (CONFIG.taxPerHourBase + threat * CONFIG.taxPerHourPerThreat) * (mult > 0 ? mult : 1);
   }
   function taxPerSettlement(region, hours) {
     return taxPerHour(region) * hours;
@@ -172,6 +189,61 @@
       });
     }
     return { count, total, byRegion, settledUntil: count > 0 ? lastSettlementAt(toMs, hours) : fromMs };
+  }
+
+  // ---- 유물 보상 (지분 1위 제외) ----
+  function relicProfile(region) {
+    return RELIC_PROFILES[region && region.relicProfile] || RELIC_PROFILES[DEFAULT_RELIC_PROFILE];
+  }
+  // 이 국가에서 holderId가 지분 1위인가? (다른 누구보다 많거나 같으면 1위로 본다 — 동률은 1위 취급)
+  function isTopHolder(nation, holderId) {
+    const mine = holderBp(nation, holderId);
+    if (!(mine > 0)) return false;
+    return !Object.entries((nation && nation.holders) || {}).some(([id, h]) => id !== holderId && (Number(h.bp) || 0) > mine);
+  }
+  function relicChance(region) {
+    const threat = Number(region && region.threat) || 1;
+    return Math.min(1, CONFIG.relicChanceBase + threat * CONFIG.relicChancePerThreat);
+  }
+  /** 국가 성향에 맞춰 유물 하나를 고른다. relics: 정의 배열 [{ id, kind, rarity }]. 후보가 없으면 null. */
+  function pickRelic(relics, region, rand = Math.random, excludeIds) {
+    const p = relicProfile(region);
+    const skip = new Set(excludeIds || []);
+    const pool = [];
+    let sum = 0;
+    (relics || []).forEach((d) => {
+      if (!d || skip.has(String(d.id))) return;
+      const w = (Number(p.kind[d.kind]) || 0) * (Number(p.rarity[d.rarity]) || 0);
+      if (w > 0) { pool.push([d, w]); sum += w; }
+    });
+    if (!pool.length) return null;
+    let x = rand() * sum;
+    for (const [d, w] of pool) { x -= w; if (x < 0) return d; }
+    return pool[pool.length - 1][0];
+  }
+  /**
+   * 정산 count회 동안 holderId가 받을 유물 목록 [{ regionId, relic }]. 지분을 가졌지만 1위가 아닌 국가마다 정산 1회당 확률로 굴린다.
+   * @param regionIds 지분에서 세금을 받은 국가 (없으면 보유 국가 전부)
+   */
+  function rollTaxRelics({ nations, regions, holderId, count, relics, regionIds, ownedCommanderIds, rand = Math.random }) {
+    const out = [];
+    const owned = new Set(ownedCommanderIds || []);
+    const only = regionIds ? new Set(regionIds) : null;
+    (nations || []).forEach((n) => {
+      if (out.length >= CONFIG.maxRelicsPerPayout) return;
+      if (only && !only.has(n.regionId)) return;
+      if (!(holderBp(n, holderId) > 0) || isTopHolder(n, holderId)) return;
+      const region = regions[n.regionId];
+      const chance = relicChance(region);
+      for (let i = 0; i < count && out.length < CONFIG.maxRelicsPerPayout; i++) {
+        if (rand() >= chance) continue;
+        const d = pickRelic(relics, region, rand, [...owned]);
+        if (!d) break;
+        if (d.kind === 'commander') owned.add(String(d.id));
+        out.push({ regionId: n.regionId, relic: d });
+      }
+    });
+    return out;
   }
 
   // ---- 구매 ----
@@ -260,10 +332,11 @@
   }
 
   global.ShareEngine = {
-    TOTAL_BP, CONFIG, DUMMY_NAMES,
+    TOTAL_BP, CONFIG, DUMMY_NAMES, RELIC_PROFILES,
     createNation, splitBp, holderBp, unownedBp, listHolders,
     taxPerHour, taxPerSettlement, countRealHolders, intervalHours,
     lastSettlementAt, nextSettlementAt, settlementsBetween, computePayout,
+    relicProfile, isTopHolder, relicChance, pickRelic, rollTaxRelics,
     pricePerBp, quotePurchase, applyPurchase, releaseHolder, isStale, claimPayout
   };
 })(typeof window !== 'undefined' ? window : globalThis);

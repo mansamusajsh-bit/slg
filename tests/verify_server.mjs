@@ -23,6 +23,7 @@ const rejects = async (fn, m, re) => { try { await fn(); ok(false, `${m} (예외
 // JS 엔진 (같은 식인지 대조하기 위해)
 const ctx = { console }; ctx.window = ctx; ctx.globalThis = ctx; vm.createContext(ctx);
 for (const f of ['fedEngine.js', 'shareEngine.js']) vm.runInContext(readFileSync(join(ROOT, f), 'utf8'), ctx, { filename: f });
+const rc0 = (() => { const c = {}; vm.createContext(c); vm.runInContext(readFileSync(join(ROOT, 'campaignRegions.js'), 'utf8') + '\n;this.R=REGIONS;', c); return c.R; })(); // 구역별 세율 등 정적 데이터
 const FE = ctx.FedEngine, SE = ctx.ShareEngine;
 
 const H = 3600 * 1000;
@@ -43,12 +44,12 @@ await s.at(T0 + 3 * H);
 
 // ------------------------------------------------------------ 스키마
 {
-  const regions = await s.q('select region_id, threat, neighbors, is_start from slg_regions order by region_id');
+  const regions = await s.q('select region_id, threat, neighbors, is_start, tax_mult::float8 as tax_mult from slg_regions order by region_id');
   const rc = {}; vm.createContext(rc);
   vm.runInContext(readFileSync(join(ROOT, 'campaignRegions.js'), 'utf8') + '\n;this.R=REGIONS;this.M=CAMPAIGN_MAP;', rc);
-  const expect = Object.values(rc.R).map((r) => ({ region_id: r.id, threat: r.threat, neighbors: r.neighbors, is_start: r.id === rc.M.startRegionId }))
+  const expect = Object.values(rc.R).map((r) => ({ region_id: r.id, threat: r.threat, neighbors: r.neighbors, is_start: r.id === rc.M.startRegionId, tax_mult: r.taxMult }))
     .sort((a, b) => a.region_id.localeCompare(b.region_id));
-  eq(regions, expect, '서버 구역 시드(위협도·이웃·시작지)가 campaignRegions.js 와 같다');
+  eq(regions, expect, '서버 구역 시드(위협도·이웃·시작지·세율)가 campaignRegions.js 와 같다');
   const sql = readFileSync(join(ROOT, 'supabase-economy.sql'), 'utf8');
   let again = true; try { await s.db.exec(sql); } catch (e) { again = false; console.log(e.message); }
   ok(again, 'SQL 을 다시 실행해도 안전하다 (idempotent)');
@@ -237,7 +238,7 @@ const buy = (w, r, bp) => s.rpc('slg_share_buy', [r, bp], w);
   // JS 견적과 같은 식인가 (같은 보유 구성을 JS 에 넣어 비교)
   const snap = await sync('a');
   const nj = snap.nations.mira;
-  const jsQuote = SE.quotePurchase({ holders: nj.holders }, { threat: 2 }, 'zz', 1500, snap.fed.price);
+  const jsQuote = SE.quotePurchase({ holders: nj.holders }, { threat: 2, taxMult: rc0.mira.taxMult }, 'zz', 1500, snap.fed.price);
   const srvQuote = await q1("select slg_share_quote('mira', 'zz', 1500, $1) q", [snap.fed.price]);
   ok(srvQuote.q.cost === jsQuote.cost && srvQuote.q.bp === jsQuote.bp, `서버 견적이 shareEngine.js 견적과 같다 (${srvQuote.q.cost}G / ${jsQuote.cost}G)`);
   // 다른 플레이어에게서 사 오기: b 가 liona 를 점령하고 a 의 지분을 산다
@@ -259,7 +260,7 @@ const buy = (w, r, bp) => s.rpc('slg_share_buy', [r, bp], w);
   const tax = snap2.events.find((e) => e.kind === 'tax');
   ok(tax && tax.payload.hours === 8 && tax.payload.count === 1, '정산 주기가 지나면 세금 이벤트가 온다');
   const price = snap2.fed.price;
-  ok(tax && Math.abs(tax.payload.byRegion.liona - Math.round(Math.floor(300 * mine / 10000) * price)) <= 1, `세금 = 8시간 세수 × 지분율 × 물가 (${tax && tax.payload.byRegion.liona}G)`);
+  ok(tax && Math.abs(tax.payload.byRegion.liona - Math.round(Math.floor(300 * rc0.liona.taxMult * mine / 10000) * price)) <= 1, `세금 = 8시간 세수 × 지분율 × 물가 (${tax && tax.payload.byRegion.liona}G)`);
   ok((await gold('a')) > g0, '세금이 지갑에 들어온다');
   const g1 = await gold('a');
   await sync('a');

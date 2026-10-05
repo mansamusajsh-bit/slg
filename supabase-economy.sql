@@ -52,8 +52,10 @@ create table if not exists public.slg_regions (
   region_id text primary key,
   threat int not null,
   neighbors text[] not null,
-  is_start boolean not null default false
+  is_start boolean not null default false,
+  tax_mult numeric not null default 1      -- 국가별 세수 배율 (campaignRegions.js 의 taxMult)
 );
+alter table public.slg_regions add column if not exists tax_mult numeric not null default 1;
 
 insert into public.slg_regions (region_id, threat, neighbors, is_start) values
   ('liona', 1, array['mira', 'vaska'], true),
@@ -73,6 +75,11 @@ insert into public.slg_regions (region_id, threat, neighbors, is_start) values
   ('arca', 4, array['ara', 'naru', 'savo', 'torva'], false),
   ('mor', 6, array['silva', 'valen'], false)
 on conflict (region_id) do update set threat = excluded.threat, neighbors = excluded.neighbors, is_start = excluded.is_start;
+
+update public.slg_regions r set tax_mult = v.m from (values
+  ('liona', 0.8), ('mira', 1.3), ('vaska', 0.9), ('oria', 1.6), ('luma', 0.8), ('tino', 1.0), ('rokan', 1.1), ('savo', 1.2),
+  ('torva', 1.0), ('ara', 1.0), ('elda', 1.2), ('naru', 1.4), ('silva', 0.9), ('valen', 1.5), ('arca', 1.1), ('mor', 1.5)
+) as v(id, m) where r.region_id = v.id;
 
 -- ---------------------------------------------------------------- 플레이어 · 지갑
 create table if not exists public.slg_players (
@@ -614,7 +621,7 @@ end $$;
 
 create or replace function public.slg_tax_per_settlement(p_region text, p_hours numeric) returns numeric
 language sql stable set search_path = public as $$
-  select (slg_cfg('tax_base') + r.threat * slg_cfg('tax_per_threat')) * p_hours from slg_regions r where r.region_id = p_region
+  select (slg_cfg('tax_base') + r.threat * slg_cfg('tax_per_threat')) * r.tax_mult * p_hours from slg_regions r where r.region_id = p_region
 $$;
 
 -- 지분을 가진 (더미 · 이전 회차 제외) 플레이어 수에 따른 정산 주기 (시간)

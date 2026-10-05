@@ -225,7 +225,39 @@
       log(`🏛️ [세금 정산] ${hours}시간 주기 ${res.count}회분 +${res.total}G (${detail})`);
       toast(`🏛️ 세금 정산 +${res.total}G`, 'success');
     }
+    awardTaxRelics(Object.keys(res.byRegion), res.count);
     return res;
+  }
+
+  // 정산 때 지분 1위가 아닌 국가에서 유물을 받는다 (종류·등급은 국가 성향). 서버 모드에서는 'tax' 이벤트가 불러 준다.
+  async function awardTaxRelics(regionIds, count) {
+    if (typeof global.ensureRewardDataLoaded !== 'function' || typeof global.grantRelic !== 'function') return [];
+    const who = me();
+    if (!who || !(count > 0) || !state || !state.run) return [];
+    try {
+      const data = await global.ensureRewardDataLoaded();
+      if (!data) return [];
+      const owned = Array.isArray(state.run.relics) ? state.run.relics : [];
+      const rolled = SE.rollTaxRelics({
+        nations: nationList(), regions: REGIONS, holderId: who.id, count, regionIds,
+        relics: [...data.relics.values()],
+        ownedCommanderIds: owned.filter((r) => r.kind === 'commander').map((r) => r.id)
+      });
+      const granted = [];
+      rolled.forEach(({ regionId, relic }) => {
+        const e = global.grantRelic(relic.id, { type: 'tax', regionId });
+        if (e) { granted.push(e); log(`🏛️ [세금 유물] ${regionTitle(regionId)}(지분 1위 아님)에서 ${e.name} 수령`); }
+      });
+      if (granted.length) {
+        toast(`💎 세금 유물: ${granted.map((r) => r.name).join(', ')}`, 'success');
+        if (typeof saveGameState === 'function') saveGameState(true);
+        if (typeof renderAll === 'function') renderAll();
+      }
+      return granted;
+    } catch (e) {
+      console.warn('[NationShares] 세금 유물 지급 실패', e);
+      return [];
+    }
   }
 
   // ---- 게임 이벤트 ----
@@ -395,7 +427,7 @@
   }
 
   global.NationShares = {
-    refresh, settle, buy, quote, maxAffordableBp, view, serverNow,
+    refresh, settle, buy, quote, awardTaxRelics, maxAffordableBp, view, serverNow,
     onRegionSecured, onReturnByDeath,
     _nations: nations
   };

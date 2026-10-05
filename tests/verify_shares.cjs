@@ -62,4 +62,25 @@ const expA=Math.floor(400*n3.holders.p1.bp/10000*2), expB=Math.floor(600*0.5*2);
 ok(pay.count===2&&pay.byRegion.a===expA&&pay.byRegion.b===expB&&pay.total===expA+expB,'지분율대로 세금: '+JSON.stringify(pay.byRegion));
 ok(pay.settledUntil===Date.UTC(2026,0,1,16),'정산 기록은 마지막 정산 시각까지');
 
+// 국가별 세율
+ok(S.taxPerSettlement({threat:2,taxMult:1.5},8)===600&&S.taxPerSettlement({threat:2,taxMult:0.5},8)===200,'국가 세율(taxMult)이 세수에 곱해진다');
+ok(S.taxPerSettlement({threat:2},8)===400,'taxMult가 없으면 1배');
+// 유물: 지분 1위 제외 + 국가 성향
+const nr={holders:{x:{name:'x',bp:4000},me:{name:'me',bp:3000},y:{name:'y',bp:3000}}};
+ok(S.isTopHolder(nr,'x')&&!S.isTopHolder(nr,'me')&&!S.isTopHolder(nr,'none'),'지분 1위 판정');
+const defs=[];
+['gift','commander'].forEach(k=>['common','rare','epic','legendary'].forEach(r=>defs.push({id:k+'_'+r,kind:k,rarity:r})));
+const always=()=>0;
+let got=S.rollTaxRelics({nations:[Object.assign({regionId:'a'},nr)],regions:REG,holderId:'x',count:3,relics:defs,rand:always});
+ok(got.length===0,'1위는 유물을 받지 못함');
+got=S.rollTaxRelics({nations:[Object.assign({regionId:'a'},nr)],regions:REG,holderId:'me',count:3,relics:defs,rand:always});
+ok(got.length===3,'1위가 아니면 정산 횟수만큼 굴려 받음');
+ok(S.rollTaxRelics({nations:[Object.assign({regionId:'a'},nr)],regions:REG,holderId:'me',count:3,relics:defs,rand:()=>0.99}).length===0,'확률에 실패하면 없음');
+ok(S.rollTaxRelics({nations:[Object.assign({regionId:'a'},nr)],regions:REG,holderId:'me',count:99,relics:defs,rand:always}).length===S.CONFIG.maxRelicsPerPayout,'한 번에 받는 유물 수 상한');
+let seen={};for(let i=0;i<400;i++){const d=S.pickRelic(defs,{relicProfile:'frontier'});seen[d.id]=1;}
+ok(Object.keys(seen).every(id=>/^gift_(common|rare)$/.test(id)),'변경(frontier)은 일반·희귀 선물만: '+Object.keys(seen));
+seen={};for(let i=0;i<2000;i++){const d=S.pickRelic(defs,{relicProfile:'mystic'});seen[d.id]=1;}
+ok(seen.commander_legendary&&seen.gift_legendary,'신비(mystic)는 전설까지 나온다');
+ok(S.pickRelic(defs,{relicProfile:'martial'},()=>0,defs.map(d=>d.id))===null,'제외 목록이면 후보 없음');
+
 process.exit(fail?1:0);

@@ -242,6 +242,10 @@
       max = Math.max(max, e.id);
       const t = eventText(e);
       if (t) { log(t[0], t[1]); if (t[2]) toast(t[2], t[3]); }
+      if (e.kind === 'tax' && global.NationShares && global.NationShares.awardTaxRelics) {
+        const p = e.payload || {};
+        global.NationShares.awardTaxRelics(Object.keys(p.byRegion || {}), Number(p.count) || 0);
+      }
     });
     lastEventId = max;
     ackEvents = Math.max(ackEvents, max);

@@ -138,8 +138,8 @@
     const vars = { adjutant: adjutant.name };
     if (campaign.cleared) return pickLine('cleared', 'end', vars, adjutant);
 
-    if (selectedRegionId && REGIONS[selectedRegionId]) {
-      const r = REGIONS[selectedRegionId];
+    if (selectedRegionId && sel) {
+      const r = sel;
       Object.assign(vars, {
         region: r.name.ko, title: r.title.ko, threat: r.threat,
         desc: (r.description.ko || '').replace(/[.。]\s*$/, '')
@@ -281,7 +281,7 @@
       }
       body = `
         <div class="cmp-share-region">
-          <div class="cmp-share-sub"><b>${esc(sel.title.ko)}</b><span>세수 ${n.taxPerSettlement}G / 정산</span><span>내 지분 <b class="cmp-share-mine">${fmtPct(n.mine)}</b></span></div>
+          <div class="cmp-share-sub"><b>${esc(sel.title.ko)}</b><span>세수 ${n.taxPerSettlement}G / 정산 (세율 ×${Number(sel.taxMult || 1).toFixed(1)})</span><span title="지분 1위가 아닌 보유자에게 정산 때 확률로 지급">유물: ${esc(NS && global.ShareEngine ? global.ShareEngine.relicProfile(sel).label : '')}</span><span>내 지분 <b class="cmp-share-mine">${fmtPct(n.mine)}</b></span></div>
           <div class="cmp-share-bar">${bar}</div>
           <ul class="cmp-share-list">${rows}</ul>
           ${buy}
@@ -327,12 +327,12 @@
     if (!root || !run || !run.campaign || typeof REGIONS === 'undefined') return;
     const campaign = run.campaign;
     const adjutant = getAdjutantUnit(run);
-    if (selectedRegionId && !REGIONS[selectedRegionId]) selectedRegionId = null;
+    if (selectedRegionId && !sel) selectedRegionId = null;
 
     const securedCount = Object.values(campaign.regions).filter((r) => r.status === 'secured').length;
     const total = Object.keys(REGIONS).length;
     const loop = Number(state.player && state.player.loopCount) || 0;
-    const sel = selectedRegionId ? REGIONS[selectedRegionId] : null;
+    const sel = selectedRegionId ? sel : null;
     const selStatus = sel ? regionStatus(campaign, sel.id) : null;
 
     // 하단 액션 바 (전략맵의 "작전 개시 (출격)" 바와 같은 모양)
