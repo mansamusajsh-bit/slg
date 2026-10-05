@@ -559,8 +559,8 @@
   function generateEncounterRewards(seed, ctx = {}) {
     const rng = new SeededRandom(`${seed}|rewards`);
     const enemyCount = Math.max(1, Number(ctx.enemyCount) || 0);
-    // 11단계: 노드 타입에 따른 보상 배율. 정예 x1.5, 보스 x2 (일반 전투는 기존 공식 그대로 적 수 x 100).
-    const goldMultiplier = ctx.type === 'boss' ? 2 : ctx.type === 'elite' ? 1.5 : 1;
+    // 11단계: 노드 타입에 따른 보상 배율. 정예 x1.5, 보스 x10 = 적 수 x 1000 (일반 전투는 기존 공식 그대로 적 수 x 100).
+    const goldMultiplier = ctx.type === 'boss' ? 10 : ctx.type === 'elite' ? 1.5 : 1;
     const rewards = [{ type: 'gold', amount: Math.round(enemyCount * 100 * goldMultiplier) }];
     // 난수는 결과와 무관하게 항상 1번 소비한다 (뒤에 보상 종류가 늘어나도 앞쪽 결과가 흔들리지 않게).
     const rewinderRoll = rng.next();

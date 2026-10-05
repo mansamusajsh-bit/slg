@@ -983,10 +983,10 @@
     return best && best.score >= 15 ? best : null;
   }
 
-  /** 적 유닛이 쓸 수 있는 스킬: 레벨에 따라 트리 상위 계층까지 습득한 것으로 간주 */
+  /** 적 유닛이 쓸 수 있는 스킬: 레벨에 따라 트리 상위 계층까지 습득한 것으로 간주 (보스는 전부 습득) */
   function prepareEnemySkills(unit) {
     ensureUnitSkillState(unit);
-    const maxTier = Math.min(4, 1 + Math.floor((num(unit.level, 1) - 1) / 2));
+    const maxTier = unit.masterAllSkills ? Infinity : Math.min(4, 1 + Math.floor((num(unit.level, 1) - 1) / 2));
     unit.learnedSkills = unit.skillTree.filter(n => n && num(n.tier, 1) <= maxTier).map(n => n.id);
     return unit;
   }

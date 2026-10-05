@@ -3995,7 +3995,7 @@
     const ENEMY_NODE_TYPE_SCALE = {
       battle: { levelBonus: 0, mult: 1.0 },
       elite: { levelBonus: 1, mult: 1.1 },
-      boss: { levelBonus: 1, mult: 1.25 }
+      boss: { levelBonus: 3, mult: 1.25, apBonus: 3, masterSkills: true } // 보스는 소수 정예 + 행동력(AP) 보너스
     };
 
     // 캐릭터 풀이 아직 로드되지 않았다면(전투를 너무 일찍 시작한 경우) 한 번 불러온다.
@@ -4045,6 +4045,8 @@
           hpMult: prof.hp,
           atkMult: prof.atk,
           defMult: prof.def,
+          apBonus: typ.apBonus || 0,
+          masterSkills: !!typ.masterSkills,
           fullHp: true
         }));
     }
@@ -4099,7 +4101,7 @@
     // ------------------------------------------------------------------------
     // 적 인원: 섹터 진행도에 따라 늘어난다 (오차 1명).
     //   섹터 순서 = 런 지도와 같은 난이도순(RunEngine.sortSectorIds). 첫 섹터 일반 전투 2~3명,
-    //   다음 섹터마다 +1명, 정예·보스는 +1명. 템플릿 적 스폰이 모자라면 생성기가 스폰 옆 빈 칸을 더 쓴다.
+    //   다음 섹터마다 +1명, 정예는 +1명 (보스는 항상 1~2명). 템플릿 적 스폰이 모자라면 생성기가 스폰 옆 빈 칸을 더 쓴다.
     //   에디터에서 적을 직접 배치한 맵(고정 전투)은 이 규칙을 따르지 않고 배치한 그대로 나온다.
     // ------------------------------------------------------------------------
     const ENEMY_COUNT_RULE = { base: 2, perSector: 1, spread: 1, max: 10, typeBonus: { battle: 0, elite: 1, boss: 1 } };
@@ -4113,6 +4115,8 @@
     /** @returns {[number, number]} 이 노드 전투의 적 인원 [최소, 최대] */
     function getEnemyCountRange(node) {
       const r = ENEMY_COUNT_RULE;
+      // 보스전: 1~2명만 나온다 (대신 스탯 배율·AP 보너스가 붙는다)
+      if (node && node.type === 'boss') return [1, 2];
       // 적 최대 출전 수 = 플레이어 최대 출전 수(통솔력) - 1
       const cap = Math.max(1, Math.min(r.max, getLeadership() - 1));
       const countBonus = getRegionEnemyProfile(node && node.regionId).count; // 국가 특색 (수가 많은/적은 나라)
@@ -4183,7 +4187,7 @@
 
     // ------------------------------------------------------------------------
     // 클리어 보상: WORLD_SECTORS의 고정 문구(clearReward) 대신 실제 지급 규칙으로 만든다.
-    //   골드 = 적 수 × 100 × (정예 1.5 / 보스 2)  (MapSchema.generateEncounterRewards)
+    //   골드 = 적 수 × 100 × (정예 1.5 / 보스 10)  (MapSchema.generateEncounterRewards)
     //   리와인더 = 보스 확정, 그 외 50%
     //   유물 = 보상 풀 `${섹터}-battle|elite|boss-relic`이 있을 때 (보스는 3개 중 1개 선택)
     //   예지/기억으로 아는 노드는 이번 전장의 정확한 보상을 보여 준다.
@@ -4204,7 +4208,7 @@
         const template = await loadEnemyIntelTemplate(getNodeTemplateId(node, sector));
         const manual = getTemplateManualEnemies(template);
         const [min, max] = manual.length ? [manual.length, manual.length] : getEnemyCountRange(node);
-        const mult = node.type === 'boss' ? 2 : node.type === 'elite' ? 1.5 : 1;
+        const mult = node.type === 'boss' ? 10 : node.type === 'elite' ? 1.5 : 1;
         const gMin = Math.round(Math.max(1, min) * 100 * mult);
         const gMax = Math.round(Math.max(1, max) * 100 * mult);
         parts.push(gMin === gMax ? `${gMin}G` : `${gMin}~${gMax}G`);
@@ -6760,7 +6764,7 @@
       const hp = o.fullHp ? maxHp : scale(baseStats.hp || 100, hpMult);
       const atk = scale(baseStats.atk || 40, atkMult);
       const def = scale(baseStats.def || 30, defMult);
-      const ap = Number(baseStats.mobility) || 2;
+      const ap = (Number(baseStats.mobility) || 2) + (Number(o.apBonus) || 0);
       const stats = clone(baseStats);
       if (mult !== 1 || hpMult !== 1 || atkMult !== 1 || defMult !== 1) Object.assign(stats, { hp, maxHp, atk, def });
       return {
@@ -6798,7 +6802,8 @@
         skillPoints: (o.owner || 'PLAYER') === 'ENEMY' ? 0 : (Number(target.initialSkillPoints) >= 0 ? Number(target.initialSkillPoints) : 0),
         skillUnlockMode: 'absorb',
         skillCooldowns: {},
-        statuses: []
+        statuses: [],
+        masterAllSkills: !!o.masterSkills // 보스: 스킬트리 전부 습득 (SkillEngine.prepareEnemySkills)
       };
     }
 
