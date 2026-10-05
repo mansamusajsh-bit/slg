@@ -380,11 +380,12 @@
         commander.exp -= commander.maxExp;
         commander.level += 1;
         commander.maxExp = Math.round(commander.maxExp * 1.4);
-        commander.skillPoints = (commander.skillPoints || 0) + 1;
+        const spGain = commander.level % 3 === 0 ? 1 : 0; // 3레벨마다 스킬 선택권 +1
+        commander.skillPoints = (commander.skillPoints || 0) + spGain;
         const leadershipAfter = getLeadership();
         const leadershipText = leadershipAfter > leadershipBefore ? ` · 통솔력 ${leadershipBefore} → ${leadershipAfter}부대` : '';
-        addLog(`👑 지휘관 레벨업! Lv.${commander.level} — 스킬 선택권 +1${leadershipText}`, 'gold');
-        noticeLines.push(`Lv.${commander.level} 달성 — 스킬 선택권 +1`);
+        addLog(`👑 지휘관 레벨업! Lv.${commander.level}${spGain ? ' — 스킬 선택권 +1' : ''}${leadershipText}`, 'gold');
+        noticeLines.push(`Lv.${commander.level} 달성${spGain ? ' — 스킬 선택권 +1' : ''}`);
         if (leadershipAfter > leadershipBefore) noticeLines.push(`통솔력 ${leadershipBefore} → ${leadershipAfter}부대`);
       }
       if (noticeLines.length) {
@@ -470,13 +471,30 @@
       });
     }
 
+    // 지휘관 이름을 직접 입력받는다. first=true 면 취소할 수 없고(기본 이름 유지) 입력할 때까지 묻는다.
+    function promptCommanderName(first) {
+      if (!state.commander || typeof window.prompt !== 'function') return;
+      const cur = state.commander.name || '';
+      const input = window.prompt(first ? '지휘관 이름을 입력하세요 (최대 12자)' : '새 지휘관 이름을 입력하세요 (최대 12자)', first ? '' : cur);
+      const name = String(input || '').trim().slice(0, 12);
+      if (!name) {
+        if (first) state.commander.nameSet = false; // 취소하면 다음 로그인 때 다시 묻는다
+        return;
+      }
+      state.commander.name = name;
+      state.commander.nameSet = true;
+      saveGameState(true);
+      renderAll();
+    }
+    window.promptCommanderName = promptCommanderName;
+
     function createInitialCommander() {
       return {
         name: '레오나르도',
         level: 1,
         exp: 20,
         maxExp: 100,
-        skillPoints: 2,
+        skillPoints: 1,
         unlockedSkills: {
           BearDown: false,
           Precision: false,
@@ -8812,8 +8830,9 @@
     function cheatLevelUpCommander() {
       saveHistorySnapshot();
       state.commander.level += 1;
-      state.commander.skillPoints += 2;
-      addLog(`👑 [디버그 치트] 지휘관 레벨업! Lv.${state.commander.level} (SP +2 지급 · 통솔력 ${getLeadership()}부대)`, 'gold');
+      const cheatSp = state.commander.level % 3 === 0 ? 1 : 0;
+      state.commander.skillPoints += cheatSp;
+      addLog(`👑 [디버그 치트] 지휘관 레벨업! Lv.${state.commander.level} (SP +${cheatSp} 지급 · 통솔력 ${getLeadership()}부대)`, 'gold');
       renderAll();
       syncDebugInputsFromState();
     }
@@ -8978,11 +8997,8 @@
                 loadGameState(data);
                 addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
-              // 계정마다 같은 기본 이름('레오나르도')이 되지 않도록, 기본 이름 그대로면 이메일 앞부분으로 바꾼다.
-              const acctName = String(user.email || '').split('@')[0].trim().slice(0, 16);
-              if (acctName && state.commander && state.commander.name === createInitialCommander().name) {
-                state.commander.name = acctName;
-              }
+              // 로그인 계정은 지휘관 이름을 직접 정한다. (한 번 정하면 nameSet 으로 기억)
+              if (state.commander && !state.commander.nameSet) promptCommanderName(true);
               saveGameState(true);
               if (window.ServerEconomy) window.ServerEconomy.start(); // 로그인 계정이면 서버 경제에 연결 (골드 · 지분 · 대출 · 경매)
             }).catch(e => {
