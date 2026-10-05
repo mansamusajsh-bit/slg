@@ -4,7 +4,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 const config = window.SUPABASE_CONFIG || {};
 const supabaseUrl = config.url || window.SUPABASE_URL || '';
 const supabaseAnonKey = config.anonKey || window.SUPABASE_ANON_KEY || '';
-const client = (supabaseUrl && supabaseAnonKey) ? createClient(supabaseUrl, supabaseAnonKey) : null;
+// 로그인 세션은 supabase-js 가 브라우저에 보관·갱신한다 (OAuth 로그인 후 돌아올 때 주소의 토큰도 여기서 읽는다)
+const client = (supabaseUrl && supabaseAnonKey) ? createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } }) : null;
 const TABLE = 'slg_records';
 const BUCKET = 'slg-assets';
 const clean = (v) => {
@@ -84,9 +85,47 @@ async function uploadAsset(input, folder, filename) {
 
 const bridge = {
   isReady: !!client,
-  currentUser: { uid: 'guest_main', isAnonymous: true },
-  app: null, auth: null, db: client, storage: client?.storage || null,
-  async initAuth() { this.isReady = !!client; if (typeof window.onSupabaseUserReady === 'function') window.onSupabaseUserReady(this.currentUser); return this.currentUser; },
+  // 로그인하기 전에는 null. 로그인하면 { uid(= auth.uid()), email }, "오프라인으로 시작"이면 { uid:'guest_main', offline:true }.
+  // 오프라인(게스트)은 클라우드 저장 · 서버 경제 없이 이 탭 안에서만 돈다.
+  currentUser: null,
+  app: null, auth: client?.auth || null, db: client, storage: client?.storage || null,
+  _notify() { if (this.currentUser && typeof window.onSupabaseUserReady === 'function') window.onSupabaseUserReady(this.currentUser); },
+  _setUser(user) { this.currentUser = { uid: user.id, email: user.email || '', isAnonymous: false, offline: false }; this._notify(); return this.currentUser; },
+  // 세션이 있으면 바로 시작하고, 없으면 로그인 창(authUI.js)을 띄우라고 알린다.
+  async initAuth() {
+    this.isReady = !!client;
+    if (!client) { this.currentUser = { uid: 'guest_main', isAnonymous: true, offline: true }; this._notify(); return this.currentUser; }
+    client.auth.onAuthStateChange((event) => { if (event === 'SIGNED_OUT' && this.currentUser && !this.currentUser.offline && !this._signingOut) location.reload(); });
+    let session = null;
+    try { session = (await client.auth.getSession()).data.session; } catch (e) { warn('getSession', e); }
+    if (session && session.user) return this._setUser(session.user);
+    window.dispatchEvent(new CustomEvent('slg-auth-required'));
+    return null;
+  },
+  async signInEmail(email, password) {
+    const { data, error } = await requireClient().auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    return this._setUser(data.user);
+  },
+  // 이메일 확인이 켜져 있으면 세션이 바로 안 생긴다 → { needsConfirm: true }
+  async signUpEmail(email, password) {
+    const { data, error } = await requireClient().auth.signUp({ email, password });
+    if (error) throw error;
+    if (!data.session) return { needsConfirm: true };
+    return this._setUser(data.user);
+  },
+  async signInGoogle() {
+    const { error } = await requireClient().auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } });
+    if (error) throw error;
+  },
+  async signOut() { this._signingOut = true; try { await requireClient().auth.signOut(); } finally { location.reload(); } },
+  continueOffline() { this.currentUser = { uid: 'guest_main', isAnonymous: true, offline: true }; this._notify(); return this.currentUser; },
+  // 서버 함수(RPC) 호출 — 서버 경제(supabase-economy.sql)의 유일한 입구. 오류는 던진다.
+  async rpc(name, args = {}) {
+    const { data, error } = await requireClient().rpc(name, args);
+    if (error) throw error;
+    return data;
+  },
   uploadRawImage(input, folder='character_avatars', filename='asset') { return uploadAsset(input, folder, filename); },
   uploadCharacterAvatar(input, name='hero') { return uploadAsset(input, 'character_avatars', name); },
   uploadSkillIcon(input, name='skill') { return uploadAsset(input, 'skill_icons', name); },
@@ -210,8 +249,8 @@ const bridge = {
   listSharedRecords(collection){return listRecords(collection);},
   getSharedRecord(collection,id){return getRecord(collection,id);},
   casSharedRecord(collection,id,expectedRev,value){return casRecord(collection,id,expectedRev,value);},
-  async saveGameStateToCloud(payload){try{const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
-  async loadGameStateFromCloud(uid){try{return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
+  async saveGameStateToCloud(payload){try{if(this.currentUser?.offline)return false;const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
+  async loadGameStateFromCloud(uid){try{if(this.currentUser?.offline)return null;return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
   subscribeGameState(uid,cb){return subscribeOne('gameState',uid||this.currentUser?.uid||'guest_main',cb);}
 };
 /**

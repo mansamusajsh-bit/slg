@@ -175,9 +175,10 @@
   }
 
   // ---- 구매 ----
-  function pricePerBp(region, fromHolder) {
+  // mult: 물가 배율. 세수(수입)가 물가를 따라 오르므로 지분 값도 같이 오른다.
+  function pricePerBp(region, fromHolder, mult = 1) {
     const paybacks = fromHolder ? CONFIG.priceHolderPaybacks : CONFIG.priceUnownedPaybacks;
-    return (taxPerSettlement(region, 8) / TOTAL_BP) * paybacks;
+    return (taxPerSettlement(region, 8) / TOTAL_BP) * paybacks * (mult > 0 ? mult : 1);
   }
 
   /**
@@ -185,7 +186,7 @@
    * 살 수 있는 만큼으로 줄여서 돌려준다 (bp가 0이면 살 것이 없다).
    * @returns {{ bp, fromUnowned, fromHolders: {[id]: bp}, cost, payouts: {[id]: gold} }}
    */
-  function quotePurchase(nation, region, buyerId, wantBp) {
+  function quotePurchase(nation, region, buyerId, wantBp, mult = 1) {
     const want = Math.max(0, Math.floor(Number(wantBp) || 0));
     const free = unownedBp(nation);
     const fromUnowned = Math.min(want, free);
@@ -199,8 +200,8 @@
       const parts = splitBp(fromOthers, others.map(([, h]) => Number(h.bp) || 0));
       others.forEach(([id], i) => { if (parts[i] > 0) fromHolders[id] = parts[i]; });
     }
-    const unitUnowned = pricePerBp(region, false);
-    const unitHolder = pricePerBp(region, true);
+    const unitUnowned = pricePerBp(region, false, mult);
+    const unitHolder = pricePerBp(region, true, mult);
     const payouts = {};
     Object.entries(fromHolders).forEach(([id, bp]) => { payouts[id] = Math.ceil(bp * unitHolder); });
     const cost = Math.ceil(fromUnowned * unitUnowned) + Object.values(payouts).reduce((a, b) => a + b, 0);

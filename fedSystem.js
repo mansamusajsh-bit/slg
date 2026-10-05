@@ -17,6 +17,9 @@
   const FE = global.FedEngine;
   const COL_FED = 'fedState';
   const COL_AUC = 'charAuctions';
+  const COL_LEDGER = 'fedLedger';   // 플레이어별 보고 { gold, debt, spend } — 통화량·수요 집계의 재료
+  const REPORT_MS = 10 * 60 * 1000; // 자기 보고를 올리는 최소 간격
+  const MACRO_MS = 2 * 60 * 1000;   // 집계를 다시 읽는 최소 간격 (틱이 지났을 때는 무시하고 바로)
   const FED_ID = 'main';
   const REFRESH_MS = 20 * 1000;
   const CAS_RETRIES = 4;
@@ -24,7 +27,11 @@
 
   // ---- 저장소: Supabase가 있으면 공유, 없으면 메모리 ----
   const memory = new Map();
-  const cloud = () => !!(global.SupabaseBridge && global.SupabaseBridge.isReady && global.SupabaseBridge.casSharedRecord);
+  // 서버 권위 모드(serverEconomy.js): 연준·대출·경매·위원회는 서버(supabase-economy.sql)가 원본이다.
+  // 이 파일은 서버 스냅샷을 보여 주고 서버 함수를 부를 뿐이다. 서버가 없으면(오프라인·스키마 미설치) 예전처럼 이 탭 안에서 돈다.
+  const serverMode = () => !!(global.ServerEconomy && global.ServerEconomy.enabled && global.ServerEconomy.snapshot);
+  const cloud = () => !!(global.SupabaseBridge && global.SupabaseBridge.isReady && global.SupabaseBridge.casSharedRecord
+    && global.SupabaseBridge.currentUser && !global.SupabaseBridge.currentUser.offline);
   const copy = (v) => JSON.parse(JSON.stringify(v));
   const store = {
     async list(col) {
@@ -65,9 +72,13 @@
   }
 
   // ---- 시각 · 나 ----
-  const nowMs = () => (global.NationShares && global.NationShares.serverNow ? global.NationShares.serverNow() : Date.now());
+  const nowMs = () => (serverMode() ? global.ServerEconomy.serverNow() : (global.NationShares && global.NationShares.serverNow ? global.NationShares.serverNow() : Date.now()));
   function me() {
     if (typeof state === 'undefined' || !state) return null;
+    if (serverMode()) {
+      const p = global.ServerEconomy.snapshot.player;
+      return { id: String(p.id), name: (state.commander && state.commander.name) || p.name, loop: Number(p.loop) || 0 };
+    }
     if (!state.guest && typeof saveGameState === 'function') saveGameState(true);
     if (!state.guest || !state.guest.id) return null;
     return {
@@ -90,19 +101,97 @@
   let busy = false;
   let loansBusy = false;
 
+  let liveMacro = null;        // 가장 최근 집계한 통화량·수요 지표
+  let macroAt = 0;
+  let lastReportAt = 0;
+  let finDepth = 0;
+
+  // ---- 소비(수요) 추적 ----
+  // 골드가 줄어드는 순간(game.js의 state.gold 설정자)마다 불린다. 금융 거래(이자·상환·입찰·지분 매입)는 소비로 세지 않는다.
+  function econOf() {
+    const run = state && state.run;
+    if (!run) return null;
+    if (!run.econ || typeof run.econ !== 'object') run.econ = { spend: {} };
+    if (!run.econ.spend) run.econ.spend = {};
+    return run.econ;
+  }
+  function trackSpend(amount) {
+    if (finDepth > 0 || !(amount > 0)) return;
+    const econ = econOf();
+    if (!econ) return;
+    const idx = FE.tickIndex(nowMs());
+    econ.spend[idx] = (Number(econ.spend[idx]) || 0) + amount;
+    const keys = Object.keys(econ.spend).map(Number).sort((a, b) => a - b);
+    while (keys.length > 8) delete econ.spend[keys.shift()];
+  }
+  /** fn 안에서 일어나는 골드 감소는 소비가 아닌 금융 거래로 본다 */
+  function financial(fn) {
+    finDepth++;
+    try { return fn(); } finally { finDepth--; }
+  }
+
   const price = () => (fed && fed.price > 0 ? fed.price : 1);
   if (global.ECONOMY) global.ECONOMY.getInflation = price; // 골드로 사고파는 모든 값에 물가가 곱해진다
 
   function members() {
+    if (serverMode()) return (global.ServerEconomy.snapshot.members || []).map((m) => ({ id: m.id, name: m.name, seats: m.seats || [], totalBp: Number(m.totalBp) || 0 }));
     const NS = global.NationShares;
     return FE.committee(NS ? Object.values(NS._nations) : []);
   }
   const memberFor = (who) => (who ? members().find((m) => m.id === who.id) || null : null);
 
+  // ---- 통화량 · 수요 집계 ----
+  async function reportSelf(force) {
+    const who = me();
+    if (!who || !state.run) return;
+    const now = nowMs();
+    if (!force && now - lastReportAt < REPORT_MS) return;
+    lastReportAt = now;
+    const econ = econOf();
+    const debt = loansOf().reduce((a, l) => a + (Number(l.principal) || 0) + (Number(l.arrears) || 0), 0);
+    await mutate(COL_LEDGER, who.id, (b) => ({
+      value: { id: who.id, rev: (Number(b.rev) || 0) + 1, name: who.name, loop: who.loop, gold: Math.floor(gold()), debt, spend: { ...(econ ? econ.spend : {}) }, at: now }
+    }), () => ({ id: who.id, rev: 0 }));
+  }
+
+  async function loadMacro(force) {
+    if (!force && liveMacro && Date.now() - macroAt < MACRO_MS) return liveMacro;
+    const rows = await store.list(COL_LEDGER);
+    const m = FE.buildMacro(rows, nowMs());
+    if (m) liveMacro = m;
+    macroAt = Date.now();
+    return liveMacro;
+  }
+
   // ============================================================
   // 갱신 (연준 틱 · 안건 · 경매 마감 · 환급/낙찰 수령 · 대출 정산)
   // ============================================================
+  // 서버 스냅샷이 올 때마다 화면용 캐시를 갈아 끼운다 (NationShares 가 먼저 동기화해도 여기까지 반영된다)
+  let serverLoans = [];
+  let lastSnapSeen = 0;
+  function applyServerSnapshot(snap) {
+    if (!snap || !snap.fed) return false;
+    setFed(snap.fed);
+    liveMacro = snap.fed.macro || null;
+    auctions = snap.auctions || [];
+    serverLoans = snap.loans || [];
+    lastRefreshAt = Date.now();
+    const at = global.ServerEconomy._SE.lastSyncAt;
+    const changed = at !== lastSnapSeen;
+    lastSnapSeen = at;
+    updateBadges();
+    resolvePledges();
+    return changed;
+  }
+  async function refreshFromServer(force) {
+    const snap = await global.ServerEconomy.sync(force);
+    if (!snap) return false;
+    return applyServerSnapshot(snap);
+  }
+
   function refresh(force) {
+    if (serverMode()) return refreshFromServer(force);
+    if (global.ServerEconomy && global.ServerEconomy.status === 'starting') return Promise.resolve(false); // 서버 연결 중에는 예전 방식으로 돌지 않는다
     if (refreshing) return refreshing;
     if (!force && Date.now() - lastRefreshAt < REFRESH_MS) return Promise.resolve(false);
     if (typeof cloudLoadPending !== 'undefined' && cloudLoadPending) return Promise.resolve(false); // 세이브 복원 전
@@ -113,8 +202,15 @@
         if (NS && !Object.keys(NS._nations).length) await NS.refresh(true); // 위원 명단은 국가 지분에서 나온다
         const now = nowMs();
         const before = fed ? fed.rev : -1;
+        // 물가가 움직일 틱이 되었으면 내 보고를 먼저 올리고 최신 통화량·수요를 집계해서 같이 적는다
+        const tickDue = !fed || FE.lastTickBoundary(now) > fed.lastTickAt;
+        try {
+          await reportSelf(tickDue);
+          await loadMacro(tickDue || ui.open);
+        } catch (e) { console.warn('[FedSystem] 통화량 집계 실패 — 금리 항만으로 물가를 움직입니다.', e); }
         const r = await mutate(COL_FED, FED_ID, (b) => {
-          const next = FE.resolve(FE.advance(b, now), members(), now);
+          const base = liveMacro && FE.lastTickBoundary(now) > b.lastTickAt ? FE.withMacro(b, liveMacro) : b;
+          const next = FE.resolve(FE.advance(base, now), members(), now);
           return next === b ? null : { value: next };
         }, () => FE.createFed(now));
         setFed(r.value);
@@ -165,7 +261,14 @@
   // 캐릭터 · 로스터
   // ============================================================
   const runOf = () => (state && state.run) || null;
-  const loansOf = () => { const run = runOf(); if (!run) return []; if (!Array.isArray(run.loans)) run.loans = []; return run.loans; };
+  const loansOf = () => {
+    if (serverMode()) return serverLoans;
+    const run = runOf();
+    if (!run) return [];
+    if (!Array.isArray(run.loans)) run.loans = [];
+    return run.loans;
+  };
+  const pledgeJournal = () => { const run = runOf(); if (!run) return []; if (!Array.isArray(run.pledgeJournal)) run.pledgeJournal = []; return run.pledgeJournal; };
   const charIdOf = (u) => (typeof getCharacterId === 'function' ? getCharacterId(u) : String(u && (u.sourceCharacterId || u.characterId || u.id) || ''));
 
   function allOwnedUnits() { return [...(state.playerUnits || []), ...(state.reserveUnits || [])]; }
@@ -175,7 +278,8 @@
     return (state.characterCollection || []).some((e) => e && String(e.characterId) === cid);
   }
   // 담보로 잡힌 캐릭터도 "아직 내 캐릭터"로 본다 (같은 캐릭터를 경매로 또 사는 일이 없게)
-  const ownsOrPledged = (cid) => ownsCharacter(cid) || loansOf().some((l) => l.collateral && charIdOf(l.collateral) === cid);
+  const ownsOrPledged = (cid) => ownsCharacter(cid) || loansOf().some((l) => l.collateral && charIdOf(l.collateral) === cid)
+    || (serverMode() && pledgeJournal().some((j) => j.unit && charIdOf(j.unit) === cid));
 
   function unitValue(u) {
     const v = typeof getCaptiveRansom === 'function' ? getCaptiveRansom(u) : FE.CONFIG.minLoan * 6;
@@ -211,13 +315,16 @@
   }
 
   /** 경매로 받은 캐릭터를 예비 명단에 넣는다 (같은 캐릭터를 이미 가졌다면 용병 명부 사본으로) */
-  function deliverUnit(snapshot, paid) {
+  function deliverUnit(snapshot, paid, source) {
     const unit = copy(snapshot);
     const cid = charIdOf(unit);
+    const back = source === 'loan_repaid';   // 상환된 담보가 돌아오는 경우
+    const what = back ? '[담보 반환]' : '[경매 낙찰]';
+    const priceTxt = back ? '' : ` (-${paid}G)`;
     if (ownsCharacter(cid)) {
       if (!Array.isArray(state.characterCollection)) state.characterCollection = [];
       state.characterCollection.push({ instanceId: `auction_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, characterId: cid, acquiredAt: new Date().toISOString() });
-      log(`🔨 [경매 낙찰] ${unit.name} 낙찰 (-${paid}G) — 이미 같은 캐릭터가 있어 용병 명부 사본으로 들어왔습니다.`);
+      log(`🔨 ${what} ${unit.name}${priceTxt} — 이미 같은 캐릭터가 있어 용병 명부 사본으로 들어왔습니다.`);
     } else {
       unit.id = `auc_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
       unit.owner = 'PLAYER';
@@ -226,18 +333,22 @@
       unit.captive = null;
       if (!(Number(unit.hp) > 0)) { unit.hp = unit.maxHp || 100; if (unit.stats) unit.stats.hp = unit.hp; }
       returnToReserve(unit);
-      log(`🔨 [경매 낙찰] ${unit.name}이(가) 예비 명단에 합류했습니다. (-${paid}G) 용병 명부에서 출전 명단에 편입하세요.`, 'success');
+      log(`🔨 ${what} ${unit.name}이(가) 예비 명단에 합류했습니다.${priceTxt} 용병 명부에서 출전 명단에 편입하세요.`, 'success');
     }
-    toast(`🔨 ${unit.name} 낙찰!`, 'success');
+    toast(back ? `✅ ${unit.name} 반환` : `🔨 ${unit.name} 낙찰!`, 'success');
+    return true;
   }
+  // 서버 우편함(경매 낙찰 · 상환된 담보)에서 온 캐릭터를 받는다 — serverEconomy.js 가 한 번씩만 부른다
+  if (global.ServerEconomy) global.ServerEconomy.onUnit = (p) => deliverUnit(p.unit, Number(p.price) || 0, p.source);
 
   // ============================================================
   // 대출
   // ============================================================
   const loanLabel = (l) => (l.collateral ? l.collateral.name : '담보');
 
-  /** 이자 · 만기 정산 (전투 중에는 미룬다). 하나라도 바뀌면 true */
+  /** 이자 · 만기 정산 (전투 중에는 미룬다). 하나라도 바뀌면 true. 서버 모드에서는 서버가 한다. */
   function settleLoans() {
+    if (serverMode()) return false;
     if (!state || !state.run || battleLocked()) return false;
     const list = loansOf();
     if (!list.length) return false;
@@ -248,7 +359,7 @@
       const res = FE.settleLoan(loan, now, gold());
       if (!res.events.length) return;
       changed = true;
-      state.gold = res.gold;
+      financial(() => { state.gold = res.gold; }); // 이자·원금은 소비가 아니라 금융 거래
       const idx = list.indexOf(loan);
       list[idx] = res.loan;
       const total = FE.loanPeriods(res.loan);
@@ -273,6 +384,7 @@
 
   // 몰수된 담보를 경매에 올린다. 경매 id가 대출 id에서 나오므로 중복 등록되지 않는다 (실패하면 다음 갱신에 다시 시도).
   async function flushDefaults() {
+    if (serverMode()) return false;
     const who = me();
     const list = loansOf();
     const pending = list.filter((l) => l.status === 'defaulted');
@@ -294,8 +406,79 @@
     return listed;
   }
 
+  // 너무 큰 문자열(이미지 데이터 등)은 담보 기록에서 뺀다 (서버는 32KB 까지만 받는다)
+  function slimUnit(u) {
+    return JSON.parse(JSON.stringify(u, (k, v) => (typeof v === 'string' && v.length > 1500 ? '' : v)));
+  }
+  const newLoanId = () => `loan_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  let resolvingPledges = false;
+
+  // 저널에 남은 대출 요청(네트워크가 끊겼거나 창을 닫은 경우)을 같은 id 로 다시 보낸다. 서버는 같은 id 면 한 번만 처리한다.
+  // 서버가 거절하면 맡겼던 캐릭터를 예비 명단으로 되돌린다.
+  async function resolvePledges() {
+    if (resolvingPledges || !serverMode()) return;
+    const journal = pledgeJournal();
+    if (!journal.length) return;
+    resolvingPledges = true;
+    try {
+      for (const j of journal.slice()) {
+        const res = await global.ServerEconomy.call('slg_loan_take', { p_id: j.id, p_unit: j.unit, p_principal: j.principal, p_term_hours: j.termHours });
+        if (res && res.network) break;
+        const run = runOf();
+        if (run) run.pledgeJournal = pledgeJournal().filter((x) => x.id !== j.id);
+        if (res && res.ok) {
+          log(`🏦 [담보 대출] ${j.unit.name}을(를) 맡기고 ${j.principal}G 대출`);
+        } else {
+          returnToReserve(j.fullUnit || j.unit);
+          log(`⚠️ [담보 대출] ${j.unit.name} 대출이 거절되어 캐릭터가 돌아왔습니다: ${(res && res.error) || '알 수 없는 오류'}`, 'warning');
+          toast(`⚠️ 대출 거절: ${(res && res.error) || ''}`, 'warning');
+        }
+        if (typeof saveGameState === 'function') saveGameState(true);
+      }
+      await global.ServerEconomy.sync('now');
+      if (typeof renderAll === 'function' && !battleLocked()) renderAll();
+    } finally {
+      resolvingPledges = false;
+    }
+  }
+
+  async function takeLoanServer(unitId, principal, termHours) {
+    const fail = (m) => { toast(`⚠️ ${m}`, 'warning'); return false; };
+    await global.ServerEconomy.sync('now');
+    if (!fed) return fail('연준 기록을 아직 불러오지 못했습니다.');
+    if (battleLocked()) return fail('전투 중에는 대출을 받을 수 없습니다.');
+    if (runOf().returnPending) return fail('지금은 대출을 받을 수 없습니다.');
+    if (loansOf().length + pledgeJournal().length >= FE.CONFIG.maxActiveLoans) return fail(`동시에 ${FE.CONFIG.maxActiveLoans}건까지만 받을 수 있습니다.`);
+    const ban = Number(global.ServerEconomy.snapshot.loanBanUntil) || 0;
+    if (ban > nowMs()) return fail('담보를 몰수당한 직후라 한동안 대출을 받을 수 없습니다.');
+    const cand = collateralCandidates().find((c) => c.unit.id === unitId);
+    if (!cand) return fail('담보로 맡길 수 없는 캐릭터입니다.');
+    const amount = Math.floor(Number(principal) || 0);
+    if (amount < FE.CONFIG.minLoan || amount > cand.max) return fail(`대출액은 ${FE.CONFIG.minLoan}G ~ ${cand.max}G 사이여야 합니다.`);
+    if (allOwnedUnits().filter((u) => u && !u.isDead && u !== cand.unit).length < 1) return fail('마지막 남은 생존 캐릭터는 담보로 맡길 수 없습니다.');
+    const slim = slimUnit(cand.unit);
+    if (JSON.stringify(slim).length > 30000) return fail('캐릭터 데이터가 너무 커서 담보로 맡길 수 없습니다.');
+    // 1) 먼저 명단에서 빼고 저널에 적는다 (서버가 받았는데 창이 닫혀도 캐릭터가 두 곳에 있게 되지 않는다)
+    const unit = cand.unit;
+    removeFromRoster(unit);
+    pledgeJournal().push({ id: newLoanId(), unit: slim, fullUnit: copy(unit), principal: amount, termHours, at: Date.now() });
+    if (typeof saveGameState === 'function') saveGameState(true);
+    if (typeof renderAll === 'function') renderAll();
+    // 2) 서버에 요청 → 결과 처리는 resolvePledges 가 한다
+    await resolvePledges();
+    if (pledgeJournal().length) {
+      toast('⚠️ 서버에 연결하지 못했습니다. 연결되면 대출이 자동으로 이어집니다.', 'warning');
+      log('⚠️ [담보 대출] 서버에 닿지 않아 요청을 보관했습니다. 연결되면 자동으로 이어서 처리합니다.', 'warning');
+    }
+    return !pledgeJournal().length;
+  }
+
   async function takeLoan(unitId, principal, termHours) {
     if (loansBusy) return false;
+    if (serverMode()) {
+      loansBusy = true;
+      try { return await takeLoanServer(unitId, principal, termHours); } finally { loansBusy = false; }
+    }
     const fail = (m) => { toast(`⚠️ ${m}`, 'warning'); return false; };
     loansBusy = true;
     try {
@@ -330,7 +513,19 @@
     }
   }
 
+  async function repayLoanServer(loanId) {
+    if (battleLocked()) { toast('⚠️ 전투 중에는 상환할 수 없습니다.', 'warning'); return false; }
+    const res = await global.ServerEconomy.call('slg_loan_repay', { p_id: loanId });
+    if (!res || res.ok === false) { toast(`⚠️ ${(res && res.error) || '상환하지 못했습니다.'}`, 'warning'); await global.ServerEconomy.sync('now'); return false; }
+    log(`✅ [대출 상환] 담보 대출을 조기 상환했습니다 (-${res.owed}G) — 담보 캐릭터가 곧 예비 명단으로 돌아옵니다.`, 'success');
+    toast('✅ 대출 상환 완료', 'success');
+    await global.ServerEconomy.sync('now');   // 우편함의 캐릭터가 이때 들어온다
+    if (typeof renderAll === 'function') renderAll();
+    return true;
+  }
+
   function repayLoan(loanId) {
+    if (serverMode()) return repayLoanServer(loanId);
     const list = loansOf();
     const loan = list.find((l) => l.id === loanId && l.status === 'active');
     if (!loan) return false;
@@ -340,7 +535,7 @@
     if (!live) return false; // 정산하다 상환/몰수됐다
     const owed = FE.payoffAmount(live);
     if (gold() < owed) { toast(`💸 골드가 부족합니다 (필요 ${owed}G)`, 'warning'); return false; }
-    state.gold -= owed;
+    financial(() => { state.gold -= owed; });
     list.splice(list.indexOf(live), 1);
     returnToReserve(live.collateral);
     log(`✅ [대출 상환] ${loanLabel(live)} 담보 대출을 조기 상환했습니다 (-${owed}G) — 담보 캐릭터가 예비 명단으로 돌아왔습니다.`, 'success');
@@ -353,11 +548,28 @@
   // ============================================================
   // 연준 위원 행동 · 경매 입찰
   // ============================================================
+  async function fedActionServer(kind, arg) {
+    const res = await global.ServerEconomy.call(kind === 'propose' ? 'slg_fed_propose' : 'slg_fed_vote', kind === 'propose' ? { p_dir: arg } : { p_choice: arg });
+    if (!res || res.ok === false) {
+      toast(`⚠️ ${(res && res.error) || '처리하지 못했습니다.'}`, 'warning');
+      await global.ServerEconomy.sync('now');
+      return false;
+    }
+    const who = me();
+    if (kind === 'propose' && who) log(`🏛️ [연준] ${who.name}이(가) 금리 ${arg > 0 ? '인상' : '인하'} 안건을 발의했습니다.`);
+    if (res.fed) setFed(res.fed);
+    await global.ServerEconomy.sync('now');
+    return true;
+  }
+
   async function fedAction(kind, arg) {
     if (busy) return false;
     const who = me();
     if (!who) return false;
     busy = true;
+    if (serverMode()) {
+      try { return await fedActionServer(kind, arg); } finally { busy = false; updateBadges(); }
+    }
     let err = null;
     try {
       const NS = global.NationShares;
@@ -413,8 +625,25 @@
     if (ownsOrPledged(charIdOf(a.unit))) return fail('이미 가지고 있는 캐릭터입니다.');
     if (amt < FE.minBid(a)) return fail(`최소 ${FE.minBid(a)}G부터 입찰할 수 있습니다.`);
     if (gold() < amt) return fail(`골드가 부족합니다 (필요 ${amt}G)`);
+    if (serverMode()) {
+      busy = true;
+      try {
+        const res = await global.ServerEconomy.call('slg_auction_bid', { p_id: auctionId, p_amount: amt });
+        if (!res || res.ok === false) {
+          toast(`⚠️ ${(res && res.error) || '입찰하지 못했습니다.'}`, 'warning');
+          await global.ServerEconomy.sync('now');
+          return false;
+        }
+        log(`🔨 [경매 입찰] ${a.unit.name}에 ${amt}G 입찰 — 더 높은 입찰이 나오면 입찰금은 돌려받습니다.`);
+        toast(`🔨 ${amt}G 입찰`, 'success');
+        await global.ServerEconomy.sync('now');
+        return true;
+      } finally {
+        busy = false;
+      }
+    }
     busy = true;
-    state.gold -= amt;       // 입찰금은 먼저 에스크로 (실패하면 돌려받는다)
+    financial(() => { state.gold -= amt; }); // 입찰금은 먼저 에스크로 (실패하면 돌려받는다)
     saveGameState(true);
     let err = null;
     try {
@@ -486,8 +715,18 @@
     const hist = fed.history || [];
     const dayAgo = hist.filter((h) => h.at <= now - 24 * 3600 * 1000).pop() || hist[0];
     const dayChange = dayAgo && dayAgo.price ? ((fed.price / dayAgo.price) - 1) * 100 : 0;
-    const drift = FE.driftPct(fed.rateBp);
+    const mac = liveMacro || fed.macro || null;
+    const bd = FE.breakdown(fed.rateBp, fed.price, mac);
+    const drift = bd.total;
     const driftTxt = drift > 0.05 ? `틱당 약 +${drift.toFixed(2)}% 오르는 중` : drift < -0.05 ? `틱당 약 ${drift.toFixed(2)}% 내리는 중` : '물가 안정권';
+    const sgn = (v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+    const macroHtml = mac ? `
+      <div class="fed-stats fed-stats-sub">
+        <div class="fed-stat"><small>총 통화량 (접속 ${mac.players}명)</small><b>${mac.money.toLocaleString()}G</b><em>1인당 ${Math.round(mac.money / mac.players).toLocaleString()}G</em></div>
+        <div class="fed-stat"><small>소비 회전율 (틱당)</small><b>${(mac.velocity * 100).toFixed(1)}%</b><em>적정 ${(FE.CONFIG.refVelocity * 100).toFixed(0)}% · 소비 ${mac.spend.toLocaleString()}G</em></div>
+        <div class="fed-stat"><small>대출 잔액</small><b>${mac.debt.toLocaleString()}G</b><em>통화량의 ${mac.money ? Math.round(mac.debt / mac.money * 100) : 0}%</em></div>
+      </div>
+      <p class="fed-help fed-why">이번 틱 물가 변동 요인 — 금리 <b>${sgn(bd.rate)}</b> · 통화량 <b>${sgn(bd.money)}</b> · 수요 <b>${sgn(bd.demand)}</b> = ${sgn(bd.total)}</p>` : '<p class="fed-help">통화량·수요 집계를 기다리는 중… (플레이어가 접속해 보고하면 반영됩니다)</p>';
 
     let motionHtml;
     if (fed.motion) {
@@ -536,8 +775,9 @@
         <div class="fed-stat"><small>정책금리 (8시간)</small><b>${fmtPct(fed.rateBp)}</b><em>${driftTxt}</em></div>
         <div class="fed-stat"><small>대출금리 (8시간)</small><b>${fmtPct(FE.lendingRateBp(fed))}</b><em>정책금리 + ${fmtPct(FE.CONFIG.spreadBp)}</em></div>
       </div>
+      ${macroHtml}
       <div class="fed-chart">${sparkline(hist)}<span>다음 물가 갱신 ${cd(FE.nextTickAt(now))}</span></div>
-      <p class="fed-help">상점·고용·매각 등 골드로 사고파는 모든 값에 물가 지수가 곱해집니다. 금리가 중립(${fmtPct(FE.CONFIG.neutralBp)})보다 높으면 물가가 눌리고, 낮으면 더 오릅니다.</p>
+      <p class="fed-help">상점·고용·매각 등 사고파는 값과 전리품·보상·세수·유지비에 물가 지수가 곱해집니다. 물가는 ① 금리(중립 ${fmtPct(FE.CONFIG.neutralBp)}보다 높으면 억제) ② 1인당 통화량(적정 ${FE.CONFIG.refMoneyPerPlayer}G보다 많으면 상승) ③ 소비 회전율(적정보다 빠르면 상승)로 움직입니다. 대출을 받으면 쥐고 있는 골드(통화량)가 늘어납니다.</p>
       <h3 class="fed-h">🏛️ 연준 위원회 <small>국가별 지분 1위 · 1인 1표</small></h3>
       ${memHtml}
       ${iAm ? '' : '<div class="fed-note">당신은 위원이 아닙니다. 점령한 국가의 지분을 늘려 1위가 되세요.</div>'}
@@ -577,6 +817,8 @@
     }
     const full = loans.length >= FE.CONFIG.maxActiveLoans;
     const locked = battleLocked();
+    const banUntil = serverMode() ? Number(global.ServerEconomy.snapshot.loanBanUntil) || 0 : 0;
+    const banned = banUntil > now;
     let form;
     if (!cands.length) form = '<p class="fed-empty">담보로 맡길 수 있는 캐릭터가 없습니다. (부관·포로 제외, 담보가치 기준 최소 대출액 이상)</p>';
     else {
@@ -594,7 +836,8 @@
         <div class="fed-field"><label for="fed-loan-term">상환 기간 <b id="fed-loan-term-out">${ui.loanTerm}시간 (${(ui.loanTerm / 24).toFixed(ui.loanTerm % 24 ? 1 : 0)}일)</b></label>
           <input type="range" id="fed-loan-term" min="${FE.CONFIG.minTermHours}" max="${FE.CONFIG.maxTermHours}" step="${FE.CONFIG.termStepHours}" value="${ui.loanTerm}"></div>
         <div class="fed-quote" id="fed-loan-quote">${loanQuoteHtml(q, ui.loanAmount, rate)}</div>
-        <button type="button" class="fed-btn is-primary" data-fed-act="borrow" ${full || locked ? 'disabled' : ''}>${locked ? '전투 중에는 불가' : full ? `동시 ${FE.CONFIG.maxActiveLoans}건까지` : '🏦 담보 대출 받기'}</button>`;
+        <button type="button" class="fed-btn is-primary" data-fed-act="borrow" ${full || locked || banned ? 'disabled' : ''}>${locked ? '전투 중에는 불가' : banned ? '담보 몰수 직후라 대출 불가' : full ? `동시 ${FE.CONFIG.maxActiveLoans}건까지` : '🏦 담보 대출 받기'}</button>
+        ${banned ? `<div class="fed-note">담보를 몰수당해 ${cd(banUntil)} 동안 새 대출을 받을 수 없습니다.</div>` : ''}`;
     }
 
     return `
@@ -653,6 +896,10 @@
     const tabs = [['fed', '🏛️ 연준'], ['loan', '🏦 대출'], ['auction', '🔨 경매시장']];
     root.querySelector('.fed-tabs').innerHTML = tabs.map(([k, label]) => `<button type="button" class="fed-tab ${ui.tab === k ? 'is-on' : ''}" data-fed-tab="${k}">${label}${k === 'auction' ? ` <small>${auctions.filter((a) => a.status === 'open').length}</small>` : k === 'loan' && loansOf().length ? ` <small>${loansOf().length}</small>` : ''}</button>`).join('');
     root.querySelector('.fed-gold').textContent = `🪙 ${gold()}G`;
+    const b = global.SupabaseBridge;
+    const acct = b && b.currentUser && !b.currentUser.offline ? b.currentUser : null;
+    const foot = root.querySelector('.fed-foot');
+    if (foot) foot.innerHTML = acct ? `<span>계정 <b>${esc(acct.email || acct.uid.slice(0, 8))}</b>${serverMode() ? ' · 서버 연결됨' : ''}</span><button type="button" class="fed-link" data-fed-act="logout">로그아웃</button>` : '<span>오프라인 모드 — 저장 · 서버 경제 없음</span>';
     const scroll = body.scrollTop;
     body.innerHTML = ui.tab === 'loan' ? renderLoanTab() : ui.tab === 'auction' ? renderAuctionTab() : renderFedTab();
     body.scrollTop = scroll;
@@ -691,7 +938,9 @@
       else if (act === 'borrow') {
         const ok = await takeLoan(ui.loanUnit, ui.loanAmount, ui.loanTerm);
         if (ok) { ui.loanUnit = null; ui.loanAmount = 0; }
-      } else if (act === 'repay') repayLoan(btn.dataset.loan);
+      } else if (act === 'logout') {
+        if (global.confirm('로그아웃할까요? (진행은 계정에 저장되어 있습니다)') && global.SupabaseBridge) await global.SupabaseBridge.signOut();
+      } else if (act === 'repay') await repayLoan(btn.dataset.loan);
       else if (act === 'bid') {
         const id = btn.dataset.aucId;
         const input = document.querySelector(`#modal-fed [data-bid-input="${CSS.escape(id)}"]`);
@@ -716,6 +965,7 @@
         <div class="fed-head"><h2>🏦 연방준비기금</h2><span class="fed-gold"></span><button type="button" class="fed-x" data-fed-close aria-label="닫기">✕</button></div>
         <div class="fed-tabs"></div>
         <div class="fed-body"></div>
+        <div class="fed-foot"></div>
       </div>`;
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay || e.target.closest('[data-fed-close]')) { closeModal(); return; }
@@ -775,7 +1025,8 @@
   }
 
   global.FedSystem = {
-    refresh, price, view: () => ({ fed, auctions, members: members() }),
+    refresh, price, resolvePledges, view: () => ({ fed, auctions, members: members(), macro: liveMacro || (fed && fed.macro) || null }),
+    trackSpend, financial,
     openModal, closeModal, takeLoan, repayLoan, bid, proposeRate, voteMotion, settleLoans,
     collateralCandidates, onReturnByDeath, updateBadges,
     _store: store
@@ -784,4 +1035,6 @@
 
   startTicker();
   setTimeout(() => refresh(true), 1500);
+  // 서버 모드: 다른 곳(지분 · 지갑)에서 동기화해도 이 화면의 캐시가 같이 갱신된다
+  if (global.ServerEconomy && global.ServerEconomy.onSnapshot) global.ServerEconomy.onSnapshot(applyServerSnapshot);
 })(typeof window !== 'undefined' ? window : globalThis);

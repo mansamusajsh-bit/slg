@@ -21,9 +21,11 @@ const files = [
   'game.js',
   'shareEngine.js',
   'fedEngine.js',
+  'serverEconomy.js',
   'nationShares.js',
   'fedSystem.js',
   'campaignMap.js',
+  'authUI.js',
   'civ4-editor.js',
   'assets', // 작전지도 배경 일러스트 등 이미지
   'audio', // 사망회귀 연출 (Web Audio 합성, 외부 음원 없음)

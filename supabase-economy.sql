@@ -1,0 +1,1341 @@
+-- ============================================================================
+-- supabase-economy.sql — 서버 권위 경제 (지갑 · 인플레이션 · 연준 · 지분/세금 · 담보대출 · 캐릭터 경매)
+--
+-- Supabase 대시보드 > SQL Editor 에서 이 파일 전체를 실행하세요. (여러 번 실행해도 안전합니다 — 데이터는 지우지 않습니다.)
+-- 실행 전에 Authentication > Providers 에서 Email(필수)과 Google(선택)을 켜 두세요. 자세한 순서는 README "서버 권위 경제" 참고.
+--
+-- 원칙
+--  * 골드 잔액·물가·금리·지분·대출·경매는 전부 이 DB가 가진다. 브라우저는 RPC(slg_* 함수)만 부를 수 있고 테이블은 직접 못 읽고 못 쓴다.
+--  * 모든 RPC는 로그인한 사용자(auth.uid())의 것만 건드린다. security definer + search_path 고정.
+--  * 쓰기 RPC는 전부 같은 어드바이저리 락을 잡아 직렬로 실행된다 (동시성 버그·데드락 방지. 이 규모에서는 충분히 빠르다).
+--  * 시각은 전부 DB 시각(ms). 클라이언트 시계는 믿지 않는다.
+--  * 전투는 서버가 재현할 수 없으므로 전투 수입은 "건당 상한 · 1회 청구(ref) · 시간당 상한"으로 부풀리기를 막는 수준까지만 검증한다.
+-- ============================================================================
+
+-- ---------------------------------------------------------------- 설정값 (운영 중 UPDATE 로 조정 가능)
+create table if not exists public.slg_config (key text primary key, value numeric not null);
+
+insert into public.slg_config (key, value) values
+  -- 물가 · 연준
+  ('tick_hours', 8), ('rate_init_bp', 150), ('rate_min_bp', 25), ('rate_max_bp', 500), ('rate_step_bp', 25), ('neutral_bp', 150),
+  ('base_drift_pct', 0.15), ('sensitivity_pct', 0.20), ('noise_pct', 0.10), ('price_min', 0.5), ('price_max', 5),
+  ('max_catchup_ticks', 90), ('motion_ttl_hours', 24), ('rate_cooldown_hours', 8), ('min_seat_bp', 100), ('history_len', 30),
+  ('ref_money', 800), ('ref_velocity', 0.12), ('velocity_weight', 0.5), ('gap_gain', 0.10), ('gap_cap_pct', 1.0),
+  ('money_idx_min', 0.2), ('money_idx_max', 5), ('vel_idx_min', 0.5), ('vel_idx_max', 2),
+  ('report_max_age_hours', 72), ('spend_window_ticks', 3),
+  -- 대출
+  ('spread_bp', 50), ('ltv', 0.6), ('min_loan', 50), ('term_step_hours', 8), ('min_term_hours', 8), ('max_term_hours', 168),
+  ('max_active_loans', 3), ('miss_limit', 3), ('loan_total_cap_base', 1500), ('loan_default_ban_hours', 72),
+  ('collateral_max_level', 30), ('collateral_max_rank', 4), ('ransom_base', 300),
+  -- 경매
+  ('auction_hours', 24), ('anti_snipe_ms', 300000), ('min_inc_pct', 5), ('min_inc_flat', 10), ('open_pct', 0.5),
+  ('relist_drop_pct', 30), ('min_start_price', 10), ('auction_recent_hours', 24),
+  -- 국가 지분 · 세금
+  ('tax_base', 25), ('tax_per_threat', 12.5), ('purchase_right_bp', 5000), ('price_unowned_paybacks', 6), ('price_holder_paybacks', 9),
+  ('max_catchup_hours', 72), ('dummy_count_min', 2), ('dummy_count_max', 4), ('dummy_total_min_pct', 30), ('dummy_total_max_pct', 70),
+  ('secure_min_interval_ms', 180000),
+  -- 지갑
+  ('start_gold', 450), ('stash_gold', 100), ('migrate_cap', 450),
+  ('earn_cap_per_hour_base', 15000), ('loot_max_base', 800), ('reward_max_base', 6000), ('event_max_base', 400), ('sell_max_base', 3000),
+  ('price_tolerance', 1.25), ('rewind_window_ms', 1200000), ('min_loop_interval_ms', 20000)
+on conflict (key) do nothing;
+
+create or replace function public.slg_cfg(k text) returns numeric
+language sql stable set search_path = public as $$
+  select value from public.slg_config where key = k
+$$;
+
+-- ---------------------------------------------------------------- 구역 (campaignRegions.js 와 같아야 한다 — 테스트가 비교한다)
+create table if not exists public.slg_regions (
+  region_id text primary key,
+  threat int not null,
+  neighbors text[] not null,
+  is_start boolean not null default false
+);
+
+insert into public.slg_regions (region_id, threat, neighbors, is_start) values
+  ('liona', 1, array['mira', 'vaska'], true),
+  ('mira', 2, array['liona', 'luma', 'savo', 'vaska'], false),
+  ('vaska', 2, array['liona', 'mira', 'savo', 'tino'], false),
+  ('oria', 4, array['rokan', 'tino'], false),
+  ('luma', 3, array['mira', 'savo', 'torva'], false),
+  ('tino', 3, array['elda', 'oria', 'rokan', 'savo', 'vaska'], false),
+  ('rokan', 4, array['elda', 'oria', 'silva', 'tino'], false),
+  ('savo', 3, array['arca', 'luma', 'mira', 'naru', 'tino', 'torva', 'vaska'], false),
+  ('torva', 4, array['ara', 'arca', 'luma', 'savo'], false),
+  ('ara', 5, array['arca', 'torva'], false),
+  ('elda', 4, array['naru', 'rokan', 'silva', 'tino', 'valen'], false),
+  ('naru', 4, array['arca', 'elda', 'savo', 'valen'], false),
+  ('silva', 5, array['elda', 'mor', 'rokan', 'valen'], false),
+  ('valen', 5, array['elda', 'mor', 'naru', 'silva'], false),
+  ('arca', 4, array['ara', 'naru', 'savo', 'torva'], false),
+  ('mor', 6, array['silva', 'valen'], false)
+on conflict (region_id) do update set threat = excluded.threat, neighbors = excluded.neighbors, is_start = excluded.is_start;
+
+-- ---------------------------------------------------------------- 플레이어 · 지갑
+create table if not exists public.slg_players (
+  user_id uuid primary key references auth.users (id) on delete cascade,
+  name text not null default '지휘관',
+  gold bigint not null default 0 check (gold >= 0),
+  loop int not null default 0,
+  run_started_ms bigint not null default 0,
+  created_ms bigint not null,
+  last_seen_ms bigint not null,
+  last_settled_ms bigint,                       -- 마지막 세금 정산 시각 (null = 아직 지분이 없었다)
+  last_secure_ms bigint not null default 0,     -- 마지막 구역 점령 청구가 "유효해지는" 시각 (대기열)
+  last_loop_ms bigint not null default 0,
+  loan_ban_until_ms bigint not null default 0,  -- 담보를 몰수당하면 한동안 대출 불가
+  spend jsonb not null default '{}'::jsonb      -- { 틱번호: 그 틱에 쓴 골드 } — 소비(수요) 집계용
+);
+
+create table if not exists public.slg_wallet_log (
+  id bigserial primary key,
+  user_id uuid not null,
+  tx_id text not null,
+  kind text not null,
+  delta bigint not null,
+  ref text,
+  balance_after bigint not null,
+  at_ms bigint not null,
+  unique (user_id, tx_id)
+);
+create index if not exists slg_wallet_log_user_at on public.slg_wallet_log (user_id, at_ms);
+-- 1회성 수입은 같은 ref 로 두 번 받을 수 없다
+create unique index if not exists slg_wallet_log_once on public.slg_wallet_log (user_id, kind, ref)
+  where ref is not null and kind in ('earn_reward', 'earn_event', 'earn_stash');
+
+create table if not exists public.slg_admins (user_id uuid primary key references auth.users (id) on delete cascade);
+-- 이메일로 관리자 지정 (가입 전에도 등록해 둘 수 있다). 이메일 인증이 끝난 계정만 관리자로 인정한다 —
+-- "Confirm email" 을 꺼 둔 상태에서 남이 같은 주소로 먼저 가입해도 관리자가 되지 못한다 (Google 로그인은 인증된 이메일이다).
+create table if not exists public.slg_admin_emails (email text primary key);
+insert into public.slg_admin_emails (email) values ('rooin37@gmail.com') on conflict (email) do nothing;
+
+-- 플레이어에게 보여 줄 소식 (세금 · 이자 · 몰수 · 낙찰 …). 클라이언트가 확인(ack)하면 지운다.
+create table if not exists public.slg_events (
+  id bigserial primary key,
+  user_id uuid not null,
+  kind text not null,
+  payload jsonb not null default '{}'::jsonb,
+  at_ms bigint not null
+);
+create index if not exists slg_events_user on public.slg_events (user_id, id);
+
+-- 플레이어에게 전달할 물건 (경매로 받은 캐릭터 · 상환된 담보). 클라이언트가 받아 적은 뒤 ack.
+create table if not exists public.slg_inbox (
+  id bigserial primary key,
+  user_id uuid not null,
+  kind text not null,
+  payload jsonb not null,
+  at_ms bigint not null
+);
+create index if not exists slg_inbox_user on public.slg_inbox (user_id, id);
+
+-- ---------------------------------------------------------------- 연준 (싱글턴) · 안건
+create table if not exists public.slg_econ (
+  id int primary key default 1 check (id = 1),
+  rev bigint not null default 0,
+  rate_bp int not null,
+  price numeric not null default 1,
+  last_tick_at bigint not null,
+  tick_count int not null default 0,
+  last_rate_change_at bigint not null default 0,
+  history jsonb not null default '[]'::jsonb,
+  macro jsonb,
+  last_motion jsonb
+);
+
+create table if not exists public.slg_motion (
+  id text primary key,
+  dir int not null check (dir in (-1, 1)),
+  proposer uuid not null,
+  proposer_name text not null,
+  created_ms bigint not null,
+  expires_ms bigint not null
+);
+create unique index if not exists slg_motion_single on public.slg_motion ((true)); -- 동시에 안건은 하나
+
+create table if not exists public.slg_motion_votes (
+  motion_id text not null references public.slg_motion (id) on delete cascade,
+  voter uuid not null,
+  name text not null,
+  v text not null check (v in ('yes', 'no')),
+  primary key (motion_id, voter)
+);
+
+-- ---------------------------------------------------------------- 국가 지분
+create table if not exists public.slg_nations (
+  region_id text primary key references public.slg_regions (region_id),
+  created_ms bigint not null
+);
+create table if not exists public.slg_shares (
+  region_id text not null references public.slg_regions (region_id),
+  holder text not null,                -- 플레이어 user_id 문자열 또는 'dummy_<region>_<i>'
+  name text not null,
+  bp int not null check (bp > 0),      -- 1/10000 단위
+  dummy boolean not null default false,
+  loop int,                            -- 지분을 얻었을 때의 회귀 횟수 (더미는 null)
+  primary key (region_id, holder)
+);
+create table if not exists public.slg_payouts (   -- 다른 플레이어가 내 지분을 사 가면 쌓이는 대금
+  region_id text not null,
+  holder text not null,
+  gold bigint not null check (gold > 0),
+  loop int not null,
+  primary key (region_id, holder)
+);
+create table if not exists public.slg_share_rights (   -- 구역 점령으로 생기는 지분 구매권
+  user_id uuid not null,
+  region_id text not null references public.slg_regions (region_id),
+  loop int not null,
+  max_bp int not null,
+  bought_bp int not null default 0,
+  available_ms bigint not null,        -- 이 시각부터 구매 가능 (점령 청구 간격 제한)
+  primary key (user_id, region_id)
+);
+create table if not exists public.slg_secured (
+  user_id uuid not null,
+  region_id text not null references public.slg_regions (region_id),
+  loop int not null,
+  at_ms bigint not null,
+  primary key (user_id, region_id)
+);
+
+-- ---------------------------------------------------------------- 대출 · 경매
+create table if not exists public.slg_loans (
+  id text primary key,
+  user_id uuid not null,
+  loop int not null,
+  principal bigint not null,
+  rate_bp int not null,
+  started_ms bigint not null,
+  term_hours int not null,
+  due_ms bigint not null,
+  periods_done int not null default 0,
+  interest_paid bigint not null default 0,
+  arrears bigint not null default 0,
+  missed int not null default 0,
+  status text not null default 'active' check (status in ('active', 'repaid', 'defaulted', 'void')),
+  collateral jsonb not null,
+  collateral_value bigint not null
+);
+create index if not exists slg_loans_user on public.slg_loans (user_id, status);
+
+create table if not exists public.slg_auctions (
+  id text primary key,
+  unit jsonb not null,
+  value bigint not null,
+  status text not null default 'open' check (status in ('open', 'sold', 'delivered', 'void')),
+  reason text not null default 'default',
+  seller_name text not null default '연방준비기금',
+  relists int not null default 0,
+  start_price bigint not null,
+  current_bid bigint not null default 0,
+  bidder uuid,
+  bidder_name text,
+  bidder_loop int,
+  bids int not null default 0,
+  created_ms bigint not null,
+  ends_ms bigint not null,
+  winner uuid,
+  winner_name text,
+  final_price bigint not null default 0,
+  closed_ms bigint
+);
+create index if not exists slg_auctions_status on public.slg_auctions (status, ends_ms);
+
+-- ---------------------------------------------------------------- 권한: 브라우저는 테이블을 직접 못 본다 (RPC 만)
+do $$
+declare t text;
+begin
+  foreach t in array array['slg_config','slg_regions','slg_players','slg_wallet_log','slg_admins','slg_admin_emails','slg_events','slg_inbox','slg_econ',
+                           'slg_motion','slg_motion_votes','slg_nations','slg_shares','slg_payouts','slg_share_rights','slg_secured',
+                           'slg_loans','slg_auctions']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from public', t);
+    if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on public.%I from anon', t); end if;
+    if exists (select 1 from pg_roles where rolname = 'authenticated') then execute format('revoke all on public.%I from authenticated', t); end if;
+  end loop;
+end $$;
+
+-- ============================================================================
+-- 공통 유틸
+-- ============================================================================
+create or replace function public.slg_now_ms() returns bigint
+language sql volatile set search_path = public as $$
+  select coalesce(nullif(current_setting('slg.now_ms', true), '')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint)
+$$;
+
+create or replace function public.slg_uid() returns uuid
+language plpgsql stable set search_path = public as $$
+declare u uuid := auth.uid();
+begin
+  if u is null then raise exception 'not_authenticated' using errcode = '28000'; end if;
+  return u;
+end $$;
+
+create or replace function public.slg_lock() returns void
+language sql volatile set search_path = public as $$ select pg_advisory_xact_lock(727001) $$;
+
+-- 0~1 의사난수 (같은 seed → 같은 값)
+create or replace function public.slg_rand(seed text) returns numeric
+language sql immutable set search_path = public as $$
+  select (('x' || substr(md5(seed), 1, 8))::bit(32)::bigint)::numeric / 4294967296.0
+$$;
+
+-- 문자열 → 정수 (아니면 기본값)
+create or replace function public.slg_int(v text, dflt int) returns int
+language sql immutable set search_path = public as $$
+  select case when v ~ '^-?[0-9]{1,9}$' then v::int else dflt end
+$$;
+
+-- 기준가 × 물가. 소액은 1G, 100G 이상은 5G 단위 (config.js scaleGold 와 같다)
+create or replace function public.slg_scale(base numeric, price numeric) returns bigint
+language plpgsql immutable set search_path = public as $$
+declare v numeric := base * price; u numeric;
+begin
+  if not (v > 0) then return 0; end if;
+  u := case when v >= 100 then 5 else 1 end;
+  return greatest(1, (round(v / u) * u)::bigint);
+end $$;
+
+-- 수입용: 1G 단위 (config.js scaleIncome 과 같다)
+create or replace function public.slg_scale_income(base numeric, price numeric) returns bigint
+language sql immutable set search_path = public as $$
+  select case when base * price > 0 then greatest(1, round(base * price)::bigint) else 0 end
+$$;
+
+create or replace function public.slg_hist_trim(h jsonb, n int) returns jsonb
+language sql immutable set search_path = public as $$
+  select coalesce(jsonb_agg(x order by i), '[]'::jsonb)
+  from (select x, i from jsonb_array_elements(h) with ordinality as t(x, i) order by i desc limit n) s
+$$;
+
+-- ============================================================================
+-- 물가 · 연준 엔진 (fedEngine.js 와 같은 식)
+-- ============================================================================
+create or replace function public.slg_econ_init(p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare tick_ms bigint := (slg_cfg('tick_hours') * 3600000)::bigint; b bigint;
+begin
+  b := (p_now / tick_ms) * tick_ms;
+  insert into slg_econ (id, rate_bp, price, last_tick_at, history)
+  values (1, slg_cfg('rate_init_bp')::int, 1, b, jsonb_build_array(jsonb_build_object('at', b, 'price', 1, 'rateBp', slg_cfg('rate_init_bp')::int)))
+  on conflict (id) do nothing;
+end $$;
+
+-- 정책금리 항: 기본 상승분 − 민감도 × (금리 − 중립)
+create or replace function public.slg_drift_pct(p_rate_bp int) returns numeric
+language sql stable set search_path = public as $$
+  select slg_cfg('base_drift_pct') - slg_cfg('sensitivity_pct') * ((p_rate_bp - slg_cfg('neutral_bp')) / 100.0)
+$$;
+
+-- 틱 하나의 물가 변동(%)을 원인별로: { rate, money, demand, total }
+create or replace function public.slg_breakdown(p_rate_bp int, p_price numeric, p_macro jsonb) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare
+  r numeric := slg_drift_pct(p_rate_bp);
+  m numeric := 0; d numeric := 0; s numeric; k numeric;
+  players numeric; money numeric; vel numeric; money_idx numeric; vel_idx numeric;
+begin
+  if p_macro is not null then
+    players := coalesce((p_macro->>'players')::numeric, 0);
+    money := coalesce((p_macro->>'money')::numeric, 0);
+    vel := coalesce((p_macro->>'velocity')::numeric, 0);
+    if players > 0 and money > 0 then
+      money_idx := least(slg_cfg('money_idx_max'), greatest(slg_cfg('money_idx_min'), (money / players) / slg_cfg('ref_money')));
+      vel_idx := least(slg_cfg('vel_idx_max'), greatest(slg_cfg('vel_idx_min'), vel / slg_cfg('ref_velocity')));
+      m := slg_cfg('gap_gain') * ln(money_idx / p_price) * 100;
+      d := slg_cfg('gap_gain') * slg_cfg('velocity_weight') * ln(vel_idx) * 100;
+      s := m + d;
+      if abs(s) > slg_cfg('gap_cap_pct') then
+        k := slg_cfg('gap_cap_pct') / abs(s);
+        m := m * k; d := d * k;
+      end if;
+    end if;
+  end if;
+  return jsonb_build_object('rate', r, 'money', m, 'demand', d, 'total', r + m + d);
+end $$;
+
+create or replace function public.slg_noise(n int) returns numeric
+language sql immutable set search_path = public as $$
+  select (slg_rand('fed|' || n) * 2 - 1) * slg_cfg('noise_pct')
+$$;
+
+-- 접속 중인 플레이어를 합친 거시 지표 { at, players, money, debt, spend, velocity }. 아무도 없으면 null.
+create or replace function public.slg_build_macro(p_now bigint) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare
+  tick_ms bigint := (slg_cfg('tick_hours') * 3600000)::bigint;
+  ti bigint := p_now / tick_ms;
+  cutoff bigint := p_now - (slg_cfg('report_max_age_hours') * 3600000)::bigint;
+  w int := slg_cfg('spend_window_ticks')::int;
+  n int; money numeric; spend numeric; debt numeric;
+begin
+  select count(*), coalesce(sum(gold), 0) into n, money from slg_players where last_seen_ms >= cutoff;
+  if n = 0 then return null; end if;
+  select coalesce(sum(a), 0) into spend from (
+    select (select avg((p.spend ->> k::text)::numeric) from generate_series(ti - w, ti - 1) k where p.spend ? k::text) as a
+    from slg_players p where p.last_seen_ms >= cutoff
+  ) q;
+  select coalesce(sum(l.principal + l.arrears), 0) into debt
+  from slg_loans l join slg_players p on p.user_id = l.user_id
+  where l.status = 'active' and p.last_seen_ms >= cutoff;
+  return jsonb_build_object('at', p_now, 'players', n, 'money', money, 'debt', debt, 'spend', round(spend),
+                            'velocity', case when money > 0 then spend / money else 0 end);
+end $$;
+
+-- 지나간 틱을 모두 적용한다. 틱이 지났으면 그 시점의 거시 지표를 집계해서 같이 적는다.
+create or replace function public.slg_econ_advance(p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare
+  e slg_econ%rowtype;
+  tick_ms bigint := (slg_cfg('tick_hours') * 3600000)::bigint;
+  boundary bigint; missed bigint; steps int; i int; n int;
+  v_macro jsonb; bd jsonb; pct numeric; newprice numeric;
+  v_hist jsonb; v_price numeric; v_tick int;
+begin
+  perform slg_econ_init(p_now);
+  select * into e from slg_econ where id = 1 for update;
+  boundary := (p_now / tick_ms) * tick_ms;
+  if boundary <= e.last_tick_at then return; end if;
+  v_macro := slg_build_macro(p_now);
+  missed := (boundary - e.last_tick_at) / tick_ms;
+  steps := least(missed, slg_cfg('max_catchup_ticks'))::int;
+  v_hist := e.history; v_price := e.price; v_tick := e.tick_count;
+  for i in 1..steps loop
+    n := v_tick + 1;
+    bd := slg_breakdown(e.rate_bp, v_price, v_macro);
+    pct := (bd->>'total')::numeric + slg_noise(n);
+    newprice := round(v_price * (1 + pct / 100), 4);
+    v_price := least(slg_cfg('price_max'), greatest(slg_cfg('price_min'), newprice));
+    v_tick := n;
+    v_hist := v_hist || jsonb_build_array(jsonb_build_object('at', e.last_tick_at + i * tick_ms, 'price', v_price, 'rateBp', e.rate_bp));
+  end loop;
+  update slg_econ set
+    price = v_price, tick_count = v_tick, last_tick_at = boundary, macro = v_macro,
+    history = slg_hist_trim(v_hist, slg_cfg('history_len')::int), rev = rev + 1
+  where id = 1;
+end $$;
+
+-- ============================================================================
+-- 플레이어 · 지갑 내부 함수 (RPC 가 아니다 — 클라이언트에 노출하지 않는다)
+-- ============================================================================
+create or replace function public.slg_clean_name(p_name text) returns text
+language sql immutable set search_path = public as $$
+  select coalesce(nullif(left(regexp_replace(coalesce(p_name, ''), '[[:cntrl:]]', '', 'g'), 24), ''), '지휘관')
+$$;
+
+create or replace function public.slg_event(p_uid uuid, p_kind text, p_payload jsonb, p_now bigint) returns void
+language sql volatile set search_path = public as $$
+  insert into slg_events (user_id, kind, payload, at_ms) values (p_uid, p_kind, coalesce(p_payload, '{}'::jsonb), p_now)
+$$;
+
+-- 소비(수요) 기록: 이번 틱 소비액에 더하고 오래된 틱은 지운다
+create or replace function public.slg_track_spend(p_uid uuid, p_amount bigint, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare tick_ms bigint := (slg_cfg('tick_hours') * 3600000)::bigint; ti bigint := p_now / tick_ms; k text := (p_now / tick_ms)::text;
+begin
+  update slg_players set spend = coalesce((
+      select jsonb_object_agg(key, value) from jsonb_each(spend) where key::bigint >= ti - 8 and key <> k), '{}'::jsonb)
+    || jsonb_build_object(k, coalesce((spend ->> k)::numeric, 0) + p_amount)
+  where user_id = p_uid;
+end $$;
+
+create or replace function public.slg_credit(p_uid uuid, p_amount bigint, p_kind text, p_ref text, p_now bigint, p_tx text default null)
+returns bigint language plpgsql volatile set search_path = public as $$
+declare bal bigint;
+begin
+  if p_amount < 0 then raise exception 'negative_credit'; end if;
+  update slg_players set gold = gold + p_amount where user_id = p_uid returning gold into bal;
+  if bal is null then raise exception 'no_player'; end if;
+  insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
+  values (p_uid, coalesce(p_tx, 'srv:' || gen_random_uuid()::text), p_kind, p_amount, p_ref, bal, p_now);
+  return bal;
+end $$;
+
+-- 잔액이 모자라면 false (아무것도 바뀌지 않는다). p_demand: 소비(수요) 지표에 센다.
+create or replace function public.slg_debit(p_uid uuid, p_amount bigint, p_kind text, p_ref text, p_now bigint, p_tx text default null, p_demand boolean default false)
+returns boolean language plpgsql volatile set search_path = public as $$
+declare bal bigint;
+begin
+  if p_amount < 0 then raise exception 'negative_debit'; end if;
+  update slg_players set gold = gold - p_amount where user_id = p_uid and gold >= p_amount returning gold into bal;
+  if bal is null then return false; end if;
+  insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
+  values (p_uid, coalesce(p_tx, 'srv:' || gen_random_uuid()::text), p_kind, -p_amount, p_ref, bal, p_now);
+  if p_demand then perform slg_track_spend(p_uid, p_amount, p_now); end if;
+  return true;
+end $$;
+
+-- ============================================================================
+-- 연준 위원회 · 안건
+-- ============================================================================
+-- 국가별 지분 1위(더미 · 이전 회차 보유자 제외, min_seat_bp 이상). 한 사람이 여러 국가 1위여도 한 명.
+create or replace function public.slg_committee()
+returns table (id uuid, name text, total_bp bigint, seats jsonb)
+language sql stable set search_path = public as $$
+  with top as (
+    select distinct on (s.region_id) s.region_id, p.user_id, p.name, s.bp, s.holder
+    from slg_shares s join slg_players p on p.user_id::text = s.holder and p.loop is not distinct from s.loop
+    where not s.dummy and s.bp >= slg_cfg('min_seat_bp')
+    order by s.region_id, s.bp desc, s.holder asc
+  )
+  select user_id, max(name), sum(bp)::bigint, jsonb_agg(jsonb_build_object('regionId', region_id, 'bp', bp) order by region_id)
+  from top group by user_id order by sum(bp) desc, user_id asc
+$$;
+
+create or replace function public.slg_can_change_rate(p_dir int, p_now bigint) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare e slg_econ%rowtype; tgt int; wait bigint;
+begin
+  select * into e from slg_econ where id = 1;
+  tgt := e.rate_bp + p_dir * slg_cfg('rate_step_bp')::int;
+  if tgt < slg_cfg('rate_min_bp') then
+    return jsonb_build_object('ok', false, 'reason', '정책금리는 ' || (slg_cfg('rate_min_bp') / 100) || '% 아래로 내릴 수 없습니다.');
+  end if;
+  if tgt > slg_cfg('rate_max_bp') then
+    return jsonb_build_object('ok', false, 'reason', '정책금리는 ' || (slg_cfg('rate_max_bp') / 100) || '%를 넘길 수 없습니다.');
+  end if;
+  wait := e.last_rate_change_at + (slg_cfg('rate_cooldown_hours') * 3600000)::bigint - p_now;
+  if wait > 0 then
+    return jsonb_build_object('ok', false, 'reason', '직전 금리 변경 후 냉각 기간입니다.', 'waitMs', wait);
+  end if;
+  return jsonb_build_object('ok', true, 'target', tgt);
+end $$;
+
+-- 안건 정리: 가결 → 금리 변경 / 부결 / 만료. (호출 전에 slg_econ_advance 로 물가를 현재 금리까지 밀어 둔다.)
+create or replace function public.slg_fed_resolve(p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare
+  m slg_motion%rowtype; total int; need int; yes int; no int; res text; chk jsonb; e slg_econ%rowtype; newrate int; hist jsonb;
+begin
+  select * into m from slg_motion;
+  if not found then return; end if;
+  select count(*) into total from slg_committee();
+  select count(*) filter (where v.v = 'yes'), count(*) filter (where v.v = 'no') into yes, no
+  from slg_motion_votes v where v.motion_id = m.id and v.voter in (select c.id from slg_committee() c);
+  need := total / 2 + 1;
+  if total > 0 and yes >= need then res := 'passed';
+  elsif total = 0 or no > total - need then res := 'rejected';
+  elsif p_now >= m.expires_ms then res := 'expired';
+  else return;
+  end if;
+  select * into e from slg_econ where id = 1 for update;
+  newrate := e.rate_bp;
+  if res = 'passed' then
+    chk := slg_can_change_rate(m.dir, p_now);
+    if (chk->>'ok')::boolean then
+      newrate := (chk->>'target')::int;
+      hist := slg_hist_trim(e.history || jsonb_build_array(jsonb_build_object('at', p_now, 'price', e.price, 'rateBp', newrate)), slg_cfg('history_len')::int);
+      update slg_econ set rate_bp = newrate, last_rate_change_at = p_now, history = hist where id = 1;
+    else
+      res := 'rejected';
+    end if;
+  end if;
+  update slg_econ set rev = rev + 1,
+    last_motion = jsonb_build_object('result', res, 'dir', m.dir, 'at', p_now, 'rateBp', newrate, 'yes', yes, 'no', no, 'total', total, 'proposerName', m.proposer_name)
+  where id = 1;
+  delete from slg_motion where id = m.id;
+end $$;
+
+-- 클라이언트용 연준 기록 (fedEngine.js 의 기록과 같은 모양)
+create or replace function public.slg_fed_json() returns jsonb
+language sql stable set search_path = public as $$
+  select jsonb_build_object(
+    'id', 'main', 'rev', e.rev, 'rateBp', e.rate_bp, 'price', e.price, 'lastTickAt', e.last_tick_at, 'tickCount', e.tick_count,
+    'lastRateChangeAt', e.last_rate_change_at, 'history', e.history, 'macro', e.macro, 'lastMotion', e.last_motion,
+    'motion', (select jsonb_build_object('id', m.id, 'dir', m.dir, 'proposerId', m.proposer, 'proposerName', m.proposer_name,
+                 'createdAt', m.created_ms, 'expiresAt', m.expires_ms,
+                 'votes', coalesce((select jsonb_object_agg(v.voter::text, jsonb_build_object('name', v.name, 'v', v.v)) from slg_motion_votes v where v.motion_id = m.id), '{}'::jsonb))
+               from slg_motion m limit 1))
+  from slg_econ e where e.id = 1
+$$;
+
+-- ============================================================================
+-- 국가 지분 · 세금 (shareEngine.js 와 같은 식)
+-- ============================================================================
+-- total 을 weights 비율로 나눈 정수 배열 (합이 정확히 total, 최대 나머지 방식, 동률은 앞 번호 우선)
+create or replace function public.slg_split_bp(p_total int, p_weights numeric[]) returns int[]
+language plpgsql immutable set search_path = public as $$
+declare n int := coalesce(array_length(p_weights, 1), 0); sumw numeric := 0; i int; res int[] := '{}'; raw numeric[] := '{}'; rest int; used int := 0; j int;
+begin
+  if n = 0 then return '{}'; end if;
+  for i in 1..n loop sumw := sumw + p_weights[i]; end loop;
+  if sumw = 0 or p_total <= 0 then
+    for i in 1..n loop res := res || 0; end loop;
+    return res;
+  end if;
+  for i in 1..n loop
+    raw := raw || (p_total * p_weights[i] / sumw);
+    res := res || floor(p_total * p_weights[i] / sumw)::int;
+    used := used + res[i];
+  end loop;
+  rest := p_total - used;
+  for j in select s.i from (select g as i, raw[g] - floor(raw[g]) as frac from generate_series(1, n) g) s order by s.frac desc, s.i asc loop
+    exit when rest <= 0;
+    res[j] := res[j] + 1;
+    rest := rest - 1;
+  end loop;
+  return res;
+end $$;
+
+create or replace function public.slg_tax_per_settlement(p_region text, p_hours numeric) returns numeric
+language sql stable set search_path = public as $$
+  select (slg_cfg('tax_base') + r.threat * slg_cfg('tax_per_threat')) * p_hours from slg_regions r where r.region_id = p_region
+$$;
+
+-- 지분을 가진 (더미 · 이전 회차 제외) 플레이어 수에 따른 정산 주기 (시간)
+create or replace function public.slg_interval_hours() returns int
+language plpgsql stable set search_path = public as $$
+declare n int;
+begin
+  select count(distinct s.holder) into n from slg_shares s
+  join slg_players p on p.user_id::text = s.holder and p."loop" is not distinct from s."loop"
+  where not s.dummy and s.bp > 0;
+  return case when n >= 30 then 1 when n >= 10 then 4 else 8 end;
+end $$;
+
+-- 처음 만드는 국가에는 더미 플레이어를 섞어 넣는다 (같은 구역 → 같은 구성)
+create or replace function public.slg_ensure_nations(p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare
+  r record; cnt int; total int; weights numeric[]; bps int[]; i int; names text[]; avail text[]; idx int;
+begin
+  names := array['철혈백작','Lumi_K','금저울상단','Guest_4821','붉은매용병단','Arden','북부곡물왕','Guest_7302','흑요석','mira_lover',
+                 '은행가베른','세이렌','Guest_1957','방랑기사단','Rokan_fan','소금장수','Valen','모래시계','Guest_6640','청동망치'];
+  for r in select region_id from slg_regions where region_id not in (select region_id from slg_nations) order by region_id loop
+    cnt := slg_cfg('dummy_count_min')::int + floor(slg_rand('nation|' || r.region_id || '|count') * (slg_cfg('dummy_count_max') - slg_cfg('dummy_count_min') + 1))::int;
+    total := (slg_cfg('dummy_total_min_pct')::int + floor(slg_rand('nation|' || r.region_id || '|total') * (slg_cfg('dummy_total_max_pct') - slg_cfg('dummy_total_min_pct') + 1))::int) * 100;
+    weights := '{}';
+    for i in 1..cnt loop weights := weights || (1 + slg_rand('nation|' || r.region_id || '|w|' || i) * 3); end loop;
+    bps := slg_split_bp(total, weights);
+    avail := names;
+    for i in 1..cnt loop
+      idx := floor(slg_rand('nation|' || r.region_id || '|name|' || i) * array_length(avail, 1))::int + 1;
+      if bps[i] > 0 then
+        insert into slg_shares (region_id, holder, name, bp, dummy, loop) values (r.region_id, 'dummy_' || r.region_id || '_' || (i - 1), avail[idx], bps[i], true, null);
+      end if;
+      avail := avail[1:idx - 1] || avail[idx + 1:array_length(avail, 1)];
+    end loop;
+    insert into slg_nations (region_id, created_ms) values (r.region_id, p_now);
+  end loop;
+end $$;
+
+-- 회귀로 낡은 (회차가 다른) 플레이어 지분 · 대금 정리
+create or replace function public.slg_purge_stale() returns void
+language plpgsql volatile set search_path = public as $$
+begin
+  delete from slg_shares s using slg_players p where p.user_id::text = s.holder and not s.dummy and s."loop" is distinct from p."loop";
+  delete from slg_payouts o using slg_players p where p.user_id::text = o.holder and o."loop" is distinct from p."loop";
+end $$;
+
+create or replace function public.slg_unowned_bp(p_region text) returns int
+language sql stable set search_path = public as $$
+  select greatest(0, 10000 - coalesce((select sum(bp) from slg_shares where region_id = p_region), 0))::int
+$$;
+
+-- 1bp 가격 = (8시간 세수 / 10000) × 회수배수 × 물가
+create or replace function public.slg_price_per_bp(p_region text, p_from_holder boolean, p_mult numeric) returns numeric
+language sql stable set search_path = public as $$
+  select slg_tax_per_settlement(p_region, 8) / 10000
+         * (case when p_from_holder then slg_cfg('price_holder_paybacks') else slg_cfg('price_unowned_paybacks') end)
+         * (case when p_mult > 0 then p_mult else 1 end)
+$$;
+
+-- 견적: 무주 지분부터, 모자라면 다른 보유자 지분을 보유 비율대로 (shareEngine.quotePurchase)
+-- { bp, fromUnowned, fromHolders:{id:bp}, cost, payouts:{id:gold} }
+create or replace function public.slg_share_quote(p_region text, p_buyer text, p_want int, p_mult numeric) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare
+  want int := greatest(0, coalesce(p_want, 0));
+  free int := slg_unowned_bp(p_region);
+  from_unowned int := least(want, free);
+  ids text[]; ws numeric[]; others_bp int := 0; from_others int; parts int[]; i int;
+  from_holders jsonb := '{}'; payouts jsonb := '{}';
+  unit_unowned numeric := slg_price_per_bp(p_region, false, p_mult);
+  unit_holder numeric := slg_price_per_bp(p_region, true, p_mult);
+  cost bigint; pay bigint;
+begin
+  select array_agg(holder order by holder), array_agg(bp::numeric order by holder), coalesce(sum(bp), 0)
+    into ids, ws, others_bp
+  from slg_shares where region_id = p_region and holder <> p_buyer and bp > 0;
+  from_others := least(want - from_unowned, others_bp);
+  cost := ceil(from_unowned * unit_unowned);
+  if from_others > 0 then
+    parts := slg_split_bp(from_others, ws);
+    for i in 1..array_length(ids, 1) loop
+      if parts[i] > 0 then
+        from_holders := from_holders || jsonb_build_object(ids[i], parts[i]);
+        pay := ceil(parts[i] * unit_holder);
+        payouts := payouts || jsonb_build_object(ids[i], pay);
+        cost := cost + pay;
+      end if;
+    end loop;
+  end if;
+  return jsonb_build_object('bp', from_unowned + from_others, 'fromUnowned', from_unowned, 'fromHolders', from_holders, 'cost', cost, 'payouts', payouts);
+end $$;
+
+-- 견적대로 지분을 옮긴다 (구매자 대금 지급은 호출하는 쪽이 이미 했다). 더미에게 가는 대금은 버린다.
+create or replace function public.slg_share_apply(p_region text, p_quote jsonb, p_buyer uuid, p_buyer_name text, p_buyer_loop int) returns void
+language plpgsql volatile set search_path = public as $$
+declare r record; h record; pay bigint;
+begin
+  for r in select key as holder, value::int as bp from jsonb_each_text(p_quote->'fromHolders') loop
+    select * into h from slg_shares where region_id = p_region and holder = r.holder;
+    if not found then continue; end if;
+    if h.bp - r.bp <= 0 then delete from slg_shares where region_id = p_region and holder = r.holder;
+    else update slg_shares set bp = bp - r.bp where region_id = p_region and holder = r.holder; end if;
+    pay := coalesce((p_quote->'payouts'->>r.holder)::bigint, 0);
+    if not h.dummy and pay > 0 then
+      insert into slg_payouts (region_id, holder, gold, "loop") values (p_region, r.holder, pay, h."loop")
+      on conflict (region_id, holder) do update set gold = case when slg_payouts."loop" = excluded."loop" then slg_payouts.gold + excluded.gold else excluded.gold end, "loop" = excluded."loop";
+    end if;
+  end loop;
+  insert into slg_shares (region_id, holder, name, bp, dummy, loop)
+  values (p_region, p_buyer::text, p_buyer_name, (p_quote->>'bp')::int, false, p_buyer_loop)
+  on conflict (region_id, holder) do update set bp = slg_shares.bp + excluded.bp, name = excluded.name;
+end $$;
+
+-- 매각 대금 수령 + 세금 정산 (플레이어 한 명). 접속할 때마다 호출된다.
+create or replace function public.slg_settle_player(p_uid uuid, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare
+  v_loop int; p slg_players%rowtype; o record; hours int; step bigint; from_ms bigint; cnt bigint; reg record; g numeric; total bigint := 0; k numeric;
+  by_region jsonb := '{}'; holds boolean; settled_until bigint; v_price numeric;
+begin
+  select * into p from slg_players where user_id = p_uid;
+  v_loop := p."loop";
+  -- 다른 플레이어가 내 지분을 사 가며 쌓인 대금
+  for o in select * from slg_payouts where holder = p_uid::text and "loop" = v_loop loop
+    perform slg_credit(p_uid, o.gold, 'share_payout', o.region_id, p_now);
+    delete from slg_payouts where region_id = o.region_id and holder = o.holder;
+    perform slg_event(p_uid, 'share_payout', jsonb_build_object('regionId', o.region_id, 'gold', o.gold), p_now);
+  end loop;
+  -- 세금
+  select exists (select 1 from slg_shares where holder = p_uid::text and "loop" is not distinct from p."loop" and bp > 0) into holds;
+  if p.last_settled_ms is null or not holds then
+    update slg_players set last_settled_ms = p_now where user_id = p_uid;
+    return;
+  end if;
+  if not (p_now > p.last_settled_ms) then return; end if;
+  hours := slg_interval_hours();
+  step := hours * 3600000::bigint;
+  from_ms := greatest(p.last_settled_ms, p_now - (slg_cfg('max_catchup_hours') * 3600000)::bigint);
+  cnt := greatest(0, (p_now / step) - (from_ms / step));
+  if cnt = 0 then return; end if;
+  select e.price into v_price from slg_econ e where e.id = 1;
+  for reg in select s.region_id, s.bp from slg_shares s where s.holder = p_uid::text and s."loop" is not distinct from v_loop and s.bp > 0 order by s.region_id loop
+    g := floor((slg_tax_per_settlement(reg.region_id, hours) * reg.bp / 10000) * cnt);
+    if g > 0 then
+      k := round(g * v_price);
+      if k > 0 then
+        by_region := by_region || jsonb_build_object(reg.region_id, k);
+        total := total + k::bigint;
+      end if;
+    end if;
+  end loop;
+  settled_until := (p_now / step) * step;
+  update slg_players set last_settled_ms = settled_until where user_id = p_uid;
+  if total > 0 then
+    perform slg_credit(p_uid, total, 'tax', null, p_now);
+    perform slg_event(p_uid, 'tax', jsonb_build_object('hours', hours, 'count', cnt, 'total', total, 'byRegion', by_region), p_now);
+  end if;
+end $$;
+
+-- ============================================================================
+-- 대출 (fedEngine.js 의 settleLoan 과 같은 규칙)
+-- ============================================================================
+-- 담보가치 = 몸값 공식 (game.js getCaptiveRansom): 기본가(물가 반영, 10G 단위) × (1 + (레벨−1)×0.2) × (1 + 승급×0.25)
+-- 레벨·승급은 클라이언트가 말한 값이므로 상한(collateral_max_level / rank)으로 자른다.
+create or replace function public.slg_collateral_value(p_unit jsonb, p_price numeric) returns bigint
+language plpgsql stable set search_path = public as $$
+declare lvl int; rk int; base numeric; cost numeric;
+begin
+  lvl := least(slg_cfg('collateral_max_level')::int, greatest(1, slg_int(p_unit ->> 'level', 1)));
+  rk := least(slg_cfg('collateral_max_rank')::int, greatest(0, slg_int(p_unit -> 'promotions' ->> 'combatRank', 0)));
+  base := greatest(1, round(slg_cfg('ransom_base') * p_price / 10) * 10);
+  cost := base * (1 + (lvl - 1) * 0.2) * (1 + rk * 0.25);
+  return greatest(10, (round(cost / 10) * 10)::bigint);
+end $$;
+
+create or replace function public.slg_loan_json(l slg_loans) returns jsonb
+language sql immutable set search_path = public as $$
+  select jsonb_build_object('id', l.id, 'principal', l.principal, 'rateBp', l.rate_bp, 'startedAt', l.started_ms, 'termHours', l.term_hours,
+    'dueAt', l.due_ms, 'periodsDone', l.periods_done, 'interestPaid', l.interest_paid, 'arrears', l.arrears, 'missed', l.missed,
+    'status', l.status, 'collateral', l.collateral, 'collateralValue', l.collateral_value)
+$$;
+
+create or replace function public.slg_start_price(p_value bigint, p_relists int) returns bigint
+language sql stable set search_path = public as $$
+  select greatest(slg_cfg('min_start_price')::bigint,
+                  round(p_value * slg_cfg('open_pct') * power(1 - slg_cfg('relist_drop_pct') / 100, p_relists))::bigint)
+$$;
+
+-- 몰수한 담보를 경매에 올린다 (id 가 대출 id 에서 나오므로 두 번 올라가지 않는다)
+create or replace function public.slg_auction_create(p_id text, p_unit jsonb, p_value bigint, p_reason text, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+begin
+  insert into slg_auctions (id, unit, value, reason, start_price, created_ms, ends_ms)
+  values (p_id, p_unit, p_value, p_reason, slg_start_price(p_value, 0), p_now, p_now + (slg_cfg('auction_hours') * 3600000)::bigint)
+  on conflict (id) do nothing;
+end $$;
+
+-- 플레이어 한 명의 대출을 p_now 까지 정산한다: 8시간 이자 → 만기 상환 / 몰수
+create or replace function public.slg_loans_settle(p_uid uuid, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare
+  l slg_loans%rowtype;
+  step_h int := slg_cfg('term_step_hours')::int; step_ms bigint := (slg_cfg('term_step_hours') * 3600000)::bigint;
+  total int; periods int; paid bigint; arr bigint; miss int; st text; reason text; due bigint; owed bigint; v_name text;
+begin
+  for l in select * from slg_loans where user_id = p_uid and status = 'active' order by started_ms, id loop
+    total := l.term_hours / step_h;
+    periods := l.periods_done; paid := l.interest_paid; arr := l.arrears; miss := l.missed; st := 'active'; reason := null;
+    v_name := coalesce(l.collateral ->> 'name', '담보');
+    while periods < total and l.started_ms + (periods + 1) * step_ms <= p_now loop
+      due := greatest(1, ceil(l.principal * l.rate_bp / 10000.0))::bigint + arr;
+      periods := periods + 1;
+      if slg_debit(p_uid, due, 'loan_interest', l.id, p_now) then
+        paid := paid + due; arr := 0; miss := 0;
+        perform slg_event(p_uid, 'loan_interest', jsonb_build_object('loanId', l.id, 'name', v_name, 'amount', due, 'done', periods, 'total', total), p_now);
+      else
+        arr := due; miss := miss + 1;
+        perform slg_event(p_uid, 'loan_missed', jsonb_build_object('loanId', l.id, 'name', v_name, 'amount', due, 'missed', miss, 'limit', slg_cfg('miss_limit')), p_now);
+        if miss >= slg_cfg('miss_limit') then st := 'defaulted'; reason := 'missed'; exit; end if;
+      end if;
+    end loop;
+    if st = 'active' and periods >= total and p_now >= l.due_ms then
+      owed := l.principal + arr;
+      if slg_debit(p_uid, owed, 'loan_repay', l.id, p_now) then
+        st := 'repaid';
+        insert into slg_inbox (user_id, kind, payload, at_ms)
+          values (p_uid, 'unit', jsonb_build_object('unit', l.collateral, 'source', 'loan_repaid', 'loanId', l.id), p_now);
+        perform slg_event(p_uid, 'loan_repaid', jsonb_build_object('loanId', l.id, 'name', v_name, 'amount', owed), p_now);
+      else
+        st := 'defaulted'; reason := 'maturity';
+      end if;
+    end if;
+    update slg_loans set periods_done = periods, interest_paid = paid, arrears = arr, missed = miss, status = st where id = l.id;
+    if st = 'defaulted' then
+      perform slg_auction_create('auc_' || l.id, l.collateral, l.collateral_value, 'default', p_now);
+      update slg_players set loan_ban_until_ms = greatest(loan_ban_until_ms, p_now + (slg_cfg('loan_default_ban_hours') * 3600000)::bigint) where user_id = p_uid;
+      perform slg_event(p_uid, 'loan_default', jsonb_build_object('loanId', l.id, 'name', v_name, 'reason', reason), p_now);
+    end if;
+  end loop;
+end $$;
+
+-- ============================================================================
+-- 경매 마감
+-- ============================================================================
+create or replace function public.slg_auctions_close(p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+declare a slg_auctions%rowtype; w_loop int; v_name text;
+begin
+  for a in select * from slg_auctions where status = 'open' and ends_ms <= p_now order by ends_ms, id loop
+    if a.bidder is not null then
+      select p."loop" into w_loop from slg_players p where p.user_id = a.bidder;
+      v_name := coalesce(a.unit ->> 'name', '캐릭터');
+      if w_loop is not distinct from a.bidder_loop then
+        update slg_auctions set status = 'delivered', winner = a.bidder, winner_name = a.bidder_name, final_price = a.current_bid, closed_ms = p_now where id = a.id;
+        insert into slg_inbox (user_id, kind, payload, at_ms)
+          values (a.bidder, 'unit', jsonb_build_object('unit', a.unit, 'source', 'auction', 'auctionId', a.id, 'price', a.current_bid), p_now);
+        perform slg_event(a.bidder, 'auction_won', jsonb_build_object('auctionId', a.id, 'name', v_name, 'price', a.current_bid), p_now);
+      else
+        -- 낙찰자가 그 사이 회귀했다: 낙찰금도 캐릭터도 사라진다
+        update slg_auctions set status = 'void', winner = a.bidder, winner_name = a.bidder_name, final_price = a.current_bid, closed_ms = p_now where id = a.id;
+      end if;
+    else
+      update slg_auctions set relists = relists + 1, start_price = slg_start_price(a.value, a.relists + 1),
+        ends_ms = p_now + (slg_cfg('auction_hours') * 3600000)::bigint where id = a.id;
+    end if;
+  end loop;
+end $$;
+
+-- ============================================================================
+-- 한 번의 요청 처음에 하는 정리 (물가 틱 · 안건 · 경매 마감 · 내 세금 · 내 대출)
+-- ============================================================================
+create or replace function public.slg_tick(p_uid uuid, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+begin
+  perform slg_econ_advance(p_now);
+  perform slg_ensure_nations(p_now);
+  perform slg_purge_stale();
+  perform slg_fed_resolve(p_now);
+  perform slg_loans_settle(p_uid, p_now);
+  perform slg_auctions_close(p_now);
+  perform slg_settle_player(p_uid, p_now);
+end $$;
+
+-- ============================================================================
+-- RPC — 클라이언트가 부르는 함수 (전부 security definer, 로그인 필요)
+-- ============================================================================
+create or replace function public.slg_player_for(p_uid uuid) returns slg_players
+language plpgsql stable set search_path = public as $$
+declare p slg_players%rowtype;
+begin
+  select * into p from slg_players where user_id = p_uid;
+  if not found then raise exception 'no_player' using errcode = 'P0001'; end if;
+  return p;
+end $$;
+
+-- 첫 접속: 플레이어를 만든다. 이미 있으면 이름만 갱신. 새 플레이어의 시작 골드는 클라이언트가 말한 값을 migrate_cap 으로 자른다.
+create or replace function public.slg_bootstrap(p_name text, p_claimed_gold bigint default 0, p_loop int default 0) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  select * into p from slg_players where user_id = uid;
+  if not found then
+    insert into slg_players (user_id, name, gold, "loop", run_started_ms, created_ms, last_seen_ms)
+    values (uid, slg_clean_name(p_name),
+            greatest(0, least(coalesce(p_claimed_gold, 0), slg_cfg('migrate_cap')::bigint)),
+            greatest(0, least(coalesce(p_loop, 0), 100000)), now_ms, now_ms, now_ms);
+    insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
+      select uid, 'srv:bootstrap', 'bootstrap', gold, null, gold, now_ms from slg_players where user_id = uid;
+    return jsonb_build_object('ok', true, 'created', true);
+  end if;
+  update slg_players set name = slg_clean_name(coalesce(nullif(p_name, ''), p.name)), last_seen_ms = now_ms where user_id = uid;
+  return jsonb_build_object('ok', true, 'created', false);
+end $$;
+
+-- ---------------------------------------------------------------- 지갑
+-- p_txs: [{ id, kind, amount, ref }]  amount 는 항상 양수(크기). kind 가 방향을 정한다.
+--   지출: spend(소비로 센다) · adjust · forfeit            — 잔액이 모자라면 거절
+--   수입: earn_loot · earn_reward · earn_event · earn_sell · earn_stash · earn_rewind — 건당 상한 · 1회 청구 · 시간당 상한
+-- 같은 id 를 다시 보내면 무시한다 (재전송 안전).
+create or replace function public.slg_wallet_apply(p_txs jsonb) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; econ_price numeric; tol numeric := slg_cfg('price_tolerance');
+  t jsonb; v_tx text; v_kind text; v_amt bigint; v_ref text; results jsonb := '[]'; ok boolean; reason text; cap numeric;
+  earned bigint; spent bigint; refunded bigint; bal bigint;
+begin
+  if jsonb_typeof(p_txs) <> 'array' or jsonb_array_length(p_txs) > 200 then raise exception 'bad_request'; end if;
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  update slg_players set last_seen_ms = now_ms where user_id = uid;
+  select e.price into econ_price from slg_econ e where e.id = 1;
+
+  for t in select x.value from jsonb_array_elements(p_txs) as x loop
+    v_tx := left(t ->> 'id', 64); v_kind := t ->> 'kind'; v_ref := left(t ->> 'ref', 64);
+    v_amt := case when (t ->> 'amount') ~ '^[0-9]{1,12}$' then (t ->> 'amount')::bigint else -1 end;
+    ok := false; reason := null;
+    if v_tx is null or v_kind is null or v_amt < 0 then
+      reason := 'bad_tx';
+    elsif exists (select 1 from slg_wallet_log w where w.user_id = uid and w.tx_id = v_tx) then
+      results := results || jsonb_build_object('id', v_tx, 'ok', true, 'dup', true);
+      continue;
+    elsif v_amt = 0 then
+      ok := true;
+    elsif v_kind in ('spend', 'adjust', 'forfeit') then
+      ok := slg_debit(uid, v_amt, v_kind, v_ref, now_ms, v_tx, v_kind = 'spend');
+      if not ok then reason := 'insufficient'; end if;
+    elsif v_kind in ('earn_loot', 'earn_reward', 'earn_event', 'earn_sell') then
+      cap := case v_kind when 'earn_loot' then slg_cfg('loot_max_base') when 'earn_reward' then slg_cfg('reward_max_base')
+                         when 'earn_event' then slg_cfg('event_max_base') else slg_cfg('sell_max_base') end;
+      if v_kind in ('earn_reward', 'earn_event') and v_ref is null then
+        reason := 'ref_required';
+      elsif v_amt > slg_scale_income(cap, econ_price) * tol then
+        reason := 'over_cap';
+      else
+        select coalesce(sum(w.delta), 0) into earned from slg_wallet_log w
+          where w.user_id = uid and w.kind in ('earn_loot', 'earn_reward', 'earn_event', 'earn_sell') and w.at_ms > now_ms - 3600000;
+        if earned + v_amt > slg_scale_income(slg_cfg('earn_cap_per_hour_base'), econ_price) * tol then
+          reason := 'rate_limited';
+        elsif v_kind in ('earn_reward', 'earn_event')
+              and exists (select 1 from slg_wallet_log w where w.user_id = uid and w.kind = v_kind and w.ref = v_ref) then
+          reason := 'already_claimed';
+        else
+          perform slg_credit(uid, v_amt, v_kind, v_ref, now_ms, v_tx);
+          ok := true;
+        end if;
+      end if;
+    elsif v_kind = 'earn_stash' then
+      -- 회귀 보상 "비상금": 회차마다 한 번, 정해진 금액만
+      if v_ref is distinct from ('loop:' || p."loop") then reason := 'bad_ref';
+      elsif v_amt > slg_cfg('stash_gold') then reason := 'over_cap';
+      elsif exists (select 1 from slg_wallet_log w where w.user_id = uid and w.kind = 'earn_stash' and w.ref = v_ref) then reason := 'already_claimed';
+      else perform slg_credit(uid, v_amt, v_kind, v_ref, now_ms, v_tx); ok := true; end if;
+    elsif v_kind = 'earn_rewind' then
+      -- 턴 되돌리기로 돌려받는 골드: 최근에 실제로 쓴 만큼까지만
+      select coalesce(-sum(w.delta), 0) into spent from slg_wallet_log w
+        where w.user_id = uid and w.kind in ('spend', 'adjust') and w.at_ms > now_ms - slg_cfg('rewind_window_ms');
+      select coalesce(sum(w.delta), 0) into refunded from slg_wallet_log w
+        where w.user_id = uid and w.kind = 'earn_rewind' and w.at_ms > now_ms - slg_cfg('rewind_window_ms');
+      if v_amt > spent - refunded then reason := 'over_cap';
+      else perform slg_credit(uid, v_amt, v_kind, v_ref, now_ms, v_tx); ok := true; end if;
+    else
+      reason := 'unknown_kind';
+    end if;
+    results := results || case when ok then jsonb_build_object('id', v_tx, 'ok', true)
+                               else jsonb_build_object('id', v_tx, 'ok', false, 'reason', reason) end;
+  end loop;
+  select gold into bal from slg_players where user_id = uid;
+  return jsonb_build_object('ok', true, 'balance', bal, 'results', results);
+end $$;
+
+-- 관리자인가: slg_admins 에 user_id 가 있거나, 인증된 이메일이 slg_admin_emails 에 있다
+create or replace function public.slg_admin_uid(p_uid uuid) returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from slg_admins where user_id = p_uid)
+      or exists (select 1 from auth.users u join slg_admin_emails e on lower(e.email) = lower(u.email)
+                 where u.id = p_uid and u.email_confirmed_at is not null)
+$$;
+
+-- 관리자 전용 골드 조정
+create or replace function public.slg_admin_adjust(p_delta bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; bal bigint;
+begin
+  if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  perform slg_player_for(uid);
+  if p_delta >= 0 then bal := slg_credit(uid, p_delta, 'admin', null, now_ms);
+  else
+    if not slg_debit(uid, -p_delta, 'admin', null, now_ms) then return jsonb_build_object('ok', false, 'error', 'insufficient'); end if;
+    select gold into bal from slg_players where user_id = uid;
+  end if;
+  return jsonb_build_object('ok', true, 'balance', bal);
+end $$;
+
+create or replace function public.slg_is_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select slg_admin_uid(auth.uid())
+$$;
+
+-- ---------------------------------------------------------------- 회귀
+create or replace function public.slg_loop_return(p_new_loop int) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; start_gold bigint := slg_cfg('start_gold')::bigint; newloop int;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  if p_new_loop <= p."loop" then
+    return jsonb_build_object('ok', true, 'noop', true, 'loop', p."loop", 'balance', p.gold);   -- 이미 처리됨 (재전송 안전)
+  end if;
+  if now_ms - p.last_loop_ms < slg_cfg('min_loop_interval_ms') then
+    return jsonb_build_object('ok', false, 'error', '너무 빨리 회귀했습니다.');
+  end if;
+  newloop := p."loop" + 1;
+  update slg_loans set status = 'void' where user_id = uid and status = 'active';
+  delete from slg_shares where holder = uid::text;
+  delete from slg_payouts where holder = uid::text;
+  delete from slg_share_rights where user_id = uid;
+  delete from slg_secured where user_id = uid;
+  update slg_players set gold = start_gold, "loop" = newloop, run_started_ms = now_ms, last_loop_ms = now_ms,
+    last_settled_ms = null, last_secure_ms = 0 where user_id = uid;
+  insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
+    values (uid, 'srv:loop:' || newloop, 'loop_reset', start_gold - p.gold, 'loop:' || newloop, start_gold, now_ms);
+  return jsonb_build_object('ok', true, 'loop', newloop, 'balance', start_gold);
+end $$;
+
+-- ---------------------------------------------------------------- 구역 점령 · 지분 구매
+create or replace function public.slg_region_secure(p_region text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; r slg_regions%rowtype; avail bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  select * into r from slg_regions where region_id = p_region;
+  if not found then return jsonb_build_object('ok', false, 'error', '알 수 없는 구역입니다.'); end if;
+  if exists (select 1 from slg_secured where user_id = uid and region_id = p_region and "loop" = p."loop") then
+    return jsonb_build_object('ok', true, 'dup', true);
+  end if;
+  if not r.is_start and not exists (
+      select 1 from slg_secured s join slg_regions sr on sr.region_id = s.region_id
+      where s.user_id = uid and s."loop" = p."loop" and p_region = any (sr.neighbors)) then
+    return jsonb_build_object('ok', false, 'error', '인접한 점령 구역이 없습니다.');
+  end if;
+  -- 점령 청구 간격 제한: 너무 빨리 몰아서 청구해도 구매권은 이 간격으로 줄 서서 열린다
+  avail := greatest(now_ms, p.last_secure_ms + (case when p.last_secure_ms = 0 then 0 else slg_cfg('secure_min_interval_ms') end)::bigint);
+  update slg_players set last_secure_ms = avail where user_id = uid;
+  insert into slg_secured (user_id, region_id, "loop", at_ms) values (uid, p_region, p."loop", now_ms);
+  insert into slg_share_rights (user_id, region_id, "loop", max_bp, bought_bp, available_ms)
+    values (uid, p_region, p."loop", slg_cfg('purchase_right_bp')::int, 0, avail)
+  on conflict (user_id, region_id) do update set "loop" = excluded."loop", max_bp = excluded.max_bp, bought_bp = 0, available_ms = excluded.available_ms;
+  return jsonb_build_object('ok', true, 'availableMs', avail);
+end $$;
+
+create or replace function public.slg_share_buy(p_region text, p_want int) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; rt slg_share_rights%rowtype; want int; q jsonb; mult numeric; bal bigint; v_from_others int;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  select * into rt from slg_share_rights where user_id = uid and region_id = p_region and "loop" = p."loop";
+  if not found then return jsonb_build_object('ok', false, 'error', '이 국가의 지분 구매권이 없습니다. 점령하면 생깁니다.'); end if;
+  if rt.available_ms > now_ms then return jsonb_build_object('ok', false, 'error', '구매권이 아직 열리지 않았습니다.', 'availableMs', rt.available_ms); end if;
+  want := least(greatest(0, coalesce(p_want, 0)), rt.max_bp - rt.bought_bp);
+  if want <= 0 then return jsonb_build_object('ok', false, 'error', '살 수 있는 지분이 없습니다.'); end if;
+  select e.price into mult from slg_econ e where e.id = 1;
+  q := slg_share_quote(p_region, uid::text, want, mult);
+  if (q ->> 'bp')::int <= 0 then return jsonb_build_object('ok', false, 'error', '살 수 있는 지분이 없습니다.'); end if;
+  if not slg_debit(uid, (q ->> 'cost')::bigint, 'share_buy', p_region, now_ms) then
+    return jsonb_build_object('ok', false, 'error', '골드가 부족합니다 (필요 ' || (q ->> 'cost') || 'G)', 'cost', (q ->> 'cost')::bigint);
+  end if;
+  perform slg_share_apply(p_region, q, uid, p.name, p."loop");
+  update slg_share_rights set bought_bp = bought_bp + (q ->> 'bp')::int where user_id = uid and region_id = p_region;
+  update slg_players set last_settled_ms = coalesce(last_settled_ms, now_ms) where user_id = uid;
+  select gold into bal from slg_players where user_id = uid;
+  select coalesce(sum(value::int), 0) into v_from_others from jsonb_each_text(q -> 'fromHolders');
+  return jsonb_build_object('ok', true, 'bp', (q ->> 'bp')::int, 'cost', (q ->> 'cost')::bigint, 'fromOthers', v_from_others, 'balance', bal);
+end $$;
+
+-- ---------------------------------------------------------------- 연준 표결
+create or replace function public.slg_fed_propose(p_dir int) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; chk jsonb; d int := case when p_dir > 0 then 1 else -1 end; mid text;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  if not exists (select 1 from slg_committee() c where c.id = uid) then return jsonb_build_object('ok', false, 'error', '연준 위원만 안건을 낼 수 있습니다.'); end if;
+  if exists (select 1 from slg_motion) then return jsonb_build_object('ok', false, 'error', '이미 표결 중인 안건이 있습니다.'); end if;
+  chk := slg_can_change_rate(d, now_ms);
+  if not (chk ->> 'ok')::boolean then return jsonb_build_object('ok', false, 'error', chk ->> 'reason', 'waitMs', chk -> 'waitMs'); end if;
+  mid := 'm' || (select tick_count from slg_econ where id = 1) || '_' || (now_ms / 1000);
+  insert into slg_motion (id, dir, proposer, proposer_name, created_ms, expires_ms)
+    values (mid, d, uid, p.name, now_ms, now_ms + (slg_cfg('motion_ttl_hours') * 3600000)::bigint);
+  insert into slg_motion_votes (motion_id, voter, name, v) values (mid, uid, p.name, 'yes');
+  perform slg_fed_resolve(now_ms);     -- 위원이 한 명뿐이면 바로 가결
+  return jsonb_build_object('ok', true, 'fed', slg_fed_json());
+end $$;
+
+create or replace function public.slg_fed_vote(p_choice text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; m slg_motion%rowtype;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  if not exists (select 1 from slg_committee() c where c.id = uid) then return jsonb_build_object('ok', false, 'error', '연준 위원만 표결할 수 있습니다.'); end if;
+  select * into m from slg_motion;
+  if not found then return jsonb_build_object('ok', false, 'error', '표결 중인 안건이 없습니다.'); end if;
+  if now_ms >= m.expires_ms then return jsonb_build_object('ok', false, 'error', '이미 만료된 안건입니다.'); end if;
+  insert into slg_motion_votes (motion_id, voter, name, v) values (m.id, uid, p.name, case when p_choice = 'no' then 'no' else 'yes' end)
+  on conflict (motion_id, voter) do update set v = excluded.v, name = excluded.name;
+  perform slg_fed_resolve(now_ms);
+  return jsonb_build_object('ok', true, 'fed', slg_fed_json());
+end $$;
+
+-- ---------------------------------------------------------------- 대출 RPC
+-- p_id 는 클라이언트가 만든 대출 id (같은 id 로 다시 보내면 이미 만든 대출을 돌려준다 — 재전송 안전)
+create or replace function public.slg_loan_take(p_id text, p_unit jsonb, p_principal bigint, p_term_hours int) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; e slg_econ%rowtype; l slg_loans%rowtype; value bigint; maxp bigint; term int; outstanding bigint; active int; bal bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  if p_id is null or p_id !~ '^[A-Za-z0-9_-]{6,64}$' then return jsonb_build_object('ok', false, 'error', '잘못된 요청입니다.'); end if;
+  select * into l from slg_loans where id = p_id;
+  if found then
+    if l.user_id <> uid then return jsonb_build_object('ok', false, 'error', '잘못된 요청입니다.'); end if;
+    select gold into bal from slg_players where user_id = uid;
+    return jsonb_build_object('ok', true, 'dup', true, 'loan', slg_loan_json(l), 'balance', bal);
+  end if;
+  if p_unit is null or jsonb_typeof(p_unit) <> 'object' or jsonb_typeof(p_unit -> 'name') <> 'string' or length(p_unit::text) > 32768 then
+    return jsonb_build_object('ok', false, 'error', '담보로 맡길 수 없는 캐릭터입니다.');
+  end if;
+  if now_ms < p.loan_ban_until_ms then
+    return jsonb_build_object('ok', false, 'error', '담보를 몰수당한 직후라 한동안 대출을 받을 수 없습니다.', 'untilMs', p.loan_ban_until_ms);
+  end if;
+  select count(*), coalesce(sum(principal), 0) into active, outstanding from slg_loans where user_id = uid and status = 'active';
+  if active >= slg_cfg('max_active_loans') then
+    return jsonb_build_object('ok', false, 'error', '동시에 ' || slg_cfg('max_active_loans')::int || '건까지만 받을 수 있습니다.');
+  end if;
+  select * into e from slg_econ where id = 1;
+  value := slg_collateral_value(p_unit, e.price);
+  maxp := floor(value * slg_cfg('ltv'));
+  if p_principal is null or p_principal < slg_cfg('min_loan') or p_principal > maxp then
+    return jsonb_build_object('ok', false, 'error', '대출액은 ' || slg_cfg('min_loan')::int || 'G ~ ' || maxp || 'G 사이여야 합니다.');
+  end if;
+  if outstanding + p_principal > slg_scale(slg_cfg('loan_total_cap_base'), e.price) then
+    return jsonb_build_object('ok', false, 'error', '대출 잔액 한도를 넘습니다.');
+  end if;
+  term := least(slg_cfg('max_term_hours')::int, greatest(slg_cfg('min_term_hours')::int,
+            (round(coalesce(p_term_hours, slg_cfg('min_term_hours')::int)::numeric / slg_cfg('term_step_hours')) * slg_cfg('term_step_hours'))::int));
+  insert into slg_loans (id, user_id, "loop", principal, rate_bp, started_ms, term_hours, due_ms, collateral, collateral_value)
+    values (p_id, uid, p."loop", p_principal, e.rate_bp + slg_cfg('spread_bp')::int, now_ms, term, now_ms + term * 3600000::bigint, p_unit, value)
+    returning * into l;
+  bal := slg_credit(uid, p_principal, 'loan_in', p_id, now_ms);
+  return jsonb_build_object('ok', true, 'loan', slg_loan_json(l), 'balance', bal);
+end $$;
+
+create or replace function public.slg_loan_repay(p_id text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; l slg_loans%rowtype; owed bigint; bal bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  perform slg_player_for(uid);
+  perform slg_tick(uid, now_ms);    -- 지금까지의 이자를 먼저 낸다
+  select * into l from slg_loans where id = p_id and user_id = uid and status = 'active';
+  if not found then return jsonb_build_object('ok', false, 'error', '상환할 수 있는 대출이 아닙니다.'); end if;
+  owed := l.principal + l.arrears;
+  if not slg_debit(uid, owed, 'loan_repay', l.id, now_ms) then
+    return jsonb_build_object('ok', false, 'error', '골드가 부족합니다 (필요 ' || owed || 'G)', 'owed', owed);
+  end if;
+  update slg_loans set status = 'repaid', arrears = 0 where id = l.id;
+  insert into slg_inbox (user_id, kind, payload, at_ms)
+    values (uid, 'unit', jsonb_build_object('unit', l.collateral, 'source', 'loan_repaid', 'loanId', l.id), now_ms);
+  select gold into bal from slg_players where user_id = uid;
+  return jsonb_build_object('ok', true, 'owed', owed, 'balance', bal);
+end $$;
+
+-- ---------------------------------------------------------------- 경매 입찰
+create or replace function public.slg_auction_bid(p_id text, p_amount bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; a slg_auctions%rowtype; minbid bigint; prev_loop int; bal bigint; amt bigint := floor(coalesce(p_amount, 0));
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  select * into a from slg_auctions where id = p_id for update;
+  if not found then return jsonb_build_object('ok', false, 'error', '경매를 찾을 수 없습니다.'); end if;
+  if a.status <> 'open' or now_ms >= a.ends_ms then return jsonb_build_object('ok', false, 'error', '이미 끝난 경매입니다.'); end if;
+  if a.bidder = uid then return jsonb_build_object('ok', false, 'error', '이미 최고 입찰자입니다.'); end if;
+  minbid := case when a.current_bid > 0
+                 then a.current_bid + greatest(slg_cfg('min_inc_flat')::bigint, ceil(a.current_bid * slg_cfg('min_inc_pct') / 100)::bigint)
+                 else a.start_price end;
+  if amt < minbid then return jsonb_build_object('ok', false, 'error', '최소 ' || minbid || 'G부터 입찰할 수 있습니다.', 'minBid', minbid); end if;
+  if not slg_debit(uid, amt, 'auction_bid', p_id, now_ms) then
+    return jsonb_build_object('ok', false, 'error', '골드가 부족합니다 (필요 ' || amt || 'G)');
+  end if;
+  if a.bidder is not null then
+    select pp."loop" into prev_loop from slg_players pp where pp.user_id = a.bidder;
+    if prev_loop is not distinct from a.bidder_loop then
+      perform slg_credit(a.bidder, a.current_bid, 'auction_refund', p_id, now_ms);
+      perform slg_event(a.bidder, 'auction_outbid', jsonb_build_object('auctionId', p_id, 'name', coalesce(a.unit ->> 'name', '캐릭터'), 'refund', a.current_bid), now_ms);
+    end if;
+  end if;
+  update slg_auctions set current_bid = amt, bidder = uid, bidder_name = p.name, bidder_loop = p."loop", bids = bids + 1,
+    ends_ms = case when ends_ms - now_ms < slg_cfg('anti_snipe_ms') then now_ms + slg_cfg('anti_snipe_ms')::bigint else ends_ms end
+  where id = p_id;
+  select gold into bal from slg_players where user_id = uid;
+  return jsonb_build_object('ok', true, 'bid', amt, 'balance', bal);
+end $$;
+
+-- ============================================================================
+-- 동기화: 정리를 한 번 하고, 화면에 필요한 모든 것을 한 번에 돌려준다
+-- ============================================================================
+create or replace function public.slg_sync(p_name text default null, p_ack_events bigint default 0, p_ack_inbox bigint[] default '{}') returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare
+  uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; nations jsonb; rights jsonb; loans jsonb; auctions jsonb; inbox jsonb; events jsonb; members jsonb;
+  recent bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  update slg_players set last_seen_ms = now_ms, name = case when p_name is null then name else slg_clean_name(p_name) end where user_id = uid;
+  perform slg_tick(uid, now_ms);
+  if coalesce(p_ack_events, 0) > 0 then delete from slg_events where user_id = uid and id <= p_ack_events; end if;
+  if p_ack_inbox is not null and array_length(p_ack_inbox, 1) > 0 then delete from slg_inbox where user_id = uid and id = any (p_ack_inbox); end if;
+  select * into p from slg_players where user_id = uid;
+  recent := now_ms - (slg_cfg('auction_recent_hours') * 3600000)::bigint;
+
+  select coalesce(jsonb_object_agg(region_id, jsonb_build_object(
+      'id', region_id, 'regionId', region_id, 'rev', 0, 'payouts', '{}'::jsonb,
+      'holders', holders, 'unowned', slg_unowned_bp(region_id))), '{}'::jsonb) into nations
+  from (
+    select s.region_id, jsonb_object_agg(s.holder, jsonb_build_object('name', coalesce(pp.name, s.name), 'bp', s.bp, 'dummy', s.dummy, 'loop', s."loop")) as holders
+    from slg_shares s left join slg_players pp on pp.user_id::text = s.holder and not s.dummy
+    group by s.region_id
+  ) n;
+  select coalesce(jsonb_object_agg(region_id, jsonb_build_object('maxBp', max_bp, 'boughtBp', bought_bp, 'availableMs', available_ms)), '{}'::jsonb) into rights
+    from slg_share_rights where user_id = uid and "loop" = p."loop";
+  select coalesce(jsonb_agg(slg_loan_json(l) order by l.started_ms), '[]'::jsonb) into loans from slg_loans l where l.user_id = uid and l.status = 'active';
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', a.id, 'unit', a.unit, 'value', a.value, 'status', a.status, 'reason', a.reason, 'sellerName', a.seller_name,
+      'relists', a.relists, 'startPrice', a.start_price, 'currentBid', a.current_bid, 'bidderId', a.bidder, 'bidderName', a.bidder_name,
+      'bidderLoop', a.bidder_loop, 'bids', a.bids, 'createdAt', a.created_ms, 'endsAt', a.ends_ms, 'winnerId', a.winner,
+      'winnerName', a.winner_name, 'finalPrice', a.final_price, 'closedAt', a.closed_ms) order by a.ends_ms), '[]'::jsonb) into auctions
+    from slg_auctions a where a.status = 'open' or coalesce(a.closed_ms, 0) >= recent;
+  select coalesce(jsonb_agg(jsonb_build_object('id', i.id, 'kind', i.kind, 'payload', i.payload, 'atMs', i.at_ms) order by i.id), '[]'::jsonb) into inbox
+    from (select * from slg_inbox where user_id = uid order by id limit 20) i;
+  select coalesce(jsonb_agg(jsonb_build_object('id', ev.id, 'kind', ev.kind, 'payload', ev.payload, 'atMs', ev.at_ms) order by ev.id), '[]'::jsonb) into events
+    from (select * from slg_events where user_id = uid order by id limit 50) ev;
+  select coalesce(jsonb_agg(jsonb_build_object('id', c.id, 'name', c.name, 'seats', c.seats, 'totalBp', c.total_bp) order by c.total_bp desc, c.id), '[]'::jsonb) into members from slg_committee() c;
+
+  return jsonb_build_object(
+    'ok', true, 'now', now_ms,
+    'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid)),
+    'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights,
+    'loans', loans, 'auctions', auctions, 'inbox', inbox, 'events', events,
+    'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
+end $$;
+
+-- ============================================================================
+-- 권한: 내부 함수는 아무도 못 부르고, RPC 만 로그인한 사용자가 부른다
+-- ============================================================================
+do $$
+declare f record; rpc text[] := array['slg_bootstrap','slg_wallet_apply','slg_admin_adjust','slg_is_admin','slg_loop_return','slg_region_secure',
+  'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_auction_bid','slg_sync'];
+begin
+  for f in select p.oid::regprocedure as sig, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public' and p.proname like 'slg\_%'
+  loop
+    execute format('revoke all on function %s from public', f.sig);
+    if exists (select 1 from pg_roles where rolname = 'anon') then execute format('revoke all on function %s from anon', f.sig); end if;
+    if exists (select 1 from pg_roles where rolname = 'authenticated') then execute format('revoke all on function %s from authenticated', f.sig); end if;
+    if f.proname = any (rpc) and exists (select 1 from pg_roles where rolname = 'authenticated') then
+      execute format('grant execute on function %s to authenticated', f.sig);
+    end if;
+  end loop;
+end $$;
+
+-- ============================================================================
+-- slg_records 접근 정책 (게임 세이브 · 예전 공유 컬렉션)
+--  * gameState(세이브)는 로그인한 본인 것(record_id = 내 user id)만 읽고 쓴다.
+--  * nationShares · fedState · charAuctions · fedLedger 는 예전(클라이언트 CAS) 방식의 컬렉션이다.
+--    이제 서버 테이블(slg_*)이 원본이므로 브라우저가 새로 쓰지 못하게 막는다 (읽기만 가능).
+--  * 그 밖의 컬렉션(캐릭터 · 스킬 · 맵 · 설정 등 에디터 데이터)은 지금처럼 공개 읽기/쓰기다.
+--    (운영자용 에디터를 위한 것이다. 에디터 쓰기까지 막으려면 별도의 관리자 정책이 필요하다.)
+-- ============================================================================
+do $$
+begin
+  if to_regclass('public.slg_records') is null then
+    raise notice 'slg_records 테이블이 없어 정책을 건너뜁니다 (supabase-schema.sql 을 먼저 실행하세요).';
+    return;
+  end if;
+  alter table public.slg_records enable row level security;
+  drop policy if exists "SLG public read" on public.slg_records;
+  drop policy if exists "SLG public insert" on public.slg_records;
+  drop policy if exists "SLG public update" on public.slg_records;
+  drop policy if exists "SLG public delete" on public.slg_records;
+  drop policy if exists "SLG read" on public.slg_records;
+  drop policy if exists "SLG insert" on public.slg_records;
+  drop policy if exists "SLG update" on public.slg_records;
+  drop policy if exists "SLG delete" on public.slg_records;
+
+  create policy "SLG read" on public.slg_records for select to anon, authenticated
+    using (collection_name <> 'gameState' or record_id = auth.uid()::text);
+  create policy "SLG insert" on public.slg_records for insert to anon, authenticated
+    with check (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
+                and (collection_name <> 'gameState' or record_id = auth.uid()::text));
+  create policy "SLG update" on public.slg_records for update to anon, authenticated
+    using (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
+           and (collection_name <> 'gameState' or record_id = auth.uid()::text))
+    with check (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
+                and (collection_name <> 'gameState' or record_id = auth.uid()::text));
+  create policy "SLG delete" on public.slg_records for delete to anon, authenticated
+    using (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
+           and (collection_name <> 'gameState' or record_id = auth.uid()::text));
+end $$;

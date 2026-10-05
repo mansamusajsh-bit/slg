@@ -20,7 +20,10 @@
 
   // ---- 저장소: Supabase가 있으면 공유, 없으면 메모리 ----
   const memory = new Map();
-  const cloud = () => !!(global.SupabaseBridge && global.SupabaseBridge.isReady && global.SupabaseBridge.casNationShare);
+  // 서버 권위 모드(serverEconomy.js): 지분·세금·구매권은 서버(supabase-economy.sql)가 원본이다. 이 파일은 서버 스냅샷을 보여 주고 서버 함수를 부를 뿐이다.
+  const serverMode = () => !!(global.ServerEconomy && global.ServerEconomy.enabled && global.ServerEconomy.snapshot);
+  const cloud = () => !!(global.SupabaseBridge && global.SupabaseBridge.isReady && global.SupabaseBridge.casNationShare
+    && global.SupabaseBridge.currentUser && !global.SupabaseBridge.currentUser.offline);
   const store = {
     async list() {
       if (cloud()) return global.SupabaseBridge.listNationShares();
@@ -53,11 +56,15 @@
       if (Number.isFinite(server)) { clockOffset = server - (t0 + t1) / 2; clockSyncedAt = t1; }
     } catch (e) { console.warn('[NationShares] 서버 시각 동기화 실패 — 기기 시각을 씁니다.', e); }
   }
-  const serverNow = () => Date.now() + clockOffset;
+  const serverNow = () => (serverMode() ? global.ServerEconomy.serverNow() : Date.now() + clockOffset);
 
   // ---- 나 ----
   function me() {
     if (typeof state === 'undefined' || !state) return null;
+    if (serverMode()) {
+      const p = global.ServerEconomy.snapshot.player;
+      return { id: String(p.id), name: (state.commander && state.commander.name) || p.name, loop: Number(p.loop) || 0 };
+    }
     if (!state.guest && typeof saveGameState === 'function') saveGameState(true); // guest id를 만든다
     if (!state.guest || !state.guest.id) return null;
     return {
@@ -72,6 +79,10 @@
     if (!run.shareLedger) run.shareLedger = { lastSettledAt: null, last: null };
     return run;
   }
+  // 물가 배율 (fedSystem이 config.js의 getPriceLevel에 연결). 세수·지분 가격은 물가를 따라간다.
+  const priceLevel = () => (typeof global.getPriceLevel === 'function' ? global.getPriceLevel() : 1);
+  // 소비(수요) 지표에서 빼야 하는 금융 거래 (지분 매입)
+  const financial = (fn) => (global.FedSystem ? global.FedSystem.financial(fn) : fn());
   const log = (msg, type = 'gold') => { if (typeof addLog === 'function') addLog(msg, type); };
   const toast = (msg, type) => global.UI && global.UI.showToast && global.UI.showToast(msg, type);
   const regionTitle = (id) => (REGIONS[id] ? REGIONS[id].title.ko : id);
@@ -83,7 +94,10 @@
   let busy = false;
 
   function nationList() { return Object.values(nations); }
-  function currentInterval() { return SE.intervalHours(SE.countRealHolders(nationList())); }
+  function currentInterval() {
+    if (serverMode()) return Number(global.ServerEconomy.snapshot.shareHours) || 8;
+    return SE.intervalHours(SE.countRealHolders(nationList()));
+  }
 
   // 국가 기록 하나를 읽고 → fn(기록)이 돌려준 새 기록을 rev 조건부로 저장. 충돌하면 다시 읽어 재시도.
   // fn이 null을 돌려주면 저장하지 않는다. 성공하면 { nation, result }.
@@ -103,7 +117,46 @@
    * 국가 기록을 다시 읽고, 없는 국가는 더미 플레이어를 넣어 만들고, 내 이전 회차 지분 정리 →
    * 매각 대금 수령 → 세금 정산까지 한 번에 한다. 작전지도를 그릴 때 불린다 (REFRESH_MS 간격).
    */
+  // 서버 모드: 서버 스냅샷에서 국가 기록을 받아 온다 (세금 정산·대금 수령·낡은 지분 정리는 서버가 이미 했다)
+  let lastServerSnapAt = 0;
+  let securing = false;
+  async function refreshFromServer(force) {
+    const snap = await global.ServerEconomy.sync(force);
+    if (!snap) return false;
+    Object.keys(nations).forEach((k) => { delete nations[k]; });
+    Object.entries(snap.nations || {}).forEach(([id, n]) => { if (REGIONS[id]) nations[id] = n; });
+    lastRefreshAt = Date.now();
+    flushPendingSecure();
+    const at = global.ServerEconomy._SE.lastSyncAt;
+    const changed = at !== lastServerSnapAt;
+    lastServerSnapAt = at;
+    return changed;
+  }
+
+  // 점령 청구: 서버가 인접성·간격을 검증한다. 네트워크가 안 되면 run.pendingSecure 에 남겨 두고 다시 시도한다.
+  async function flushPendingSecure() {
+    if (securing || !serverMode()) return;
+    const run = state && state.run;
+    if (!run || !Array.isArray(run.pendingSecure) || !run.pendingSecure.length) return;
+    securing = true;
+    try {
+      for (const id of run.pendingSecure.slice()) {
+        const res = await global.ServerEconomy.call('slg_region_secure', { p_region: id });
+        if (!res || res.network) break;
+        run.pendingSecure = run.pendingSecure.filter((x) => x !== id);
+        if (res.ok === false) log(`⚠️ [지분 구매권] ${regionTitle(id)}: ${res.error}`, 'warning');
+        else if (!res.dup) log(`📜 [지분 구매권] ${regionTitle(id)} 점령 — 지분을 최대 ${SE.CONFIG.purchaseRightBp / 100}%까지 살 수 있습니다. (작전지도에서 구매)`);
+        if (typeof saveGameState === 'function') saveGameState(true);
+      }
+      await global.ServerEconomy.sync('now');
+    } finally {
+      securing = false;
+    }
+  }
+
   function refresh(force) {
+    if (serverMode()) return refreshFromServer(force);
+    if (global.ServerEconomy && global.ServerEconomy.status === 'starting') return Promise.resolve(false); // 서버 연결 중에는 예전 방식으로 돌지 않는다
     if (refreshing) return refreshing;
     if (!force && Date.now() - lastRefreshAt < REFRESH_MS) return Promise.resolve(false);
     if (typeof cloudLoadPending !== 'undefined' && cloudLoadPending) return Promise.resolve(false); // 세이브 복원 전
@@ -149,6 +202,7 @@
 
   // 지난 정산 이후 지나간 정산 시각마다 지금 지분율대로 세금을 받는다.
   function settle() {
+    if (serverMode()) return null;   // 서버가 접속할 때 정산한다
     const who = me();
     if (!who) return null;
     const run = runState();
@@ -159,6 +213,10 @@
     const hours = currentInterval();
     const res = SE.computePayout({ nations: nationList(), regions: REGIONS, holderId: who.id, fromMs: ledger.lastSettledAt, toMs: now, hours });
     if (!res.count) return null;
+    // 세수도 수입이므로 물가를 따라간다
+    const k = priceLevel();
+    res.total = 0;
+    Object.keys(res.byRegion).forEach((id) => { res.byRegion[id] = Math.round(res.byRegion[id] * k); res.total += res.byRegion[id]; });
     ledger.lastSettledAt = res.settledUntil;
     ledger.last = { at: res.settledUntil, total: res.total, count: res.count, hours };
     if (res.total > 0) {
@@ -174,6 +232,13 @@
   /** 구역 확보(점령) → 그 국가 지분 구매권 */
   function onRegionSecured(regionId) {
     if (!REGIONS[regionId]) return;
+    if (serverMode()) {
+      const r = state.run;
+      if (!Array.isArray(r.pendingSecure)) r.pendingSecure = [];
+      if (!r.pendingSecure.includes(regionId)) r.pendingSecure.push(regionId);
+      flushPendingSecure();
+      return;
+    }
     const run = runState();
     const prev = run.shareRights[regionId];
     run.shareRights[regionId] = { maxBp: SE.CONFIG.purchaseRightBp, boughtBp: prev ? prev.boughtBp : 0, grantedAt: serverNow() };
@@ -182,6 +247,7 @@
 
   /** 사망회귀: 내 지분을 전부 푼다 (실패해도 다음 접속 때 loop 비교로 정리된다). */
   async function onReturnByDeath() {
+    if (serverMode()) { lastRefreshAt = 0; return; }   // 서버가 회귀 때 지분을 푼다 (ServerEconomy.onReturnByDeath)
     const who = me();
     if (!who) return;
     try {
@@ -201,6 +267,10 @@
 
   // ---- 구매 ----
   function rightRemaining(regionId) {
+    if (serverMode()) {
+      const r = global.ServerEconomy.snapshot.rights && global.ServerEconomy.snapshot.rights[regionId];
+      return r && r.availableMs <= serverNow() ? Math.max(0, r.maxBp - r.boughtBp) : 0;
+    }
     const r = state.run && state.run.shareRights && state.run.shareRights[regionId];
     return r ? Math.max(0, r.maxBp - r.boughtBp) : 0;
   }
@@ -210,7 +280,7 @@
     const who = me();
     const n = nations[regionId];
     if (!who || !n) return null;
-    return SE.quotePurchase(n, REGIONS[regionId], who.id, Math.min(wantBp, rightRemaining(regionId)));
+    return SE.quotePurchase(n, REGIONS[regionId], who.id, Math.min(wantBp, rightRemaining(regionId)), priceLevel());
   }
 
   /** 가진 골드로 살 수 있는 최대량 (bp) */
@@ -232,11 +302,27 @@
     const want = Math.min(Math.floor(wantBp), rightRemaining(regionId));
     if (want <= 0) { toast('📜 이 국가의 지분 구매권이 없습니다. 점령하면 생깁니다.', 'warning'); return null; }
     busy = true;
+    if (serverMode()) {
+      try {
+        const res = await global.ServerEconomy.call('slg_share_buy', { p_region: regionId, p_want: want });
+        if (!res || res.ok === false) { toast(`⚠️ ${(res && res.error) || '지분 매입 실패'}`, 'warning'); await global.ServerEconomy.sync('now'); return null; }
+        log(`📈 [지분 매입] ${regionTitle(regionId)} ${(res.bp / 100).toFixed(2)}% 매입 (-${res.cost}G)` +
+          (res.fromOthers ? ` — 기존 보유자에게서 ${(res.fromOthers / 100).toFixed(2)}%` : ''));
+        toast(`📈 ${REGIONS[regionId].name.ko} 지분 +${(res.bp / 100).toFixed(2)}%`, 'success');
+        await global.ServerEconomy.sync('now');
+        await refresh(true);
+        saveGameState(true);
+        return res;
+      } finally {
+        busy = false;
+      }
+    }
     try {
       await syncClock(false);
+      const mult = priceLevel();
       settle(); // 새로 산 지분이 지난 정산분까지 받지 않도록 먼저 정산
       const { result } = await mutate(regionId, (base) => {
-        const q = SE.quotePurchase(base, REGIONS[regionId], who.id, want);
+        const q = SE.quotePurchase(base, REGIONS[regionId], who.id, want, mult);
         if (q.bp <= 0) return null;
         if (q.cost > (Number(state.gold) || 0)) return null;
         return { nation: SE.applyPurchase(base, q, who), result: q };
@@ -246,7 +332,7 @@
         toast(q && q.bp > 0 ? `💸 골드가 부족합니다 (필요 ${q.cost}G)` : '살 수 있는 지분이 없습니다.', 'warning');
         return null;
       }
-      state.gold -= result.cost;
+      financial(() => { state.gold -= result.cost; });
       const run = runState();
       run.shareRights[regionId].boughtBp += result.bp;
       if (run.shareLedger.lastSettledAt == null) run.shareLedger.lastSettledAt = serverNow();
@@ -265,6 +351,13 @@
     }
   }
 
+  /** 구역 점령 직후 서버가 구매권을 줄 세워 열 때까지 남은 시간 (ms). 없으면 0. */
+  function rightWaitMs(regionId) {
+    if (!serverMode()) return 0;
+    const r = global.ServerEconomy.snapshot.rights && global.ServerEconomy.snapshot.rights[regionId];
+    return r && r.availableMs > serverNow() ? r.availableMs - serverNow() : 0;
+  }
+
   // ---- 화면용 요약 ----
   function view(regionId) {
     const who = me();
@@ -276,7 +369,7 @@
       .map((x) => ({ regionId: x.regionId, bp: myId ? SE.holderBp(x, myId) : 0 }))
       .filter((x) => x.bp > 0 && REGIONS[x.regionId])
       .sort((a, b) => b.bp - a.bp);
-    const perSettlement = holdings.reduce((a, h) => a + SE.taxPerSettlement(REGIONS[h.regionId], hours) * h.bp / SE.TOTAL_BP, 0);
+    const perSettlement = holdings.reduce((a, h) => a + SE.taxPerSettlement(REGIONS[h.regionId], hours) * h.bp / SE.TOTAL_BP, 0) * priceLevel();
     return {
       ready: nationList().length > 0,
       cloud: cloud(),
@@ -292,9 +385,11 @@
         holders: SE.listHolders(n),
         unowned: SE.unownedBp(n),
         mine: myId ? SE.holderBp(n, myId) : 0,
-        taxPerSettlement: Math.floor(SE.taxPerSettlement(REGIONS[regionId], hours))
+        taxPerSettlement: Math.floor(SE.taxPerSettlement(REGIONS[regionId], hours) * priceLevel())
       } : null,
       right: regionId ? rightRemaining(regionId) : 0,
+      rightWaitMs: regionId ? rightWaitMs(regionId) : 0,
+      server: serverMode(),
       busy
     };
   }

@@ -543,11 +543,20 @@
       commander: 'commander', inventory: 'inventory', characterCollection: 'characterCollection',
       currentBattle: 'currentBattle'
     };
+    // 소비로 세지 않고 골드를 바꾼다 (세이브 복원, 턴 되돌리기, 디버그, 회귀 직전 몰수)
+    function setGoldRaw(v) { if (state && state.run) state.run.gold = v; }
+    window.setGoldRaw = setGoldRaw;
     function bindRunAccessors(s) {
       Object.entries(RUN_FIELD_ALIASES).forEach(([key, runKey]) => {
         Object.defineProperty(s, key, {
           get() { return s.run ? s.run[runKey] : undefined; },
-          set(v) { if (s.run) s.run[runKey] = v; },
+          set(v) {
+            if (!s.run) return;
+            // 골드가 줄어든 만큼은 "소비"로 센다 (연준의 수요 지표). 서버 경제에서는 이 변화가 서버로 보내는 거래가 된다.
+            // 저장 복원·되돌리기·디버그 등은 setGoldRaw(또는 Wallet)로 우회한다. 골드를 늘릴 때는 Wallet.earn(종류)을 쓴다.
+            if (key === 'gold' && window.Wallet && Number.isFinite(v - s.run.gold) && v !== s.run.gold) window.Wallet.onGoldChange(s.run.gold, v);
+            s.run[runKey] = v;
+          },
           configurable: true,
           enumerable: false
         });
@@ -1105,7 +1114,7 @@
         };
 
         state.turn = (typeof parsed.turn === 'number') ? parsed.turn : 1;
-        state.gold = (typeof parsed.gold === 'number') ? parsed.gold : START_GOLD;
+        setGoldRaw((typeof parsed.gold === 'number') ? parsed.gold : START_GOLD);
         state.rewinders = (typeof parsed.rewinders === 'number') ? parsed.rewinders : 3;
         state.stackMoveEnabled = (parsed.stackMoveEnabled !== undefined) ? parsed.stackMoveEnabled : true;
 
@@ -1330,7 +1339,7 @@
       const currentRewinders = state.rewinders - 1;
 
       state.turn = prev.turn;
-      state.gold = prev.gold;
+      Wallet.rewindTo(prev.gold); // 서버 경제에서는 쓴 만큼만 돌려받는다
       state.rewinders = currentRewinders;
       state.stackMoveEnabled = prev.stackMoveEnabled !== undefined ? prev.stackMoveEnabled : true;
       state.commander = prev.commander;
@@ -1876,8 +1885,8 @@
 
           // 포섭 판정: 확률·초기 호감도는 지휘관의 포섭 방침이 정한다. 포섭하지 못하면 전리품.
           if (!tryCaptureEnemy(defender, defender.x, defender.y)) {
-            const lootGold = Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult);
-            state.gold += lootGold;
+            const lootGold = scaleIncome(Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult));
+            Wallet.earn('earn_loot', lootGold);
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
 
@@ -1967,8 +1976,8 @@
         } else {
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
-          const lootGold = Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult);
-          state.gold += lootGold;
+          const lootGold = scaleIncome(Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult));
+          Wallet.earn('earn_loot', lootGold);
           addLog(`🏆 [적 격퇴 전리품] +${lootGold}G 국고 획득!`, 'gold');
           grantCommanderExp(20, '반격 섬멸');
 
@@ -2461,7 +2470,7 @@
     // 유닛 1기의 턴당 유지비. 턴 종료 정산과 전략 화면 표시가 같은 값을 쓴다 (값이 없으면 10G).
     function getUnitUpkeep(u) {
       const v = Number(u && u.upkeep);
-      return Number.isFinite(v) && v >= 0 ? v : 10;
+      return scaleGold(Number.isFinite(v) && v >= 0 ? v : 10); // 기준 유지비 × 물가
     }
     window.getUnitUpkeep = getUnitUpkeep;
 
@@ -2655,7 +2664,7 @@
       const refund = scaleGold(Math.round(baseGold * levelMult + affBonus)); // 매각가도 물가를 따라간다
 
       unit.isDead = true;
-      state.gold += refund;
+      Wallet.earn('earn_sell', refund);
 
       addLog(`🏛️ [도시 유닛 매각] ${unit.name} 명예 퇴역 완료 -> +${refund}G 국고 환급!`, 'gold');
       closeAllModals();
@@ -3569,7 +3578,7 @@
       const prevRun = state.run;
       const nextRun = createInitialRun(customSeed, null);
       if (prevRun) {
-        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'resonance', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo', 'adjutant']
+        ['party', 'reserve', 'gold', 'commander', 'inventory', 'characterCollection', 'resonance', 'commandBonus', 'loopReward', 'foresight', 'dejavuEliteFree', 'echo', 'adjutant', 'walletOutbox', 'inboxDone', 'pledgeJournal', 'pendingSecure']
           .forEach(k => { if (k in prevRun) nextRun[k] = prevRun[k]; });
       }
       state.run = nextRun;
@@ -3595,10 +3604,10 @@
       });
     }
 
-    function applyNodeEffects(effects) {
+    function applyNodeEffects(effects, ref) {
       const lines = [];
       (effects || []).forEach(e => {
-        if (e.type === 'gold') { state.gold += e.amount; lines.push(`+${e.amount}G`); }
+        if (e.type === 'gold') { const g = scaleIncome(e.amount); Wallet.earn('earn_event', g, ref); lines.push(`+${g}G`); }
         else if (e.type === 'rewinder') { state.rewinders += e.amount; lines.push(`리와인더 +${e.amount}`); }
         else if (e.type === 'heal_all') { healAllPlayerUnits(); lines.push('전원 체력 회복'); }
       });
@@ -3650,7 +3659,7 @@
         const ok = el('button', btnCss + 'background:linear-gradient(135deg,#0284c7,#38bdf8);color:#fff;border:none;', '확인');
         ok.onclick = () => {
           if (!RunEngine.isNodeAvailable(state.run, node.id)) return;
-          const applied = applyNodeEffects(ev.effects);
+          const applied = applyNodeEffects(ev.effects, `${Number(state.player && state.player.loopCount) || 0}:${node.id}`);
           addLog(`❓ [이벤트] ${ev.title}: ${applied}`, 'gold');
           completeNonBattleNode(node, ev.id);
         };
@@ -3676,7 +3685,7 @@
               if (bought.has(o.id) || state.gold < o.cost) return;
               state.gold -= o.cost;
               bought.add(o.id);
-              const applied = applyNodeEffects(o.effects);
+              const applied = applyNodeEffects(o.effects, `${Number(state.player && state.player.loopCount) || 0}:${node.id}:${o.id}`);
               addLog(`🛒 [상점] ${o.label} 구매 (-${o.cost}G) → ${applied}`, 'gold');
               refresh();
               renderAll();
@@ -8376,7 +8385,23 @@
       }
     }
 
+    // DEV 패널은 관리자 계정만 연다. 관리자는 서버가 정한다 (supabase-economy.sql: slg_admins · slg_admin_emails).
+    // 서버 경제에 연결되지 않은 상태에서는 계정을 확인할 수 없으므로 로컬 개발(localhost)에서만 연다.
+    function isAdminAccount() {
+      if (window.ServerEconomy && window.ServerEconomy.enabled) return !!window.ServerEconomy.isAdmin;
+      return ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    }
+    window.isAdminAccount = isAdminAccount;
+
     function openDebugModal(preferredTab = 'create-char') {
+      if (!isAdminAccount()) {
+        const msg = window.ServerEconomy && window.ServerEconomy.status === 'starting'
+          ? '⏳ 서버에 연결하는 중입니다. 잠시 후 다시 시도하세요.'
+          : '🔒 관리자 계정으로 로그인해야 DEV 패널을 열 수 있습니다.';
+        addLog(msg, 'warning');
+        if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+        return;
+      }
       const modal = document.getElementById('modal-debug');
       if (modal) {
         modal.classList.add('open');
@@ -8511,7 +8536,7 @@
       if (isNaN(intVal)) return;
 
       if (resKey === 'gold') {
-        state.gold = Math.max(0, intVal);
+        Wallet.devAdjust(Math.max(0, intVal) - (Number(state.gold) || 0));
         const lbl = document.getElementById('lbl-dbg-gold');
         if (lbl) lbl.textContent = `${state.gold}G`;
         const slider = document.getElementById('slider-dbg-gold');
@@ -8722,7 +8747,7 @@
 
     function cheatAddGold(amount) {
       saveHistorySnapshot();
-      state.gold += amount;
+      Wallet.devAdjust(amount);
       addLog(`💰 [디버그 치트] 골드 +${amount}G 지급! (현재: ${state.gold}G)`, 'gold');
       renderAll();
       syncDebugInputsFromState();
@@ -8954,7 +8979,12 @@
                 addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
               saveGameState(true);
-            }).catch(e => { cloudLoadPending = false; console.warn(e); });
+              if (window.ServerEconomy) window.ServerEconomy.start(); // 로그인 계정이면 서버 경제에 연결 (골드 · 지분 · 대출 · 경매)
+            }).catch(e => {
+              cloudLoadPending = false;
+              console.warn(e);
+              if (window.ServerEconomy) window.ServerEconomy.start(); // 세이브를 못 읽어도 서버 경제는 연결한다
+            });
           }
           if (typeof window.getCharactersFromCloud === 'function') {
             window.getCharactersFromCloud().then(chars => {
@@ -9795,8 +9825,8 @@
       const battleRewards = battle && Array.isArray(battle.rewards) ? battle.rewards : null;
       if (!battleRewards) console.warn('[Victory] state.currentBattle.rewards가 없어 표시용 기본값을 사용합니다.');
       const goldEarned = battleRewards
-        ? battleRewards.filter(r => r && r.type === 'gold').reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
-        : totalDefeatedCount * 100;
+        ? battleRewards.filter(r => r && r.type === 'gold').reduce((sum, r) => sum + scaleIncome(Number(r.amount) || 0), 0)
+        : scaleIncome(totalDefeatedCount * 100);
       const rewinderGranted = battleRewards
         ? battleRewards.some(r => r && r.type === 'rewinder' && Number(r.amount) > 0)
         : false;
@@ -10623,7 +10653,7 @@
       if (state.gold < cost && !recruitedSoFar()) {
         // 회귀 판정 지점 (긴급 모집 화면)
         await showCannotFightNotice(state.gold, cost);
-        state.gold = 0;
+        setGoldRaw(0);
         run.emergencyRecruit = false;
         saveGameState(true);
         return returnByDeath();
@@ -11015,7 +11045,9 @@
         const echo = run.lastStanding || null;
         if (window.NationShares) await window.NationShares.onReturnByDeath(); // 국가 지분도 회귀와 함께 사라진다
         if (window.FedSystem) window.FedSystem.onReturnByDeath(); // 대출은 이 런과 함께 사라진다
+        if (window.ServerEconomy) await window.ServerEconomy.onReturnByDeath(state.player.loopCount); // 서버: 골드·지분·대출 초기화
         state.run = createInitialRun(seed, reward);
+        if (window.Wallet) window.Wallet.afterRunCreated(); // 비상금 카드의 골드는 서버가 회차당 한 번만 인정한다
         // 최후의 기억: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
         if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {
           state.run.echo = { characterId: String(echo.characterId), name: echo.name, used: false };
@@ -11055,7 +11087,7 @@
     function resolveRunSurvival() {
       if (getAliveRunUnits().length > 0) return 'alive';
       if (Number(state.gold) <= 0) {
-        state.gold = 0;
+        setGoldRaw(0);
         returnByDeath();
         return 'returnByDeath';
       }
@@ -11216,7 +11248,7 @@
     window.previewNode = previewNode;
 
     function describeRewards(rewards) {
-      return (rewards || []).map(r => r.type === 'gold' ? `${r.amount}G` : r.type === 'rewinder' ? `리와인더 ${r.amount}` : `${r.type} ${r.amount}`).join(' · ') || '없음';
+      return (rewards || []).map(r => r.type === 'gold' ? `${scaleIncome(r.amount)}G` : r.type === 'rewinder' ? `리와인더 ${r.amount}` : `${r.type} ${r.amount}`).join(' · ') || '없음';
     }
 
     // 전략맵 상세 패널: 선택한 노드의 예지/기시감 정보와 예지 카드 사용 버튼
@@ -11907,9 +11939,11 @@
 
       // 3) 보상 지급 (승리 시에만, 전투 진입 때 seed로 정해 둔 battle.rewards 그대로)
       const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];
+      // 골드는 전투 하나당 한 번만 청구한다 (서버가 같은 전투 id 로 두 번 받지 못하게 막는다)
+      const goldReward = rewards.filter(r => r.type === 'gold').reduce((sum, r) => sum + scaleIncome(Number(r.amount) || 0), 0);
+      if (goldReward > 0) Wallet.earn('earn_reward', goldReward, `${Number(state.player && state.player.loopCount) || 0}:${battle.id}`);
       rewards.forEach(r => {
-        if (r.type === 'gold') state.gold += Number(r.amount) || 0;
-        else if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
+        if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
       });
 
       // 4) 노드 완료 처리 + 다음 노드 해금
@@ -11950,7 +11984,7 @@
       // 6) 로그
       const secLabel = `${battle.sectorId}`;
       if (victory) {
-        const rewardText = rewards.map(r => r.type === 'gold' ? `+${r.amount}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
+        const rewardText = rewards.map(r => r.type === 'gold' ? `+${scaleIncome(r.amount)}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
         addLog(`🚩 [작전 완수] ${battle.nodeId} (${secLabel}) 클리어 — 보상: ${rewardText || '없음'} · 다음 노드: ${unlockedNodes.join(', ') || '없음'}`, 'gold');
         if (casualties.length) addLog(`🕯️ [사상자] ${casualties.map(c => c.name).join(', ')}`, 'warning');
         if (secured) {

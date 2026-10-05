@@ -130,5 +130,33 @@ ok(dv.auction.status==='delivered'&&dv.unit.name==='용병'&&F.claimWinner(dv.au
 ok(F.claimWinner(sold,'p2',0)===null,'낙찰자가 아니면 수령 불가');
 ok(F.claimWinner(sold,'p1',3).auction.status==='void'&&F.claimWinner(sold,'p1',3).unit===null,'회귀한 낙찰자는 캐릭터를 받지 못한다');
 
+// ---- 통화량 · 수요 ----
+const NOW=T0+100*H, TI=F.tickIndex(NOW);
+const rep=(id,gold,spendPerTick,debt=0,ageH=1)=>({id,at:NOW-ageH*H,gold,debt,spend:{[TI-1]:spendPerTick,[TI-2]:spendPerTick,[TI-3]:spendPerTick}});
+ok(F.buildMacro([],NOW)===null,'보고가 없으면 거시 지표 없음');
+let mac=F.buildMacro([rep('a',1000,100,50),rep('b',3000,300,0),rep('old',99999,9999,0,100)],NOW);
+ok(mac.players===2&&mac.money===4000&&mac.debt===50&&mac.spend===400&&Math.abs(mac.velocity-0.1)<1e-9,'접속 중인 플레이어만 합산(72시간 넘게 안 온 사람 제외): 통화량 4000, 소비 400, 회전율 0.1');
+ok(F.avgSpend({spend:{[TI-1]:30,[TI-3]:60}},NOW)===45,'소비는 보고된 최근 틱들의 평균');
+const rich=F.buildMacro([rep('a',2400,288)],NOW), poor=F.buildMacro([rep('a',200,24)],NOW);
+const bRich=F.breakdown(150,1,rich), bPoor=F.breakdown(150,1,poor), bNone=F.breakdown(150,1,null);
+ok(bNone.money===0&&bNone.demand===0&&bNone.total===F.driftPct(150),'집계가 없으면 금리 항만');
+ok(bRich.money>0&&bPoor.money<0,'1인당 통화량이 많으면 물가 상승 압력, 적으면 하락 압력');
+const fast=F.buildMacro([rep('a',800,200)],NOW), slow=F.buildMacro([rep('a',800,30)],NOW);
+ok(F.breakdown(150,1,fast).demand>0&&F.breakdown(150,1,slow).demand<0,'소비 회전율이 빠르면 상승, 느리면 하락 (구매력/수요)');
+ok(Math.abs(F.breakdown(150,1,F.buildMacro([rep('a',800,96)],NOW)).money)<1e-9&&Math.abs(F.breakdown(150,1,F.buildMacro([rep('a',800,96)],NOW)).demand)<1e-9,'적정 수준(1인당 800G·회전율 0.12·물가 1.0)이면 통화량·수요 항은 0');
+ok(Math.abs(bRich.money+bRich.demand)<=C.gapCapPct+1e-9,'통화량+수요 항은 틱당 상한을 넘지 않는다');
+const mid=F.buildMacro([rep('a',880,105.6)],NOW);
+ok(F.breakdown(150,1.05,mid).money<F.breakdown(150,1,mid).money,'같은 통화량이면 물가가 이미 높을수록 상승 압력이 줄어든다(실질 잔고 개념)');
+let fm=F.withMacro(fed,rich);
+ok(fm.macro===rich&&fm.rev===fed.rev+1&&fed.macro===undefined,'withMacro는 새 기록을 돌려준다');
+const withM=F.advance(fm,T0+240*H), without=F.advance(fed,T0+240*H);
+ok(withM.price>without.price,'통화량이 넘치는 경제는 같은 금리에서도 물가가 더 오른다');
+const cool=F.advance(F.withMacro(fed,poor),T0+240*H);
+ok(cool.price<without.price,'통화량이 부족한 경제는 물가가 덜 오르거나 내린다');
+// 수입 연동으로 실질 잔고가 유지되면(통화량 ∝ 물가) 균형 — 물가가 통화량에 맞춰 수렴하는가
+let eq=fed; const m2=(p)=>F.buildMacro([rep('a',800*p,96*p)],NOW);
+for(let i=0;i<400;i++){ eq=F.advance(F.withMacro({...eq,lastTickAt:eq.lastTickAt},m2(2)),eq.lastTickAt+8*H); }
+ok(eq.price>1.5&&eq.price<=2.6,'1인당 1600G로 쌓이면 물가는 2.0 근처로 수렴 ('+eq.price+')');
+
 console.log(fail?`\n${fail}건 실패`:'\n전부 통과');
 process.exit(fail?1:0);

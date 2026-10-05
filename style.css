@@ -6169,3 +6169,25 @@
 .fed-closed{list-style:none;margin:0;padding:0;font-size:11.5px}
 .fed-closed li{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b}
 .fed-closed li span{color:#94a3b8}
+
+.fed-stats-sub{margin-top:6px}
+.fed-stats-sub .fed-stat b{font-size:15px}
+.fed-why{margin:6px 0 0}
+.fed-why b{color:#e2e8f0}
+
+/* ===== 로그인 창 (authUI.js) ===== */
+.auth-card{max-width:380px}
+.auth-tabs{display:flex;gap:4px;margin:10px 0 8px}
+.auth-tab{flex:1;background:transparent;border:none;border-bottom:2px solid transparent;color:#94a3b8;font-weight:800;font-size:12.5px;padding:7px 4px;cursor:pointer}
+.auth-tab.is-on{color:#38bdf8;border-bottom-color:#38bdf8}
+.auth-form{display:flex;flex-direction:column;gap:8px}
+.auth-input{background:#0b1220;border:1px solid #334155;border-radius:10px;color:#f8fafc;padding:10px 12px;font-size:13px}
+.auth-input:focus{outline:none;border-color:#38bdf8}
+.auth-alt{margin-top:8px;background:#1e293b!important;color:#e2e8f0!important;border:1px solid #475569!important}
+.auth-msg{min-height:18px;margin:8px 0 4px;font-size:11.5px;color:#94a3b8}
+.auth-msg.err{color:#fca5a5}.auth-msg.ok{color:#86efac}
+.auth-offline{background:none;border:none;color:#64748b;font-size:11px;text-decoration:underline;cursor:pointer;margin-top:4px}
+
+.fed-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 16px 12px;border-top:1px solid #1e293b;font-size:10.5px;color:#64748b}
+.fed-foot b{color:#94a3b8;font-weight:700}
+.fed-link{background:none;border:none;color:#7dd3fc;font-size:10.5px;text-decoration:underline;cursor:pointer;padding:0}

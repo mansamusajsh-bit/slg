@@ -272,6 +272,8 @@
             <div class="cmp-share-buy-head">📜 구매권 남은 <b>${fmtPct(v.right)}</b><small>무주 지분부터, 모자라면 기존 보유자에게서 할증가로 사 옵니다</small></div>
             <div class="cmp-share-buy-row">${btns}${maxBtn}</div>
           </div>`;
+      } else if (v.rightWaitMs > 0) {
+        buy = `<p class="cmp-share-note">📜 점령한 구역의 구매권이 곧 열립니다 (<b data-share-wait data-at="${v.now + v.rightWaitMs}">${fmtCountdown(v.rightWaitMs)}</b>).</p>`;
       } else if (regionStatus(campaign, sel.id) === 'secured') {
         buy = '<p class="cmp-share-note">📜 이번 회차 구매권을 모두 썼습니다.</p>';
       } else {
@@ -306,6 +308,11 @@
       const el = document.querySelector('#campaign-map-body [data-share-countdown]');
       const left = el ? Number(el.dataset.at) - NS.serverNow() : 1;
       if (el) el.textContent = fmtCountdown(left);
+      const wait = document.querySelector('#campaign-map-body [data-share-wait]');
+      if (wait) {
+        const w = Number(wait.dataset.at) - NS.serverNow();
+        if (w <= 0) render(); else wait.textContent = fmtCountdown(w);
+      }
       NS.refresh(left <= 0).then((changed) => { if (changed && state.currentView === 'CAMPAIGN') render(); });
     }, 1000);
   }

@@ -1068,6 +1068,12 @@
   }
   // 코드에 박혀 있는 골드 기준가(상점·고용 등)를 현재 물가로 환산한다. 소액은 1G, 100G 이상은 5G 단위.
   // 사는 값과 파는 값 모두 이 함수를 지나야 인플레이션이 반영된다.
+  // 수입(전리품·보상·세수)도 물가를 따라가야 구매력이 유지된다. 1G 단위로 반올림.
+  function scaleIncome(base) {
+    const v = Number(base);
+    if (!(v > 0)) return 0;
+    return Math.max(1, Math.round(v * getPriceLevel()));
+  }
   function scaleGold(base) {
     const v = Number(base) * getPriceLevel();
     if (!(v > 0)) return 0;
@@ -1291,6 +1297,7 @@
     getGamePrice,
     getPriceLevel,
     scaleGold,
+    scaleIncome,
     createInitialTacticalState,
     snapshotTacticalState
   };
@@ -1310,6 +1317,7 @@
   global.getGamePrice = getGamePrice;
   global.getPriceLevel = getPriceLevel;
   global.scaleGold = scaleGold;
+  global.scaleIncome = scaleIncome;
   global.createInitialTacticalState = createInitialTacticalState;
   global.snapshotTacticalState = snapshotTacticalState;
   global.GameConfig = GameConfig;

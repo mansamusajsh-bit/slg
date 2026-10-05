@@ -7,9 +7,13 @@
 //     motion: null | { id, dir, proposerId, proposerName, createdAt, expiresAt, votes: { [memberId]: { name, v } } },
 //     lastMotion: null | { result, dir, at, rateBp, yes, no, total } }
 //   - rateBp: 정책금리. 8시간당 이자율을 1/10000 단위로 (150 = 8시간마다 1.5%).
-//   - price: 물가 지수 (1.0 = 기준). 골드로 사고파는 모든 가격에 곱해진다.
-//   - 물가는 서버 시각 기준 8시간(틱)마다 한 번씩 움직인다: 변동률 = 기본 상승분 − 민감도 × (정책금리 − 중립금리) ± 잡음.
-//     금리가 중립보다 높으면 물가가 눌리고, 낮으면 더 오른다.
+//   - price: 물가 지수 (1.0 = 기준). 골드로 사고파는 모든 가격과 수입(전리품·보상·세수)·유지비에 곱해진다.
+//   - macro: 마지막으로 집계한 거시 지표 { at, players, money(총 통화량), debt(대출 잔액), spend(틱당 소비), velocity(소비 회전율) }.
+//     플레이어는 접속할 때 fedLedger/{id}에 자기 골드·대출·소비를 보고하고, 틱이 지날 때 한 클라이언트가 합쳐서 여기에 적는다.
+//   - 물가는 서버 시각 기준 8시간(틱)마다 한 번씩 움직인다. 변동률 = 금리 항 + 통화량 항 + 수요 항 ± 잡음.
+//       금리 항  : 기본 상승분 − 민감도 × (정책금리 − 중립금리)  — 중립보다 높으면 눌리고 낮으면 더 오른다.
+//       통화량 항: 1인당 보유 골드가 적정 수준(물가를 곱한 실질 기준)보다 많으면 +, 적으면 −.
+//       수요 항  : 소비 회전율(소비 / 통화량)이 적정보다 빠르면 +, 느리면 −.
 //
 // 연준 위원: 국가별 지분을 가장 많이 가진 (더미가 아닌) 플레이어. 한 사람이 여러 국가 1위여도 한 표.
 //   금리 인상/인하 안건은 위원이 발의하고, 위원 과반(전체 위원의 절반 초과)이 찬성하면 확정된다.
@@ -35,8 +39,20 @@
     rateMaxBp: 500,
     rateStepBp: 25,
     neutralBp: 150,            // 이 금리에서 물가는 baseDriftPct 만큼 오른다
-    baseDriftPct: 0.30,        // 틱당 기본 상승률 (%)
+    baseDriftPct: 0.15,        // 틱당 기본 상승률 (%) — 통화량·수요 항이 나머지를 채운다
     sensitivityPct: 0.20,      // 금리 1%p 차이당 틱당 물가 변동 (%p)
+    // ---- 통화량 · 수요 ----
+    refMoneyPerPlayer: 800,    // 이만큼이 "적정" 1인당 실질 보유 골드 (물가 1.0 기준). 이보다 많으면 인플레, 적으면 디플레 압력
+    refVelocity: 0.12,         // 적정 소비 회전율 = 틱당 소비액 / 통화량
+    velocityWeight: 0.5,       // 수요(회전율)가 목표 물가에 미치는 힘 (지수)
+    gapGain: 0.10,             // 목표 물가와 현재 물가의 격차를 틱당 이만큼 메운다
+    gapCapPct: 1.0,            // 통화량·수요 항의 틱당 최대 변동 (%p)
+    moneyIdxMin: 0.2,
+    moneyIdxMax: 5,
+    velIdxMin: 0.5,
+    velIdxMax: 2,
+    reportMaxAgeHours: 72,     // 이보다 오래 접속하지 않은 플레이어는 통화량·수요 집계에서 뺀다
+    spendWindowTicks: 3,       // 소비는 최근 이 틱 수의 평균으로 본다
     noisePct: 0.10,            // 틱당 잡음 폭 (±%p)
     priceMin: 0.5,
     priceMax: 5,
@@ -106,9 +122,71 @@
     };
   }
 
-  /** 정책금리 rateBp에서 틱 하나가 물가를 몇 % 움직이는가 (잡음 제외) */
+  /** 정책금리 rateBp에서 틱 하나가 물가를 몇 % 움직이는가 (금리 항만, 잡음·통화량·수요 제외) */
   function driftPct(rateBp) {
     return CONFIG.baseDriftPct - CONFIG.sensitivityPct * ((rateBp - CONFIG.neutralBp) / 100);
+  }
+
+  // ---- 통화량 · 수요 집계 ----
+  // 플레이어 보고 한 건: { id, at, loop, gold, debt, spend: { [틱번호]: 그 틱에 쓴 골드 } }
+  const tickIndex = (ms) => Math.floor(ms / TICK_MS());
+
+  /** 최근 완료된 틱들의 평균 소비 (보고에 있는 틱만 센다) */
+  function avgSpend(report, nowMs) {
+    const last = tickIndex(nowMs) - 1;
+    let sum = 0, n = 0;
+    for (let i = 0; i < CONFIG.spendWindowTicks; i++) {
+      const v = report.spend && report.spend[last - i];
+      if (v != null) { sum += Number(v) || 0; n++; }
+    }
+    return n ? sum / n : 0;
+  }
+
+  /**
+   * 접속 중인 플레이어들의 보고를 합쳐 거시 지표를 만든다. 보고가 없으면 null.
+   * @returns {{ at, players, money, debt, spend, velocity }}
+   *   money 총 통화량(플레이어가 쥔 골드 합) · debt 대출 잔액 합 · spend 틱당 소비 합 · velocity 소비 회전율(= spend / money)
+   */
+  function buildMacro(reports, nowMs) {
+    const cutoff = nowMs - CONFIG.reportMaxAgeHours * HOUR;
+    const live = (reports || []).filter((r) => r && r.at >= cutoff && Number(r.gold) >= 0);
+    if (!live.length) return null;
+    const money = live.reduce((a, r) => a + (Number(r.gold) || 0), 0);
+    const debt = live.reduce((a, r) => a + (Number(r.debt) || 0), 0);
+    const spend = live.reduce((a, r) => a + avgSpend(r, nowMs), 0);
+    return { at: nowMs, players: live.length, money, debt, spend: Math.round(spend), velocity: money > 0 ? spend / money : 0 };
+  }
+
+  /**
+   * 틱 하나의 물가 변동률(%)을 원인별로 쪼갠다.
+   *   rate   : 정책금리 (중립보다 높으면 −, 낮으면 +)
+   *   money  : 1인당 통화량이 적정(refMoneyPerPlayer)보다 많으면 +, 적으면 −  (현재 물가와의 격차를 메우는 방향)
+   *   demand : 소비 회전율이 적정보다 빠르면 +, 느리면 −
+   * money+demand는 gapCapPct를 넘지 않는다.
+   */
+  function breakdown(rateBp, price, macro) {
+    const rate = driftPct(rateBp);
+    let money = 0, demand = 0;
+    if (macro && macro.players > 0 && macro.money > 0) {
+      const moneyIdx = clamp((macro.money / macro.players) / CONFIG.refMoneyPerPlayer, CONFIG.moneyIdxMin, CONFIG.moneyIdxMax);
+      const velIdx = clamp(macro.velocity / CONFIG.refVelocity, CONFIG.velIdxMin, CONFIG.velIdxMax);
+      money = CONFIG.gapGain * Math.log(moneyIdx / price) * 100;
+      demand = CONFIG.gapGain * CONFIG.velocityWeight * Math.log(velIdx) * 100;
+      const sum = money + demand;
+      if (Math.abs(sum) > CONFIG.gapCapPct) {
+        const k = CONFIG.gapCapPct / Math.abs(sum);
+        money *= k; demand *= k;
+      }
+    }
+    return { rate, money, demand, total: rate + money + demand };
+  }
+
+  /** 거시 지표를 연준 기록에 붙인 새 기록 (다음 advance부터 이 값으로 물가가 움직인다) */
+  function withMacro(fed, macro) {
+    const next = clone(fed);
+    next.macro = macro;
+    next.rev = (Number(fed.rev) || 0) + 1;
+    return next;
   }
 
   /** 지나간 틱을 모두 적용한 새 연준 기록. 밀 것이 없으면 같은 객체를 돌려준다. */
@@ -121,7 +199,7 @@
     for (let i = 1; i <= steps; i++) {
       const n = next.tickCount + 1;
       const noise = (unitRandom(`fed|${n}`) * 2 - 1) * CONFIG.noisePct;
-      const pct = driftPct(next.rateBp) + noise;
+      const pct = breakdown(next.rateBp, next.price, next.macro).total + noise;
       next.price = clamp(Math.round(next.price * (1 + pct / 100) * 10000) / 10000, CONFIG.priceMin, CONFIG.priceMax);
       next.tickCount = n;
       next.history.push({ at: next.lastTickAt + i * TICK_MS(), price: next.price, rateBp: next.rateBp });
@@ -429,7 +507,7 @@
 
   global.FedEngine = {
     CONFIG, HOUR,
-    lastTickBoundary, nextTickAt, createFed, driftPct, advance, scale, lendingRateBp,
+    lastTickBoundary, nextTickAt, tickIndex, createFed, driftPct, breakdown, buildMacro, withMacro, avgSpend, advance, scale, lendingRateBp,
     committee, majority, tally, canChangeRate, resolve, propose, vote,
     maxLoan, normalizeTerm, interestPerPeriod, quoteLoan, createLoan, loanPeriods, nextInterestAt, payoffAmount, settleLoan,
     startPriceFor, createAuction, minBid, isOpen, applyBid, closeIfEnded, claimRefund, claimWinner

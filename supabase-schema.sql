@@ -37,3 +37,5 @@ create policy "SLG assets public delete" on storage.objects for delete to anon, 
 -- 국가 지분 세금 정산용 서버 시각 (nationShares). 없어도 동작하지만(임시 행으로 대체) 있으면 왕복이 1번으로 준다.
 create or replace function public.slg_server_time() returns timestamptz language sql stable as $$ select now() $$;
 grant execute on function public.slg_server_time() to anon, authenticated;
+
+-- 서버 권위 경제(계정 · 지갑 · 연준 · 지분 · 대출 · 경매)는 supabase-economy.sql 을 이어서 실행하세요. (README "서버 권위 경제" 참고)
