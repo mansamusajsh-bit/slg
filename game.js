@@ -7446,8 +7446,6 @@
         if (e.unit) actions.push(`<button type="button" class="pool-btn ghost" data-pool-dismiss="${esc(e.id)}" ${locked ? 'disabled' : ''}>명단 제외</button>`);
         else actions.push(`<button type="button" class="pool-btn primary" data-pool-enlist="${esc(e.id)}" ${canEnlist && !locked ? '' : 'disabled'}>${e.reserve ? '복귀' : '편입 (사본 1)'}</button>`);
         if (owned) actions.push(`<button type="button" class="pool-btn absorb" data-pool-absorb="${esc(e.id)}" ${e.copies > 0 ? '' : 'disabled'}>🧬 계승</button>`);
-        const illustId = (e.record && e.record.id) || (owned && (owned.sourceCharacterId || owned.id));
-        if (illustId) actions.push(`<button type="button" class="pool-btn ghost" data-pool-illust="${esc(String(illustId))}" title="일러스트 변경">🖼️ 그림</button>`);
         return `
           <div class="pool-card ${e.unit ? 'in-roster' : ''}">
             <button type="button" class="gacha-card-image pool-portrait-btn" data-pool-view="${esc(e.id)}" title="캐릭터 창 열기">${getGachaAvatarHtml(src)}</button>
@@ -7469,7 +7467,6 @@
         renderStrategyView();
       };
       listEl.querySelectorAll('[data-pool-view]').forEach(b => { b.onclick = () => openPoolCharacterWindow(b.dataset.poolView); });
-      listEl.querySelectorAll('[data-pool-illust]').forEach(b => { b.onclick = () => openCharacterIllustrationEditor(b.dataset.poolIllust); });
       listEl.querySelectorAll('[data-pool-enlist]').forEach(b => { b.onclick = () => after(enlistCharacterFromPool(b.dataset.poolEnlist)); });
       listEl.querySelectorAll('[data-pool-dismiss]').forEach(b => { b.onclick = () => after(dismissCharacterToPool(b.dataset.poolDismiss)); });
       listEl.querySelectorAll('[data-pool-absorb]').forEach(b => {
@@ -7667,7 +7664,7 @@
     window.openCharacterRenameEditor = openCharacterRenameEditor;
 
     // ------------------------------------------------------------------------
-    // 일러스트 변경: 보관함·용병 명부에서 캐릭터 그림을 바꾸거나, 외부 그림을 내 저장소(Supabase Storage)로 옮긴다.
+    // 일러스트 변경: 보관함에서 캐릭터 그림을 바꾸거나, 외부 그림을 내 저장소(Supabase Storage)로 옮긴다.
     // 저장하면 캐릭터 레코드와 그 캐릭터에서 나온 모든 유닛(출전·대기·적)의 그림이 함께 바뀐다.
     // ------------------------------------------------------------------------
     function isOwnStorageImageUrl(url) {
