@@ -4,7 +4,7 @@
   const SPLASH_CONFIG = {
     title: '회귀전선',          // TODO: 확정 전 임시 이름
     subtitle: 'RETURN  BY  DEATH',
-    tagline: '죽음 끝에서, 다시 지휘봉을 잡다',
+    tagline: '다시 너를 만난다',
     holdMs: 2900,               // 연출이 끝난 뒤 사라지기까지 총 시간
   };
 
