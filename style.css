@@ -5772,7 +5772,12 @@
 .rbd-btn-danger:hover:not(:disabled){background:#b91c1c}
 .cmd-bonus-tag{color:#7c3aed;font-weight:800;font-size:.9em}
 .rbd-card .cmd-bonus-tag{color:#c4b5fd}
-.loop-counter{position:fixed;left:10px;bottom:10px;z-index:9000;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800;color:#ede9fe;background:rgba(76,29,149,.85);border:1px solid #8b5cf6;box-shadow:0 4px 12px rgba(76,29,149,.35);pointer-events:none}
+.loop-counter{position:fixed;left:10px;bottom:10px;z-index:9000;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800;color:#ede9fe;background:rgba(76,29,149,.85);border:1px solid #8b5cf6;box-shadow:0 4px 12px rgba(76,29,149,.35);cursor:pointer;font-family:inherit}
+.log-history-overlay{position:fixed;inset:0;z-index:9500;background:rgba(15,23,42,.55);display:flex;align-items:center;justify-content:center;padding:12px}
+.log-history-card{background:#fff;border-radius:12px;width:100%;max-width:480px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden}
+.log-history-head{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;font-weight:800;font-size:14px;border-bottom:1px solid #e2e8f0}
+.log-history-head button{border:0;background:none;font-size:16px;cursor:pointer}
+.log-history-body{overflow-y:auto;padding:8px 12px;font-size:12px;line-height:1.5;display:flex;flex-direction:column;gap:3px}
 .strat-node-pin.is-remembered .strat-node-circle{box-shadow:0 0 0 3px rgba(139,92,246,.35),0 3px 10px rgba(139,92,246,.35)}
 .strat-node-memory{position:absolute;top:-9px;right:-10px;font-size:11px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,.25))}
 /* 회귀 연출 화면 (audio/returnByDeath.js) */

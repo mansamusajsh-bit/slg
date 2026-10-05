@@ -1421,7 +1421,11 @@
     /* --------------------------------------------------------------------------
        Logging & Console Output
        -------------------------------------------------------------------------- */
+    const LOG_HISTORY_MAX = 500;
+    const logHistory = []; // 지난 전투 로그 (회귀 카운터 버튼으로 열람)
     function addLog(msg, type = 'system') {
+      logHistory.push({ msg: String(msg), type });
+      if (logHistory.length > LOG_HISTORY_MAX) logHistory.shift();
       const wrap = document.getElementById('console-wrap');
       const div = document.createElement('div');
       div.className = `log-line log-${type}`;
@@ -11477,15 +11481,41 @@
     function renderLoopCounter() {
       let el = document.getElementById('loop-counter');
       const count = Number(state && state.player && state.player.loopCount) || 0;
-      if (!count) { if (el) el.remove(); return; }
       if (!el) {
-        el = document.createElement('div');
+        el = document.createElement('button');
+        el.type = 'button';
         el.id = 'loop-counter';
         el.className = 'loop-counter';
+        el.onclick = openBattleLogHistory;
         document.body.appendChild(el);
       }
       el.textContent = `🔁 회귀 ${count}회`;
-      el.title = `사망회귀 ${count}회`;
+      el.title = `사망회귀 ${count}회 · 눌러서 지난 전투 로그 보기`;
+    }
+
+    function openBattleLogHistory() {
+      document.getElementById('battle-log-history')?.remove();
+      const overlay = document.createElement('div');
+      overlay.id = 'battle-log-history';
+      overlay.className = 'log-history-overlay';
+      overlay.innerHTML = `
+        <div class="log-history-card">
+          <div class="log-history-head"><span>📜 지난 전투 로그 (${logHistory.length})</span><button type="button" data-close>✕</button></div>
+          <div class="log-history-body"></div>
+        </div>`;
+      const body = overlay.querySelector('.log-history-body');
+      if (!logHistory.length) body.textContent = '기록된 로그가 없습니다.';
+      logHistory.forEach(({ msg, type }) => {
+        const div = document.createElement('div');
+        div.className = `log-line log-${type}`;
+        div.textContent = msg;
+        body.appendChild(div);
+      });
+      document.body.appendChild(overlay);
+      body.scrollTop = body.scrollHeight;
+      const close = () => overlay.remove();
+      overlay.querySelector('[data-close]').onclick = close;
+      overlay.onclick = (e) => { if (e.target === overlay) close(); };
     }
 
     // ========================================================================
