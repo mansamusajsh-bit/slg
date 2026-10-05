@@ -59,7 +59,7 @@ const evIds=new Set(); n.forEach(x=>evIds.add(R.rollEvent(a,x).id)); for(let i=0
 ok(evIds.size===3,'이벤트 3종 모두 등장');
 // 보상 (타입별)
 const g=(t)=>MS.generateEncounterRewards('X-1',{enemyCount:2,type:t});
-ok(g('battle')[0].amount===200 && g('elite')[0].amount===300 && g('boss')[0].amount===400,'골드 배율: 전투 200 / 정예 300 / 보스 400');
+ok(g('battle')[0].amount===200 && g('elite')[0].amount===300 && g('boss')[0].amount===2000,'골드 배율: 전투 200 / 정예 300 / 보스 2000 (적 수×1000)');
 ok(MS.generateEncounterRewards('X-1',{enemyCount:2,type:'boss'}).some(r=>r.type==='rewinder'),'보스는 리와인더 확정');
 ok(JSON.stringify(g('battle'))===JSON.stringify(g('battle')),'보상 결정론');
 // 커스텀 섹터 1개만 있어도 동작
