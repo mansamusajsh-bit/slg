@@ -7,6 +7,7 @@ const dist = join(root, 'dist');
 const files = [
   'index.html',
   'style.css',
+  'splash.js',
   'civ4-editor.css',
   'seedEngine.js',
   'mapSchema.js',
