@@ -224,6 +224,150 @@
   }
 
   // --------------------------------------------------------------------------
+  // 랜덤 생성 (DEV 빌더의 🎲 버튼) — 효과·수치·이름·아이콘까지 정한다. 계층이 높을수록 수치가 크다.
+  // --------------------------------------------------------------------------
+  const rint = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const chance = (p) => Math.random() < p;
+
+  // 효과 종류별 수치 범위 [최소, 최대] (계층 1 기준) — 계층마다 +20%
+  const RANDOM_VALUE_RANGE = {
+    DAMAGE: [14, 26], DRAIN: [12, 22], DOT: [5, 10], HEAL: [18, 32], REGEN: [5, 10], SHIELD: [12, 25],
+    BUFF_ATK: [15, 35], BUFF_DEF: [15, 35], DEBUFF_ATK: [10, 25], DEBUFF_DEF: [10, 25], MARK: [15, 35]
+  };
+  const RANDOM_PASSIVE_RANGE = { BUFF_ATK: [5, 15], BUFF_DEF: [5, 15], REGEN: [3, 7] };
+  const SMALL_VALUE_MAX = { SLOW: 1, RESTORE_AP: 2, BONUS_AP: 1, COOLDOWN_RESET: 2, KNOCKBACK: 2, PULL: 2 };
+
+  // 이름: 접두어 + 주효과에 맞는 명사 ("화염 강타", "성광의 결계")
+  const NAME_PREFIXES = ['화염', '서리', '폭풍', '심연', '성광', '그림자', '강철', '혈월', '천둥', '질풍', '대지', '별빛', '망령', '황혼', '여명', '독사', '용린', '백야', '칠흑', '청람', '홍련', '은월', '파멸', '수호성'];
+  const NAME_NOUNS = {
+    DAMAGE: ['일격', '참격', '강타', '난무', '파쇄', '연격', '섬광', '포격'], DRAIN: ['흡혈', '포식', '갈취'],
+    DOT: ['저주', '낙인', '독무', '업화'], HEAL: ['치유', '축복', '기도', '은총'], REGEN: ['숨결', '생명', '재생'],
+    SHIELD: ['장벽', '결계', '방패'], BUFF_ATK: ['함성', '격노', '고양'], BUFF_DEF: ['수호', '철벽', '맹세'],
+    DEBUFF_ATK: ['쇠약', '위압'], DEBUFF_DEF: ['침식', '균열'], MARK: ['표식', '낙인'], STUN: ['충격', '봉인'],
+    ROOT: ['속박', '사슬'], SLOW: ['늪', '족쇄'], TAUNT: ['포효', '도발'], STEALTH: ['장막', '은신'],
+    PROTECT: ['불굴', '가호'], CLEANSE: ['정화', '해방'], RESTORE_AP: ['가속', '각성'], BONUS_AP: ['순환', '각성'],
+    COOLDOWN_RESET: ['회귀', '집중'], KNOCKBACK: ['폭풍', '충격파'], PULL: ['갈고리', '인력']
+  };
+  const NAME_ICONS = {
+    DAMAGE: ['⚔️', '🗡️', '🔥', '⚡', '💥', '🌪️', '☄️'], DRAIN: ['🩸', '🦇'], DOT: ['🔥', '☠️', '🧪'], HEAL: ['💚', '✨', '🙏'],
+    REGEN: ['🌿', '🍃'], SHIELD: ['🔰', '🛡️'], BUFF_ATK: ['💪', '📯'], BUFF_DEF: ['🛡️', '🧱'], PROTECT: ['🕊️'], BONUS_AP: ['🔋']
+  };
+
+  function randomValue(type, tier, passive) {
+    const def = EFFECTS[type];
+    if (SMALL_VALUE_MAX[type]) return rint(1, Math.min(SMALL_VALUE_MAX[type], tier >= 3 ? SMALL_VALUE_MAX[type] : 1));
+    const range = (passive && RANDOM_PASSIVE_RANGE[type]) || RANDOM_VALUE_RANGE[type];
+    if (!range) return def.value;
+    const v = rint(range[0], range[1]) * (1 + 0.2 * (tier - 1));
+    return range[1] >= 20 ? Math.max(5, Math.round(v / 5) * 5) : Math.round(v); // 큰 수치는 5 단위
+  }
+
+  function randomEffect(type, tier, passive, extra) {
+    const def = EFFECTS[type];
+    const e = { type, value: randomValue(type, tier, passive) };
+    if (def.status && !passive) e.duration = type === 'STUN' ? 1 : rint(1, tier >= 3 ? 3 : 2);
+    if (def.scalable && chance(0.6)) e.scale = rint(2, 6 + tier) * 5;
+    return Object.assign(e, extra || {});
+  }
+
+  function randomName(primaryType) {
+    const prefix = pick(NAME_PREFIXES);
+    const noun = pick(NAME_NOUNS[primaryType] || NAME_NOUNS.DAMAGE);
+    return chance(0.35) ? `${prefix}의 ${noun}` : `${prefix} ${noun}`;
+  }
+
+  /**
+   * 무작위 스킬 노드 하나. opts: { type: 'ACTIVE'|'PASSIVE', tier, id, startsLearned, prerequisites, imageUrl }
+   * 액티브는 공격형(적 대상) 또는 지원형(아군 대상)으로 나뉘어, 효과 조합이 대상과 맞게 나온다.
+   */
+  function randomSkill(opts = {}) {
+    const type = opts.type === 'PASSIVE' ? 'PASSIVE' : 'ACTIVE';
+    const tier = Math.max(1, Math.min(4, num(opts.tier, 1)));
+    let targeting, effects;
+
+    if (type === 'PASSIVE') {
+      const primary = pick(['BUFF_ATK', 'BUFF_DEF', 'BUFF_ATK', 'BUFF_DEF', 'REGEN', tier >= 3 ? 'PROTECT' : 'REGEN', tier >= 2 ? 'BONUS_AP' : 'BUFF_ATK']);
+      effects = [randomEffect(primary, tier, true)];
+      if (chance(0.4)) {
+        const second = pick(['BUFF_ATK', 'BUFF_DEF', 'REGEN'].filter(t => t !== primary));
+        effects.push(randomEffect(second, tier, true));
+      }
+      targeting = (tier >= 2 && chance(0.35)) ? T('SELF', 0, 1, 'ALLY') : T('SELF', 0, 0, 'ALLY'); // 가끔 주변 아군 오라
+    } else if (chance(0.7)) {
+      // 공격형: 적 1명 / 칸 지정 범위 / 자신 중심 범위
+      const shape = pick(['ENEMY', 'ENEMY', 'TILE', 'SELF']);
+      if (shape === 'ENEMY') {
+        const far = chance(0.5);
+        targeting = T('ENEMY', far ? rint(3, 4) : rint(1, 2), chance(0.2 + 0.1 * tier) ? 1 : 0, 'ENEMY', far ? rint(1, 2) : 1);
+      } else if (shape === 'TILE') targeting = T('TILE', rint(3, 4), 1, 'ENEMY', rint(1, 2));
+      else targeting = T('SELF', 0, rint(1, 2), 'ENEMY');
+      const primary = pick(['DAMAGE', 'DAMAGE', 'DAMAGE', 'DRAIN', 'DOT']);
+      effects = [randomEffect(primary, tier, false)];
+      const secondaries = ['DOT', 'DEBUFF_ATK', 'DEBUFF_DEF', 'MARK', 'SLOW', 'KNOCKBACK', 'ROOT', tier >= 2 ? 'STUN' : 'SLOW', 'SELF_BUFF'];
+      if (targeting.mode === 'ENEMY' && targeting.radius === 0 && targeting.rangeMin >= 2) secondaries.push('PULL');
+      const count = rint(0, tier >= 3 ? 2 : 1);
+      for (let i = 0; i < count; i++) {
+        const s = pick(secondaries.filter(t => !effects.some(e => e.type === t)));
+        if (!s) break;
+        if (s === 'SELF_BUFF') effects.push(randomEffect(pick(['BUFF_ATK', 'BUFF_DEF', 'SHIELD']), tier, false, { to: 'self' }));
+        else effects.push(randomEffect(s, tier, false));
+      }
+    } else {
+      // 지원형: 아군 1명 / 자신 중심 범위 / 자신
+      const shape = pick(['ALLY', 'ALLY', 'SELF_AOE', 'SELF']);
+      targeting = shape === 'ALLY' ? T('ALLY', rint(1, 3), 0, 'ALLY', 0)
+        : shape === 'SELF_AOE' ? T('SELF', 0, rint(1, 2), 'ALLY')
+        : T('SELF', 0, 0, 'ALLY');
+      const pool = ['HEAL', 'HEAL', 'SHIELD', 'BUFF_ATK', 'BUFF_DEF', 'REGEN', 'CLEANSE', 'RESTORE_AP', tier >= 2 ? 'STEALTH' : 'SHIELD', tier >= 3 ? 'PROTECT' : 'HEAL', 'COOLDOWN_RESET'];
+      const primary = pick(pool);
+      effects = [randomEffect(primary, tier, false)];
+      if (chance(0.5 + 0.1 * tier)) {
+        const s = pick(pool.filter(t => t !== primary));
+        effects.push(randomEffect(s, tier, false));
+      }
+    }
+
+    const primaryType = effects[0].type;
+    const hasControl = effects.some(e => ['STUN', 'ROOT', 'TAUNT', 'PROTECT', 'STEALTH'].includes(e.type));
+    const aoe = targeting.radius > 0;
+    return normalizeSkill({
+      id: opts.id || newId(),
+      name: randomName(primaryType),
+      icon: pick(NAME_ICONS[primaryType] || [EFFECTS[primaryType].icon]),
+      imageUrl: opts.imageUrl || '',
+      type,
+      tier,
+      prerequisites: opts.prerequisites || [],
+      startsLearned: !!opts.startsLearned,
+      spCost: tier,
+      costAP: type === 'ACTIVE' ? Math.min(3, 1 + (aoe && tier >= 2 ? 1 : 0) + (tier >= 4 ? 1 : 0)) : 0,
+      coolDown: type === 'ACTIVE' ? Math.min(5, rint(1, 2) + Math.floor(tier / 2) + (hasControl ? 1 : 0)) : 0,
+      targeting,
+      effects,
+      autoDescription: true
+    });
+  }
+
+  // 무작위 스킬트리: T1 액티브(★시작 습득) + 패시브, T2 2~3개, T3 2개, T4 1개. 선행은 바로 아래 계층에서 1~2개.
+  function buildRandomTree() {
+    const layout = [
+      [1, 'ACTIVE', true], [1, 'PASSIVE'],
+      [2, 'ACTIVE'], [2, chance(0.5) ? 'ACTIVE' : 'PASSIVE'], ...(chance(0.5) ? [[2, 'ACTIVE']] : []),
+      [3, 'ACTIVE'], [3, chance(0.5) ? 'ACTIVE' : 'PASSIVE'],
+      [4, chance(0.75) ? 'ACTIVE' : 'PASSIVE']
+    ];
+    const nodes = [];
+    layout.forEach(([tier, type, starts]) => {
+      const lower = nodes.filter(n => n.tier === tier - 1);
+      const prereqs = lower.length ? [pick(lower).id] : [];
+      if (lower.length > 1 && chance(0.25)) prereqs.push(pick(lower.filter(n => n.id !== prereqs[0])).id);
+      nodes.push(randomSkill({ type, tier, startsLearned: !!starts, prerequisites: prereqs }));
+    });
+    return nodes;
+  }
+
+  // --------------------------------------------------------------------------
   // 설명 자동 생성
   // --------------------------------------------------------------------------
   function describeEffect(e) {
@@ -849,7 +993,7 @@
 
   global.SkillEngine = {
     EFFECTS, CATEGORY_LABELS, TARGET_MODES, AFFECTS, PRESETS, CLASS_TREES,
-    configure, normalizeSkill, normalizeEffect, fromPreset, buildClassTree, describeSkill, describeEffect, describeTargeting, newId,
+    configure, normalizeSkill, normalizeEffect, fromPreset, buildClassTree, randomSkill, buildRandomTree, describeSkill, describeEffect, describeTargeting, newId,
     ensureUnitSkillState, getUnitSkills, getSkillCooldown, getLearnState, learnSkill,
     getRemainingUnlocks, getSurplusSkillPoints,
     getStatuses, hasStatus, getCombatModifiers, canMove, canAct, isTargetableByAI, breakStealth, getForcedTarget, tryPreventDeath,

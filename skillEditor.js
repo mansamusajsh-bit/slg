@@ -121,7 +121,10 @@
       const affOpts = Object.entries(SE().AFFECTS).map(([k, v]) => `<option value="${k}" ${t.affects === k ? 'selected' : ''}>${esc(v)}</option>`).join('');
       return `
         <div class="sk-form">
-          <div class="sk-form-title">${ui.editingId ? '✏️ 스킬 노드 편집' : '✨ 새 스킬 노드'}</div>
+          <div class="sk-form-title" style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+            <span>${ui.editingId ? '✏️ 스킬 노드 편집' : '✨ 새 스킬 노드'}</span>
+            <button type="button" class="sk-mini" data-act="random-skill" title="유형·계층·선행·★은 그대로 두고 효과·수치·이름을 무작위로 바꿉니다">🎲 랜덤</button>
+          </div>
           <div class="sk-row">
             <div class="sk-icon-drop" data-role="icon-drop" title="클릭 또는 이미지 드래그&드롭">
               ${iconHtml(s, 40)}
@@ -203,6 +206,7 @@
         <div class="sk-builder">
           <div class="sk-toolbar">
             <button type="button" class="sk-mini" data-act="class-tree">🧬 병과 추천 트리 불러오기</button>
+            <button type="button" class="sk-mini" data-act="random-tree" title="효과·수치·이름까지 무작위로 스킬트리 전체를 만듭니다">🎲 랜덤 트리</button>
             <button type="button" class="sk-mini" data-act="new-active">⚡ 새 액티브</button>
             <button type="button" class="sk-mini" data-act="new-passive">🛡️ 새 패시브</button>
             <span class="sk-toolbar-sep"></span>
@@ -287,6 +291,17 @@
             if (list.length && !global.confirm('현재 트리를 병과 추천 트리로 교체할까요?')) return;
             ui.editing = null; ui.editingId = null;
             commit(SE().buildClassTree(cls));
+          }
+          else if (act === 'random-tree') {
+            if (list.length && !global.confirm('현재 트리를 무작위 스킬트리로 교체할까요?')) return;
+            ui.editing = null; ui.editingId = null;
+            commit(SE().buildRandomTree());
+          }
+          else if (act === 'random-skill') {
+            readForm();
+            const s = ui.editing;
+            ui.editing = SE().randomSkill({ type: s.type, tier: s.tier, id: s.id, startsLearned: s.startsLearned, prerequisites: s.prerequisites, imageUrl: s.imageUrl });
+            refreshForm();
           }
           else if (act === 'clear') {
             if (!list.length || !global.confirm('스킬트리의 모든 노드를 삭제할까요?')) return;
