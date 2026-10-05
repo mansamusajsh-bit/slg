@@ -6436,8 +6436,8 @@
         const imgDisplay = renderPortrait({ ...c, avatar: c.avatar || meta.icon }, { emojiSize: '20px' });
 
         return `
-          <div style="display: flex; align-items: center; justify-content: space-between; padding: 8px 10px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); gap: 10px;">
-            <div style="display: flex; align-items: center; gap: 8px; min-width: 0;">
+          <div style="display: flex; flex-direction: column; align-items: stretch; padding: 8px 10px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1;">
               <button type="button" onclick="changeCustomCharacterImage('${c.id}')" title="클릭해서 일러스트 변경" style="width: 38px; height: 38px; padding: 0; border-radius: 8px; background: #f8fafc; border: 1px solid #e2e8f0; display: flex; align-items: center; justify-content: center; overflow: hidden; flex-shrink: 0; cursor: pointer;">
                 ${imgDisplay}
               </button>
@@ -6447,16 +6447,16 @@
                   ${isImageUrlBroken(c.imageUrl) ? '<span style="font-size: 9px; font-weight: 700; color: #b91c1c; background: #fee2e2; padding: 1px 5px; border-radius: 4px;" title="그림을 불러오지 못해 대체 그림으로 표시 중">⚠️ 그림 깨짐</span>' : ''}
                   <span style="font-size: 9px; font-weight: 700; color: #475569; background: #f1f5f9; padding: 1px 5px; border-radius: 4px;">${meta.name.split(' ')[0]}</span>
                 </div>
-                <div style="font-size: 10px; color: #64748b; margin-top: 2px;">
+                <div style="font-size: 10px; color: #64748b; margin-top: 2px; white-space: nowrap;">
                   HP ${c.stats?.hp || 100} / ATK ${c.stats?.atk || 40} / DEF ${c.stats?.def || 30} / 호감도 ${c.favorability || 75}
                 </div>
-                <div style="font-size: 9.5px; color: #6366f1; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;">
+                <div style="font-size: 9.5px; color: #6366f1; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
                   ${skillSummary}
                 </div>
               </div>
             </div>
 
-            <div style="display: flex; gap: 4px; flex-shrink: 0;">
+            <div class="char-vault-actions" style="display: flex; flex-wrap: wrap; gap: 4px;">
               <button class="btn-cheat" style="font-size: 9px; padding: 4px 6px; background: #b45309;" onclick="openCharacterIllustrationEditor('${c.id}')" title="일러스트 변경 · 내 저장소로 보관">
                 🖼️ 그림
               </button>

@@ -6191,3 +6191,6 @@
 .fed-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 16px 12px;border-top:1px solid #1e293b;font-size:10.5px;color:#64748b}
 .fed-foot b{color:#94a3b8;font-weight:700}
 .fed-link{background:none;border:none;color:#7dd3fc;font-size:10.5px;text-decoration:underline;cursor:pointer;padding:0}
+
+/* 커스텀 캐릭터 보관함: 버튼은 정보 아래 한 줄로 균등 배치 */
+.char-vault-actions .btn-cheat { flex: 1 1 0; min-width: 44px; white-space: nowrap; text-align: center; }
