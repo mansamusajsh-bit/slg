@@ -1719,6 +1719,9 @@
       const isPlayerDefender = (defender.owner === 'PLAYER' || !defender.owner);
       const isFirstUnit = isPlayerAttacker && (state.playerUnits.filter(u => !u.isDead)[0]?.id === attacker.id);
       const targetTile = getTile(defender.x, defender.y);
+      // 승률 창 슬라이드용: 어떤 효과가 얼마나 반영됐는지 기록한다 (side: atk=공격력, def=방어력, win=승률)
+      const factors = [];
+      const addFactor = (side, label, pct) => { if (pct) factors.push({ side, label, pct: Math.round(pct * 10) / 10 }); };
 
       // 1. 공격력 산출 (Effective Strength = Base Strength * (HP / 100))
       let atkBonus = 1.0;
@@ -1727,18 +1730,22 @@
       const defPromo = getPromotionEffectSummary(defender);
       const tileFlags = getPromotionTileFlags(targetTile);
       atkBonus += atkPromo.atkPercent;
-      if (tileFlags.isCityTile) atkBonus += atkPromo.cityAtkBonus;
+      addFactor('atk', '병과 승급', atkPromo.atkPercent * 100);
+      if (tileFlags.isCityTile) { atkBonus += atkPromo.cityAtkBonus; addFactor('atk', '승급: 도시 공격', atkPromo.cityAtkBonus * 100); }
       if (isPlayerAttacker && skills.BearDown && isFirstUnit) {
         atkBonus += 0.20; // BearDown: 첫 유닛 공격력 +20%
+        addFactor('atk', '지휘관 패시브: 버텨내기(첫 유닛)', 20);
       }
       // 유물 치명타율: 치명타는 피해 +50%이므로 기대값으로 공격력에 반영한다 (치명타율 10%p → 공격력 +5%)
       const critRate = clampPercent(getRelicStatFor(attacker, 'critRate'), 0, 100);
-      if (critRate) atkBonus += (critRate / 100) * 0.5;
+      if (critRate) { atkBonus += (critRate / 100) * 0.5; addFactor('atk', `유물 치명타율 ${Math.round(critRate)}% 기대값`, critRate * 0.5); }
       // 스킬 패시브 · 오라 · 버프/디버프 (skillEngine)
       const atkMods = window.SkillEngine ? SkillEngine.getCombatModifiers(attacker) : { atk: 0 };
       atkBonus = Math.max(0.1, atkBonus + atkMods.atk / 100);
+      addFactor('atk', '스킬·오라·버프/디버프', atkMods.atk);
       if (attacker.customSkillBuffAtk) {
         atkBonus += attacker.customSkillBuffAtk;
+        addFactor('atk', '커스텀 스킬 버프', attacker.customSkillBuffAtk * 100);
       }
       const effectiveAtk = calculateEffectiveStrength(attacker, 'atk');
       const finalAtk = effectiveAtk * atkBonus;
@@ -1748,29 +1755,36 @@
       let rawTileDef = MapSchema.getTileDefBonus(targetTile);
       let tileDefBonus = rawTileDef * (debugParams.tileDefBonusMultiplier ?? 1.0);
       if (isPlayerAttacker && skills.Precision) {
+        if (tileDefBonus > 0) factors.push({ side: 'def', label: '지휘관 패시브: 정밀 사격 — 지형 방어 무시', pct: null });
         tileDefBonus = 0; // Precision: 적 지형 방어 보너스 무시
       }
       // 유물 지형 방어(terrainDef): 방어 보너스가 있는 지형에서 그 보너스를 키운다
       const terrainRelic = getRelicStatFor(defender, 'terrainDef');
       if (terrainRelic && tileDefBonus > 0) tileDefBonus = Math.max(0, tileDefBonus + terrainRelic / 100);
       defBonus += tileDefBonus;
+      addFactor('def', '지형 방어', tileDefBonus * 100);
       if (isPlayerDefender && skills.ShieldWall) {
         defBonus += 0.15; // ShieldWall: 아군 방어력 +15%
+        addFactor('def', '지휘관 패시브: 방패의 벽', 15);
       }
       // 승급: 도시 주둔 · 게릴라(언덕/산악) · 삼림 전문 방어 보너스
-      if (tileFlags.isCityTile) defBonus += defPromo.cityDefBonus;
-      if (tileFlags.isHillTile) defBonus += defPromo.hillDefBonus;
-      if (tileFlags.isForestTile) defBonus += defPromo.forestDefBonus;
+      if (tileFlags.isCityTile) { defBonus += defPromo.cityDefBonus; addFactor('def', '승급: 도시 주둔', defPromo.cityDefBonus * 100); }
+      if (tileFlags.isHillTile) { defBonus += defPromo.hillDefBonus; addFactor('def', '승급: 언덕·산악 게릴라', defPromo.hillDefBonus * 100); }
+      if (tileFlags.isForestTile) { defBonus += defPromo.forestDefBonus; addFactor('def', '승급: 삼림 전문', defPromo.forestDefBonus * 100); }
       // 방어 태세 (GUARD stance) 보너스 +30% 적용
       if (defender.isGuarding || defender.stance === 'GUARD') {
         defBonus += (defender.guardBonusDef || 0.30);
+        addFactor('def', '방어 태세', (defender.guardBonusDef || 0.30) * 100);
       }
       // 스킬 패시브 · 오라 · 버프/디버프 · 약점 표식 (skillEngine)
       const defMods = window.SkillEngine ? SkillEngine.getCombatModifiers(defender) : { def: 0, mark: 0 };
       defBonus += (defMods.def - defMods.mark) / 100;
       defBonus = Math.max(0.1, defBonus);
+      addFactor('def', '스킬·오라·버프/디버프', defMods.def);
+      addFactor('def', '약점 표식', -defMods.mark);
       if (defender.customSkillBuffDef) {
         defBonus += defender.customSkillBuffDef;
+        addFactor('def', '커스텀 스킬 버프', defender.customSkillBuffDef * 100);
       }
       const effectiveDef = calculateEffectiveStrength(defender, 'def');
       const finalDef = effectiveDef * defBonus;
@@ -1784,8 +1798,11 @@
       // 유물 회피율: 방어자가 공격을 피할 확률만큼 공격자 승률이 줄어든다 (음수면 오히려 맞기 쉬워진다)
       const evasion = clampPercent(getRelicStatFor(defender, 'evasion'), -50, 75);
       if (evasion) P = Math.max(0, Math.min(1, P * (1 - evasion / 100)));
+      if (evasion) addFactor('win', `방어자 유물 회피 (${evasion > 0 ? '승률 감소' : '승률 증가'})`, -evasion);
+      if (wAtk !== 1 || wDef !== 1) factors.push({ side: 'win', label: `디버그 가중치 공격 ×${wAtk} / 방어 ×${wDef}`, pct: null });
 
       let isCheat = false;
+      if (debugParams.forcedBattleResult === 'FORCE_WIN' || debugParams.forcedBattleResult === 'FORCE_LOSE') factors.push({ side: 'win', label: `디버그 강제 결과 (${debugParams.forcedBattleResult})`, pct: null });
       if (debugParams.forcedBattleResult === 'FORCE_WIN') {
         P = isPlayerAttacker ? 1.0 : 0.0;
         isCheat = true;
@@ -1810,7 +1827,10 @@
         winPercent,
         evasion,
         isCheat,
-        isDangerAffection
+        isDangerAffection,
+        factors,
+        effectiveAtk,
+        effectiveDef
       };
     }
 
@@ -2141,10 +2161,15 @@
           }
 
           // 호감도 (지휘관의 통솔: +30%). 병과 경험치 보너스는 awardPromotionXp가 준다.
-          let affGain = 5;
-          if (skills.CommanderLeadership) affGain = Math.round(affGain * 1.3);
-          attacker.affection = Math.min(100, attacker.affection + affGain);
-          addLog(`⭐ ${attacker.name} 호감도 +${affGain} 획득!`, 'success');
+          // 승률 50% 이하의 무모한 교전에서 이기면 오히려 호감도가 소폭 떨어진다.
+          if (P <= AFFECTION_RULES.lowOddsThreshold) {
+            adjustAffectionWithLog(attacker, AFFECTION_RULES.lowOddsWin, `무모한 교전(승률 ${winPercent}%) 불만`);
+          } else {
+            let affGain = 5;
+            if (skills.CommanderLeadership) affGain = Math.round(affGain * 1.3);
+            attacker.affection = Math.min(100, attacker.affection + affGain);
+            addLog(`⭐ ${attacker.name} 호감도 +${affGain} 획득!`, 'success');
+          }
 
           // 승리 시 적진 돌파 및 타일 전진 점령 (해당 타일에 남은 적이 없을 때)
           const remainingEnemiesAtTile = state.enemyUnits.filter(e => !e.isDead && e.x === defender.x && e.y === defender.y);
@@ -3441,6 +3466,41 @@
     /* --------------------------------------------------------------------------
        Battle Victory Odds View Renderer (전투 승리 확률 카드 인터페이스)
        -------------------------------------------------------------------------- */
+    function renderOddsFactorPanel(odds, attacker, defender) {
+      const panel = document.getElementById('odds-fx-panel');
+      const trigger = document.querySelector('#unit-card-odds-view .odds-rate-badge');
+      if (!panel || !trigger) return;
+      if (!trigger.dataset.fxBound) {
+        trigger.dataset.fxBound = '1';
+        const wrap = trigger.closest('.unit-card-odds');
+        const open = v => panel.classList.toggle('open', v);
+        trigger.addEventListener('mouseenter', () => open(true));
+        wrap.addEventListener('mouseleave', () => open(false));
+        trigger.addEventListener('click', ev => { ev.stopPropagation(); open(!panel.classList.contains('open')); });
+      }
+      const row = f => {
+        const val = f.pct === null || f.pct === undefined ? '' : `<b class="${f.pct > 0 ? 'up' : 'down'}">${f.pct > 0 ? '+' : ''}${f.pct}%</b>`;
+        return `<div class="odds-fx-row"><span>${escapeGachaHtml(f.label)}</span>${val}</div>`;
+      };
+      const section = (title, base, list) => `
+        <div class="odds-fx-sec">
+          <div class="odds-fx-head"><span>${title}</span><b>${base}</b></div>
+          ${list.length ? list.map(row).join('') : '<div class="odds-fx-row none"><span>적용된 보정 없음</span></div>'}
+        </div>`;
+      const by = side => odds.factors.filter(f => f.side === side);
+      const hpPct = u => { const m = Number(u.maxHp) > 0 ? Number(u.maxHp) : 100; return Math.round((Math.max(0, Number(u.hp) || 0) / m) * 100); };
+      panel.innerHTML = `
+        <div class="odds-fx-title">📊 승률 산출 근거 <small>P = 공격 ÷ (공격 + 방어)</small></div>
+        <div class="odds-fx-cols">
+          ${section(`⚔️ ${escapeGachaHtml(attacker.name)} 공격`, `${odds.effectiveAtk.toFixed(1)} → ${odds.finalAtk.toFixed(1)}`,
+            [{ side: 'atk', label: `유효 공격력 (HP ${hpPct(attacker)}% 반영)`, pct: null }, ...by('atk')])}
+          ${section(`🛡️ ${escapeGachaHtml(defender.name)} 방어`, `${odds.effectiveDef.toFixed(1)} → ${odds.finalDef.toFixed(1)}`,
+            [{ side: 'def', label: `유효 방어력 (HP ${hpPct(defender)}% 반영)`, pct: null }, ...by('def')])}
+        </div>
+        ${by('win').length ? `<div class="odds-fx-sec">${by('win').map(row).join('')}</div>` : ''}
+        <div class="odds-fx-result">최종 승률 <b>${odds.winPercent}%</b></div>`;
+    }
+
     function renderBattleOddsView(attacker, inRangeEnemies) {
       if (!attacker || !inRangeEnemies || inRangeEnemies.length === 0) return;
 
@@ -3521,6 +3581,9 @@
         meterFillEl.style.width = `${Math.min(100, Math.max(0, P * 100))}%`;
         meterFillEl.style.backgroundColor = meterColor;
       }
+
+      // 3-1. 승률 산출 근거 슬라이드 (승률 표시에 마우스를 올리거나 탭하면 펼쳐진다)
+      renderOddsFactorPanel(odds, attacker, defender);
 
       // 4. 복수 적군 대상 선택 칩 렌더링
       const chipsContainer = document.getElementById('odds-target-chips');
@@ -4451,7 +4514,6 @@
       // 항상 대입해서, 적이 0명인 템플릿에 들어갔을 때 이전 전투의 enemyUnits가 남아있는
       // 문제도 함께 없앤다.
       state.enemyUnits = Array.isArray(battle.enemies) ? battle.enemies.slice() : [];
-
       // 아군 배치: 출전 편성에서 선택된 영웅만 배치하고, 지형 타일은 절대 변경하지 않는다.
       if (Array.isArray(state.playerUnits)) {
         // 에디터에서 찍은 아군 스폰(map.spawnPoints.player)을 우선 쓰고, 없을 때만 예전 하단 고정 슬롯으로 대체한다.
@@ -6845,6 +6907,7 @@
 
       unit.level = (Number(unit.level) || 1) + 1;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
+      adjustAffectionWithLog(unit, AFFECTION_RULES.inherit, '기억 계승의 혼란');
       // 레벨업이므로 아카데미 진급과 같은 만큼 공격·방어가 오른다 (최대 HP는 100 정규화 체계라 올리지 않는다).
       unit.atk = (Number(unit.atk ?? (unit.stats && unit.stats.atk)) || 40) + LEVEL_UP_GROWTH.atk;
       unit.def = (Number(unit.def ?? (unit.stats && unit.stats.def)) || 30) + LEVEL_UP_GROWTH.def;
@@ -11217,6 +11280,34 @@
       return next;
     }
 
+    // 호감도 변동 규칙 (소폭): 전투 승리 +, 승률 50% 이하 전투 −, 퇴각 −, 기억 계승 −, 담보 −
+    const AFFECTION_RULES = { lowOddsWin: -2, retreat: -2, inherit: -2, pledge: -5, lowOddsThreshold: 0.5, trustThreshold: 50 };
+
+    function adjustAffectionWithLog(unit, delta, label) {
+      if (!unit || !delta) return;
+      const before = getUnitAffection(unit);
+      const after = changeUnitAffection(unit, delta);
+      if (after !== before) addLog(`${delta > 0 ? '💗' : '💔'} [호감도] ${unit.name} ${label} ${delta > 0 ? '+' : ''}${after - before} (${before} → ${after})`, delta > 0 ? 'success' : 'warning');
+    }
+
+    // 퇴각으로 전투를 마치면 출전했던 생존 캐릭터의 호감도가 소폭 떨어진다.
+    // (승리 시 호감도는 교전 단위로 이미 처리된다 — 교전 승률 P 기준)
+    function applyRetreatAffection() {
+      const deployed = Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [];
+      (state.playerUnits || [])
+        .filter(u => deployed.includes(u.id) && !u.isDead && !u.captive && (u.hp === undefined || u.hp > 0))
+        .forEach(u => adjustAffectionWithLog(u, AFFECTION_RULES.retreat, '퇴각'));
+    }
+
+    // 담보로 잡힌 캐릭터의 반응: 호감도가 오르지 않고 깎이며, 대사 창으로 불만 또는 신뢰를 말한다.
+    function reactToPledge(unit) {
+      if (!unit) return;
+      const trusting = getUnitAffection(unit) >= AFFECTION_RULES.trustThreshold;
+      speakUnitLine(unit, trusting ? 'pledge_trust' : 'pledge_distrust', trusting ? 'brave' : 'refuse');
+      adjustAffectionWithLog(unit, AFFECTION_RULES.pledge, '담보로 잡힘');
+    }
+    window.reactToPledge = reactToPledge;
+
     // 전투 중에는 부관을 바꿀 수 없다 (지휘력 보정이 전투 도중 옮겨 가지 않도록).
     function isAdjutantChangeLocked() {
       return !!(state.isCombatActive || (state.currentBattle && state.currentBattle.status === 'active'));
@@ -12349,6 +12440,7 @@
       cancelSkillTargeting(true);
       // 유물: 승리하면 전투 후 회복·승리 SP·호감도, 끝나면 전투 동안 얹은 이동력 보정을 걷는다
       if (victory) applyRelicVictoryRewards();
+      if (!victory && reason === 'retreat') applyRetreatAffection();
       removeRelicBattleBonuses();
       (state.playerUnits || []).forEach(u => {
         if (window.SkillEngine) SkillEngine.resetBattleState(u);

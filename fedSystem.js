@@ -527,6 +527,8 @@
         if (run) run.pledgeJournal = pledgeJournal().filter((x) => x.id !== j.id);
         if (res && res.ok) {
           log(`🏦 [담보 대출] ${j.unit.name}을(를) 담보로 ${j.principal}G 대출 (캐릭터는 그대로 사용 가능, 못 갚으면 몰수)`);
+          const pledged = allOwnedUnits().find((u) => u && charIdOf(u) === charIdOf(j.unit));
+          if (pledged && typeof global.reactToPledge === 'function') global.reactToPledge(pledged);
         } else {
           if (j.fullUnit) returnToReserve(j.fullUnit);   // 예전 방식(맡기자마자 명단에서 뺌)으로 저널에 남은 요청만 되돌린다
           log(`⚠️ [담보 대출] ${j.unit.name} 대출이 거절되었습니다: ${(res && res.error) || '알 수 없는 오류'}`, 'warning');
@@ -601,6 +603,7 @@
       const q = FE.quoteLoan(amount, loan.termHours, rateBp);
       log(`🏦 [담보 대출] ${unit.name}을(를) 담보로 ${amount}G 대출 (캐릭터는 그대로 사용 가능, 못 갚으면 몰수) — 이자율 ${(rateBp / 100).toFixed(2)}%/8h (회당 ${q.perPeriod}G) · ${loan.termHours}시간 만기`);
       toast(`🏦 대출 +${amount}G`, 'success');
+      if (typeof global.reactToPledge === 'function') global.reactToPledge(unit);
       saveGameState(true);
       if (typeof renderAll === 'function') renderAll();
       return true;
