@@ -33,10 +33,6 @@
       '적은 {intel}입니다.',
       '{region} 방면 적군은 {intel}입니다.'
     ],
-    // 국가별 전투 규칙 (nationRules.js의 description · weakness)
-    nationRule: [
-      '{ruleDesc} {ruleWeak}'
-    ],
     hostage: [
       '{region|은/는} 쓰러진 아군을 포로로 잡아 몸값을 요구하는 일이 잦다고 합니다.'
     ],
@@ -168,8 +164,11 @@
       }
       const nationRule = global.NationRules ? NationRules.getRule(selectedRegionId) : null;
       if (nationRule) {
-        Object.assign(vars, { ruleDesc: nationRule.description, ruleWeak: nationRule.weakness });
-        text += ' ' + pickLine('nationRule', selectedRegionId, vars, adjutant);
+        // 부관의 성격(말투)에 맞춘 문장 (nationRuleBriefs.js). 없으면 규칙 원문으로 대신한다.
+        const tone = global.DialogueLines ? DialogueLines.toneOf(adjutant) : '';
+        const briefs = global.NATION_RULE_BRIEFS && NATION_RULE_BRIEFS[selectedRegionId];
+        const ruleText = (briefs && briefs[tone]) || `${nationRule.description} ${nationRule.weakness}`;
+        text += ' ' + ruleText;
       }
       const crossesRiver = r.neighbors.some((n) => campaign.regions[n] && campaign.regions[n].status === 'secured' && isRiverCrossing(n, selectedRegionId));
       if (crossesRiver) text += ' ' + pickLine('river', selectedRegionId, vars, adjutant);
