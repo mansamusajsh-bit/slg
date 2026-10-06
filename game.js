@@ -4250,6 +4250,8 @@
       renderStrategyView();
       addLog(`📍 [노드 선택] ${node.id} · ${nodeTypeLabel(node)} — [${sec.id} ${sec.name}] (${RunEngine.getNodeStatus(state.run, node.id)})`, 'system');
       saveGameState(true);
+      // 적이 나오는 노드를 고르면 부관이 그 구역의 적 설명(성향·국가 규칙)을 큰 일러스트로 말한다.
+      if (node.regionId && ['battle', 'elite', 'boss'].includes(node.type)) window.CampaignMapView?.speakEnemyBriefing?.(node.regionId);
       return true;
     }
     window.selectNode = selectNode;

@@ -133,6 +133,41 @@
     return '★'.repeat(n) + '☆'.repeat(Math.max(0, 6 - n));
   }
 
+  // 구역의 적 설명: 적의 성향(intel) · 포로 · 국가 전투 규칙. 작전지도와 전략맵(노드 선택)이 함께 쓴다.
+  // 수치(스탯 배율·인원·확률)는 보여 주지 않고 부관의 말로만 전한다. 말할 내용이 없으면 ''.
+  function enemyBriefing(regionId, adjutant) {
+    const r = REGIONS[regionId];
+    if (!r || !adjutant) return '';
+    const vars = { adjutant: adjutant.name, region: r.name.ko, title: r.title.ko, threat: r.threat };
+    let text = '';
+    const profile = typeof getRegionEnemyProfile === 'function' ? getRegionEnemyProfile(regionId) : null;
+    if (profile && profile.intel) {
+      vars.intel = profile.intel;
+      text += ' ' + pickLine('intel', regionId, vars, adjutant);
+      if (profile.hostage > 0) text += ' ' + pickLine('hostage', regionId, vars, adjutant);
+    }
+    const nationRule = global.NationRules ? NationRules.getRule(regionId) : null;
+    if (nationRule) {
+      // 부관의 성격(말투)에 맞춘 문장 (nationRuleBriefs.js). 없으면 규칙 원문으로 대신한다.
+      const tone = global.DialogueLines ? DialogueLines.toneOf(adjutant) : '';
+      const briefs = global.NATION_RULE_BRIEFS && NATION_RULE_BRIEFS[regionId];
+      text += ' ' + ((briefs && briefs[tone]) || `${nationRule.description} ${nationRule.weakness}`);
+    }
+    return text.trim();
+  }
+
+  // 전략맵에서 노드를 골랐을 때: 그 구역의 적 설명을 부관이 큰 일러스트로 말한다. 말할 게 없으면 아무것도 하지 않는다.
+  function speakEnemyBriefing(regionId) {
+    const run = getState() && state.run;
+    const adjutant = run && getAdjutantUnit(run);
+    if (!adjutant || typeof REGIONS === 'undefined') return false;
+    const line = enemyBriefing(regionId, adjutant);
+    if (!line) return false;
+    const img = typeof getUnitIllustration === 'function' ? getUnitIllustration(adjutant) : adjutant.imageUrl;
+    global.UI?.showUnitSpeech?.(adjutant, line, { imageUrl: img || '', mood: 'adjutant', durationMs: 4500 });
+    return true;
+  }
+
   // 지금 브리핑할 내용: 선택한 구역 > 방금 확보한 구역 > 인사
   function buildBriefing(campaign, adjutant) {
     if (!adjutant) return pickLine('noAdjutant', 'none', {});
@@ -155,21 +190,8 @@
         return pickLine('busyElsewhere', selectedRegionId, vars, adjutant);
       }
       let text = pickLine(r.role === 'final' ? 'final' : 'available', selectedRegionId, vars, adjutant);
-      // 적의 성향: 수치(스탯 배율·인원·확률)는 보여 주지 않고 부관의 말로만 전한다.
-      const profile = typeof getRegionEnemyProfile === 'function' ? getRegionEnemyProfile(selectedRegionId) : null;
-      if (profile && profile.intel) {
-        vars.intel = profile.intel;
-        text += ' ' + pickLine('intel', selectedRegionId, vars, adjutant);
-        if (profile.hostage > 0) text += ' ' + pickLine('hostage', selectedRegionId, vars, adjutant);
-      }
-      const nationRule = global.NationRules ? NationRules.getRule(selectedRegionId) : null;
-      if (nationRule) {
-        // 부관의 성격(말투)에 맞춘 문장 (nationRuleBriefs.js). 없으면 규칙 원문으로 대신한다.
-        const tone = global.DialogueLines ? DialogueLines.toneOf(adjutant) : '';
-        const briefs = global.NATION_RULE_BRIEFS && NATION_RULE_BRIEFS[selectedRegionId];
-        const ruleText = (briefs && briefs[tone]) || `${nationRule.description} ${nationRule.weakness}`;
-        text += ' ' + ruleText;
-      }
+      const enemy = enemyBriefing(selectedRegionId, adjutant);
+      if (enemy) text += ' ' + enemy;
       const crossesRiver = r.neighbors.some((n) => campaign.regions[n] && campaign.regions[n].status === 'secured' && isRiverCrossing(n, selectedRegionId));
       if (crossesRiver) text += ' ' + pickLine('river', selectedRegionId, vars, adjutant);
       const aware = loopAwareLine(selectedRegionId, adjutant);
@@ -493,7 +515,7 @@
       .observe(campaignViewEl, { attributes: true, attributeFilter: ['class'] });
   }
 
-  global.CampaignMapView = { render, BRIEFING };
+  global.CampaignMapView = { render, BRIEFING, speakEnemyBriefing };
   global.openCampaignMap = () => goToCampaignMap();
 
   // game.js가 먼저 그렸을 때는 이 파일이 없었으므로 한 번 더 그린다.
