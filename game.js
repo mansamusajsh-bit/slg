@@ -8311,7 +8311,8 @@
        Skill Usage (skillEngine.js 연동: 스킬 목록 · 대상 선택 · 시전 연출)
        -------------------------------------------------------------------------- */
     function isTacticalBattleActive() {
-      return !!(state.currentBattle && state.currentView === 'SECTOR_MAP');
+      // 'SECTOR_FIELD' 는 GAME_VIEWS 의 옛 이름이다. 그 값으로 저장·전달돼도 전술 화면으로 인정한다.
+      return !!(state.currentBattle && (state.currentView === 'SECTOR_MAP' || state.currentView === 'SECTOR_FIELD'));
     }
 
     function renderFullshotSkillList(unit) {
@@ -10903,13 +10904,15 @@
 
     /**
      * 1-B. Resume Tactical Combat
-     * Restores currentView to SECTOR_FIELD, unfreezes timer (isCombatPaused = false),
+     * Restores currentView to SECTOR_MAP (the tactical view), unfreezes timer (isCombatPaused = false),
      * closes the pause overlay, and restores tactical interaction smoothly.
      */
     function resumeTacticalCombat() {
-      // 1. Restore currentView = GAME_VIEWS.SECTOR_FIELD
-      const views = window.GAME_VIEWS || { WORLD_STRATEGY: 'WORLD_STRATEGY', SECTOR_FIELD: 'SECTOR_FIELD', STRATEGY_MENU_OVERLAY: 'STRATEGY_MENU_OVERLAY' };
-      const fieldView = views.SECTOR_FIELD;
+      // 1. 전술 화면의 뷰 값으로 복원한다. 게임 전체가 쓰는 정식 값은 'SECTOR_MAP' 이다
+      //    (전투 진입 launchSectorOperation · 세이브 복원 · isTacticalBattleActive 모두 이 값을 본다).
+      //    예전에는 여기서 GAME_VIEWS.SECTOR_FIELD('SECTOR_FIELD')로 되돌려서, 일시정지 후 재개하면
+      //    전투 중인데도 스킬 버튼이 "전투 중"으로 잠기고 사용되지 않았다.
+      const fieldView = 'SECTOR_MAP';
       if (state) state.currentView = fieldView;
       if (window.playerState) window.playerState.currentView = fieldView;
       if (window.gameState) window.gameState.currentView = fieldView;
