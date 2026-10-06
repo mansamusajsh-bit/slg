@@ -4502,12 +4502,25 @@
     }
     window.getRegionEnemyProfile = getRegionEnemyProfile;
 
+    // 출전 중인(또는 출전 편성된) 플레이어 캐릭터의 캐릭터 id 집합. 적 풀에서 제외하는 데 쓴다.
+    function getDeployedCharacterIdSet() {
+      let units = [];
+      try { units = state.strategy ? getSelectedDeployUnits() : []; } catch (e) { units = []; }
+      if (!units.length && Array.isArray(state.currentDeployedUnitIds)) {
+        units = (state.playerUnits || []).filter(u => !u.isDead && state.currentDeployedUnitIds.includes(u.id));
+      }
+      return new Set(units.map(u => getCharacterId(u)).filter(Boolean));
+    }
+
     function buildEnemyPool(sector, nodeType, regionId) {
       const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
       const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
       const prof = getRegionEnemyProfile(regionId);
-      return getStoredCustomCharacters()
-        .filter(c => c && c.id && c.name && (c.classType || c.unitClass))
+      const all = getStoredCustomCharacters().filter(c => c && c.id && c.name && (c.classType || c.unitClass));
+      // 플레이어 출전 캐릭터는 적으로 나오지 않는다. 전원이 제외돼 풀이 비면 전투가 성립하지 않으므로 그때만 제외하지 않는다.
+      const deployedIds = getDeployedCharacterIdSet();
+      const free = all.filter(c => !deployedIds.has(String(c.id)));
+      return (free.length > 0 ? free : all)
         .map(c => characterRecordToUnit(c, {
           id: c.id,
           owner: 'ENEMY',
@@ -12220,7 +12233,8 @@
       }
       const seed = getPlannedBattleSeed(run, node);
       if (!seed) return { kind: 'battle', retry: true };
-      const key = `${run.seed}|${node.id}|${seed}`;
+      // 출전 편성이 바뀌면 적 후보 풀도 달라지므로 캐시 키에 포함한다.
+      const key = `${run.seed}|${node.id}|${seed}|${[...getDeployedCharacterIdSet()].sort().join(',')}`;
       if (nodePreviewCache.has(key)) return nodePreviewCache.get(key);
       const sector = WORLD_SECTORS[node.sectorId] || { id: node.sectorId };
       const templateId = node.mapTemplateId || sector.mapTemplateId || sector.defaultTemplateId || MapSchema.resolveDefaultTemplateId(node.sectorId);
