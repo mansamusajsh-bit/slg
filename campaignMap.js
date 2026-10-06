@@ -138,6 +138,7 @@
     const vars = { adjutant: adjutant.name };
     if (campaign.cleared) return pickLine('cleared', 'end', vars, adjutant);
 
+    const sel = selectedRegionId ? REGIONS[selectedRegionId] : null;
     if (selectedRegionId && sel) {
       const r = sel;
       Object.assign(vars, {
@@ -327,12 +328,12 @@
     if (!root || !run || !run.campaign || typeof REGIONS === 'undefined') return;
     const campaign = run.campaign;
     const adjutant = getAdjutantUnit(run);
-    if (selectedRegionId && !sel) selectedRegionId = null;
+    if (selectedRegionId && !REGIONS[selectedRegionId]) selectedRegionId = null;
 
     const securedCount = Object.values(campaign.regions).filter((r) => r.status === 'secured').length;
     const total = Object.keys(REGIONS).length;
     const loop = Number(state.player && state.player.loopCount) || 0;
-    const sel = selectedRegionId ? sel : null;
+    const sel = selectedRegionId ? REGIONS[selectedRegionId] : null;
     const selStatus = sel ? regionStatus(campaign, sel.id) : null;
 
     // 하단 액션 바 (전략맵의 "작전 개시 (출격)" 바와 같은 모양)
