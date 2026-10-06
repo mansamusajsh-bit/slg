@@ -76,19 +76,21 @@
                 <span id="strat-cmd-name" role="button" tabindex="0" title="클릭하여 지휘관 스킬트리 열기" onclick="openSkillsModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSkillsModal();}">레오나르도</span>
               </div>
             </div>
+            <!-- 용병 메뉴: PC는 지휘관 영역 호버, 터치(아이폰 포함)는 핸들 탭으로 펼친다 (game.js initMercDock) -->
+            <button type="button" class="strat-merc-handle" id="strat-merc-handle" aria-expanded="false" aria-controls="strat-merc-flyout" title="용병 메뉴 (고용 · 명부)">›</button>
+            <div class="strat-gacha-entry-wrap" id="strat-merc-flyout">
+              <button type="button" class="strat-gacha-entry-btn" onclick="openCharacterGacha()" title="무작위 용병을 고용합니다.">
+                <span class="strat-gacha-entry-icon">💰</span>
+                <span>용병 고용</span>
+              </button>
+              <button type="button" class="strat-gacha-entry-btn" onclick="openCharacterPool()" title="고용한 용병을 출전 명단에 편입하거나 제외합니다.">
+                <span class="strat-gacha-entry-icon">📜</span>
+                <span>용병 명부</span>
+              </button>
+            </div>
           </div>
 
           <!-- Resources Pillars -->
-          <div class="strat-gacha-entry-wrap">
-            <button class="strat-gacha-entry-btn" onclick="openCharacterGacha()" title="무작위 용병을 고용합니다.">
-              <span class="strat-gacha-entry-icon">💰</span>
-              <span>용병 고용</span>
-            </button>
-            <button class="strat-gacha-entry-btn" onclick="openCharacterPool()" title="고용한 용병을 출전 명단에 편입하거나 제외합니다.">
-              <span class="strat-gacha-entry-icon">📜</span>
-              <span>용병 명부</span>
-            </button>
-          </div>
 
           <div class="strat-resources-grid">
             <div class="strat-res-chip ap" title="통솔력 - 한 전투에 출전할 수 있는 최대 영웅 수 (지휘관 레벨에 따라 증가)">

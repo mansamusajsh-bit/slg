@@ -5465,6 +5465,32 @@
     }
     window.mountSharedHeader = mountSharedHeader;
 
+    // 용병 메뉴 슬라이드의 터치 조작. PC는 CSS 호버로 열리고, 터치는 핸들 탭으로 토글한다.
+    // iOS Safari는 버튼이 아닌 요소의 click이 문서까지 올라오지 않아서 바깥 탭 감지는 pointerdown/touchstart로 한다.
+    (function initMercDock() {
+      const setOpen = (open) => {
+        const fly = document.getElementById('strat-merc-flyout');
+        const handle = document.getElementById('strat-merc-handle');
+        if (fly) fly.classList.toggle('is-open', open);
+        if (handle) handle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      };
+      const isOpen = () => !!document.getElementById('strat-merc-flyout')?.classList.contains('is-open');
+      document.addEventListener('click', (e) => {
+        const t = e.target;
+        if (!(t instanceof Element)) return;
+        if (t.closest('#strat-merc-handle')) { setOpen(!isOpen()); return; }
+        if (t.closest('#strat-merc-flyout .strat-gacha-entry-btn')) setOpen(false); // 메뉴를 고르면 접는다
+      });
+      const closeOutside = (e) => {
+        const t = e.target;
+        if (!isOpen() || !(t instanceof Element)) return;
+        if (!t.closest('#strat-merc-handle, #strat-merc-flyout')) setOpen(false);
+      };
+      document.addEventListener('pointerdown', closeOutside, true);
+      document.addEventListener('touchstart', closeOutside, { capture: true, passive: true });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
+    })();
+
     function renderStrategyHeader() {
       if (!state) return;
       const cmdName = document.getElementById('strat-cmd-name');
