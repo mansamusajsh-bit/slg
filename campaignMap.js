@@ -79,6 +79,7 @@
   const STATUS_LABEL = { locked: '미확인', available: '진입 가능', secured: '확보', current: '작전 중' };
 
   let selectedRegionId = null;
+  let lastSpokenKey = ''; // 마지막으로 큰 일러스트로 말한 부관+대사 (같은 대사 반복 방지)
 
   // game.js의 state는 전역 let이라 window 속성이 아니다. 같은 전역 스코프에서 직접 읽는다.
   const getState = () => (typeof state !== 'undefined' ? state : null);
@@ -431,6 +432,20 @@
       if (ok) selectedRegionId = null;
       else render();
     });
+
+    // 부관의 브리핑은 스킬·전투 거부 때와 같은 큰 일러스트 + 말풍선 연출로 보여 준다.
+    // 같은 대사로 다시 그려질 때(지분 구매 등)는 반복해서 띄우지 않는다.
+    if (adjutant) {
+      const line = buildBriefing(campaign, adjutant);
+      const key = `${adjutant.id}|${line}`;
+      if (key !== lastSpokenKey) {
+        lastSpokenKey = key;
+        const img = typeof getUnitIllustration === 'function' ? getUnitIllustration(adjutant) : adjutant.imageUrl;
+        global.UI?.showUnitSpeech?.(adjutant, line, { imageUrl: img || '', mood: 'adjutant', durationMs: 4500 });
+      }
+    } else {
+      lastSpokenKey = '';
+    }
 
     // 부관 임명 창은 자동으로 띄우지 않는다. 작전지도의 부관 버튼으로만 연다.
     if (adjutant) document.getElementById('modal-adjutant')?.remove();
