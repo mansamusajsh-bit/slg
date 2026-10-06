@@ -346,11 +346,6 @@
             <span class="guest-id" id="ui-guest-id">Guest_----</span>
             <span class="guest-save-pill" id="ui-guest-save-status">💾 자동저장 ON</span>
           </div>
-          <div class="guest-actions">
-            <button class="btn-guest-reset" id="btn-guest-reset" title="게스트 데이터 초기화 및 새 게임 시작">
-              🔄 새로 시작
-            </button>
-          </div>
         </div>
 
         <div class="header-row-1">
@@ -387,7 +382,7 @@
             <button class="btn-header" id="btn-return-to-strategy" onclick="switchGameView('STRATEGY')" style="background: linear-gradient(135deg, #0284c7, #0369a1); color: #ffffff; border: 1.5px solid #38bdf8; font-weight: 900;" title="월드맵 / 전략 메인 화면으로 복귀">🗺️ 전략 월드맵</button>
             <button class="btn-header highlight" id="btn-open-skills">⭐ 스킬 (<span id="ui-sp-count">2 SP</span>)</button>
             <button class="btn-header" id="btn-open-defense-modal">🛡️ 오프라인 수비</button>
-            <button class="btn-header" id="btn-header-dev" onclick="openDebugModal('create-char')" style="background: linear-gradient(135deg, #334155, #1e293b); color: #f8fafc; border: 1.5px solid #64748b; font-weight: 900; border-radius: 8px;" title="관리자 DEV / 캐릭터·스킬 생성 및 이미지 관리">⚙️ DEV</button>
+            <button class="btn-header" id="btn-header-dev" onclick="openDebugModal('create-char')" style="display: none; background: linear-gradient(135deg, #334155, #1e293b); color: #f8fafc; border: 1.5px solid #64748b; font-weight: 900; border-radius: 8px;" title="관리자 DEV / 캐릭터·스킬 생성 및 이미지 관리">⚙️ DEV</button>
             <button class="btn-end-turn" id="btn-end-turn" title="턴 종료 (길게 3초 누르면 관리자 DEV 진입 가능)">턴 종료 ⚔️</button>
           </div>
         </div>

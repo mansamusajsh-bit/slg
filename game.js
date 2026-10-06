@@ -3649,6 +3649,10 @@
       document.getElementById('ui-turn').textContent = `Turn ${state.turn}`;
       document.getElementById('ui-sp-count').textContent = `${state.commander.skillPoints} SP`;
 
+      // DEV 버튼은 관리자(운영자) 계정에만 보인다. 서버 확인 전에는 숨겨 둔다.
+      const devBtn = document.getElementById('btn-header-dev');
+      if (devBtn) devBtn.style.display = window.isAdminAccount?.() ? '' : 'none';
+
       // Selected Unit Card Info
       const unit = getSelectedUnit();
       renderSquadSidePanel(unit);
