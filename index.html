@@ -65,15 +65,15 @@
         <div class="strat-profile-card">
           <!-- Commander Box -->
           <div class="strat-commander-box">
-            <div class="strat-commander-avatar" id="strat-cmd-avatar">👑</div>
             <div class="strat-commander-meta">
+              <div class="strat-commander-top">
+                <span class="strat-lvl-tag" id="strat-cmd-level">Lv.1</span>
+                <div class="strat-exp-track" title="지휘관 경험치">
+                  <div class="strat-exp-fill" id="strat-cmd-exp-fill"></div>
+                </div>
+              </div>
               <div class="strat-commander-name">
                 <span id="strat-cmd-name" role="button" tabindex="0" title="클릭하여 지휘관 스킬트리 열기" onclick="openSkillsModal()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSkillsModal();}">레오나르도</span>
-                <button type="button" id="strat-cmd-rename" title="지휘관 이름 변경" onclick="promptCommanderName(false)" style="background:none;border:0;cursor:pointer;padding:0 4px;">✏️</button>
-                <span class="strat-lvl-tag" id="strat-cmd-level">Lv.1</span>
-              </div>
-              <div class="strat-exp-track" title="지휘관 경험치">
-                <div class="strat-exp-fill" id="strat-cmd-exp-fill"></div>
               </div>
             </div>
           </div>
@@ -350,14 +350,15 @@
 
         <div class="header-row-1">
           <div class="commander-badge">
-            <div class="commander-avatar">👑</div>
             <div class="commander-meta">
-              <div class="commander-name" id="ui-cmd-name">
-                <span>레오나르도</span>
+              <div class="commander-top">
                 <span class="commander-level-tag" id="ui-cmd-level">Lv.1</span>
+                <div class="commander-exp-bar-wrap" title="지휘관 경험치">
+                  <div class="commander-exp-bar" id="ui-cmd-exp-fill"></div>
+                </div>
               </div>
-              <div class="commander-exp-bar-wrap" title="지휘관 경험치">
-                <div class="commander-exp-bar" id="ui-cmd-exp-fill"></div>
+              <div class="commander-name" id="ui-cmd-name">
+                <span id="ui-cmd-name-text">레오나르도</span>
               </div>
             </div>
           </div>

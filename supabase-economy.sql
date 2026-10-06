@@ -233,7 +233,7 @@ create index if not exists slg_loans_user on public.slg_loans (user_id, status);
 create table if not exists public.slg_audit (
   id bigserial primary key,
   user_id uuid not null,
-  kind text not null,          -- seize_claim · seize_mismatch · seize_unverified · seize_no_confirm · collateral_substitute
+  kind text not null,          -- seize_claim · seize_mismatch · seize_unverified · seize_no_confirm · collateral_substitute · rename
   detail jsonb not null default '{}'::jsonb,
   at_ms bigint not null
 );
@@ -248,6 +248,12 @@ alter table public.slg_loans add column if not exists defaulted_ms bigint;
 alter table public.slg_loans add column if not exists seize_seen_ms bigint;                      -- 몰수 우편이 클라이언트에 처음 전달된 시각
 -- 압류하고도 모자란 채권. 회귀해도 남고, 이후 수입에서 일부씩 갚는다 (빚이 있는 동안 새 대출 불가)
 alter table public.slg_players add column if not exists debt bigint not null default 0 check (debt >= 0);
+-- 플레이어 이름: 시작할 때 한 번 정하면(name_set) 이후에는 개명 유물로만 바꾼다.
+-- 지분 · 표결 · 경매에서 이름으로 사람을 가리키므로, 대소문자와 공백을 무시하고 서로 달라야 한다 (name_key).
+-- 아직 이름을 정하지 않은 기존 플레이어(name_set = false)는 이 제약에서 빠진다 → 다음 접속 때 정한다.
+alter table public.slg_players add column if not exists name_set boolean not null default false;
+alter table public.slg_players add column if not exists name_key text;
+create unique index if not exists slg_players_name_key_uq on public.slg_players (name_key) where name_set;
 
 create table if not exists public.slg_auctions (
   id text primary key,
@@ -454,6 +460,34 @@ create or replace function public.slg_clean_name(p_name text) returns text
 language sql immutable set search_path = public as $$
   select coalesce(nullif(left(regexp_replace(coalesce(p_name, ''), '[[:cntrl:]]', '', 'g'), 24), ''), '지휘관')
 $$;
+
+-- 이름 비교용 키: 대소문자 · 공백을 무시한다 ("Leo Nardo" = "leonardo")
+create or replace function public.slg_name_key(p_name text) returns text
+language sql immutable set search_path = public as $$
+  select lower(regexp_replace(coalesce(p_name, ''), '\s', '', 'g'))
+$$;
+
+-- 이름 규칙 검사. 통과하면 { ok, name }, 아니면 { ok:false, error }.
+--   error: too_short(2자 미만) · too_long(12자 초과) · bad_chars(< > & " ' \) · reserved(기본 이름·운영 용어·게스트 표기) · taken(다른 플레이어가 사용 중)
+-- p_uid 본인의 이름은 "다른 플레이어"가 아니다 (대소문자만 바꾸는 개명 허용).
+create or replace function public.slg_name_check(p_name text, p_uid uuid) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare n text; k text;
+begin
+  n := btrim(regexp_replace(regexp_replace(coalesce(p_name, ''), '[[:cntrl:]]', '', 'g'), '\s+', ' ', 'g'));
+  if char_length(n) < 2 then return jsonb_build_object('ok', false, 'error', 'too_short'); end if;
+  if char_length(n) > 12 then return jsonb_build_object('ok', false, 'error', 'too_long'); end if;
+  if n ~ '[<>&"''\\]' then return jsonb_build_object('ok', false, 'error', 'bad_chars'); end if;
+  k := slg_name_key(n);
+  if k = any (array['지휘관', '레오나르도', '관리자', '운영자', '시스템', 'admin', 'administrator', 'gm', 'system']) or k ~ '^(guest|fb_)' then
+    return jsonb_build_object('ok', false, 'error', 'reserved');
+  end if;
+  if exists (select 1 from slg_players where name_set and name_key = k and user_id <> p_uid)
+     or exists (select 1 from slg_shares where dummy and slg_name_key(name) = k) then   -- 지분표의 가상 보유자 이름도 비워 둔다
+    return jsonb_build_object('ok', false, 'error', 'taken');
+  end if;
+  return jsonb_build_object('ok', true, 'name', n);
+end $$;
 
 create or replace function public.slg_event(p_uid uuid, p_kind text, p_payload jsonb, p_now bigint) returns void
 language sql volatile set search_path = public as $$
@@ -996,7 +1030,8 @@ begin
   return p;
 end $$;
 
--- 첫 접속: 플레이어를 만든다. 이미 있으면 이름만 갱신. 새 플레이어의 시작 골드는 클라이언트가 말한 값을 migrate_cap 으로 자른다.
+-- 첫 접속: 플레이어를 만든다. 이미 있으면 접속 시각만 갱신한다 (이름은 slg_set_name 으로만 정한다 — 클라이언트가 말한 이름으로 덮어쓰지 않는다).
+-- 새 플레이어의 시작 골드는 클라이언트가 말한 값을 migrate_cap 으로 자른다. 새 플레이어의 이름은 임시값(name_set = false)이다.
 create or replace function public.slg_bootstrap(p_name text, p_claimed_gold bigint default 0, p_loop int default 0) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype;
@@ -1011,10 +1046,48 @@ begin
             greatest(0, least(coalesce(p_loop, 0), 100000)), now_ms, now_ms, now_ms);
     insert into slg_wallet_log (user_id, tx_id, kind, delta, ref, balance_after, at_ms)
       select uid, 'srv:bootstrap', 'bootstrap', gold, null, gold, now_ms from slg_players where user_id = uid;
-    return jsonb_build_object('ok', true, 'created', true);
+    return jsonb_build_object('ok', true, 'created', true, 'nameSet', false);
   end if;
-  update slg_players set name = slg_clean_name(coalesce(nullif(p_name, ''), p.name)), last_seen_ms = now_ms where user_id = uid;
-  return jsonb_build_object('ok', true, 'created', false);
+  update slg_players set last_seen_ms = now_ms where user_id = uid;
+  return jsonb_build_object('ok', true, 'created', false, 'nameSet', p.name_set);
+end $$;
+
+-- 이름이 쓸 수 있는지만 본다 (저장하지 않는다). 이름 입력 창이 입력하는 동안 부른다.
+create or replace function public.slg_name_available(p_name text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); c jsonb;
+begin
+  c := slg_name_check(p_name, uid);
+  return c || jsonb_build_object('available', coalesce((c ->> 'ok')::boolean, false));
+end $$;
+
+-- 이름을 정한다.
+--   p_change = false : 처음 정할 때만 가능하다. 이미 정했으면 already_set.
+--   p_change = true  : 개명 유물을 쓸 때. 유물은 클라이언트가 가진 것이라 서버는 유물 보유를 확인하지 못한다 —
+--                      대신 개명은 전부 감사 기록(slg_audit 'rename')에 남는다.
+-- 이름이 바뀌면 지분표에 적힌 내 이름도 함께 바뀐다 (이미 끝난 표결 · 경매 기록은 그 시점의 이름으로 남는다).
+create or replace function public.slg_set_name(p_name text, p_change boolean default false) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); p slg_players%rowtype; c jsonb; n text;
+begin
+  perform slg_lock();
+  p := slg_player_for(uid);
+  if p.name_set and not coalesce(p_change, false) then
+    return jsonb_build_object('ok', false, 'error', 'already_set', 'name', p.name);
+  end if;
+  c := slg_name_check(p_name, uid);
+  if (c ->> 'ok')::boolean is not true then return c; end if;
+  n := c ->> 'name';
+  begin
+    update slg_players set name = n, name_key = slg_name_key(n), name_set = true where user_id = uid;
+  exception when unique_violation then
+    return jsonb_build_object('ok', false, 'error', 'taken');
+  end;
+  update slg_shares set name = n where holder = uid::text and not dummy;
+  if p.name_set then
+    perform slg_audit_add(uid, 'rename', jsonb_build_object('from', p.name, 'to', n), slg_now_ms());
+  end if;
+  return jsonb_build_object('ok', true, 'name', n, 'changed', p.name_set);
 end $$;
 
 -- ---------------------------------------------------------------- 지갑
@@ -1440,7 +1513,8 @@ begin
   perform slg_lock();
   now_ms := slg_now_ms();
   p := slg_player_for(uid);
-  update slg_players set last_seen_ms = now_ms, name = case when p_name is null then name else slg_clean_name(p_name) end where user_id = uid;
+  -- p_name 은 예전 클라이언트와의 호환용으로만 받는다 — 이름은 서버가 정한다 (slg_set_name).
+  update slg_players set last_seen_ms = now_ms where user_id = uid;
   perform slg_tick(uid, now_ms);
   if coalesce(p_ack_events, 0) > 0 then delete from slg_events where user_id = uid and id <= p_ack_events; end if;
   if p_ack_inbox is not null and array_length(p_ack_inbox, 1) > 0 then delete from slg_inbox where user_id = uid and id = any (p_ack_inbox); end if;
@@ -1476,7 +1550,7 @@ begin
 
   return jsonb_build_object(
     'ok', true, 'now', now_ms,
-    'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid), 'debt', p.debt),
+    'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'nameSet', p.name_set, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid), 'debt', p.debt),
     'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights,
     'loans', loans, 'auctions', auctions, 'inbox', inbox, 'events', events,
     'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
@@ -1487,7 +1561,7 @@ end $$;
 -- ============================================================================
 do $$
 declare f record; rpc text[] := array['slg_bootstrap','slg_wallet_apply','slg_admin_adjust','slg_is_admin','slg_loop_return','slg_region_secure',
-  'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_loan_collateral','slg_loan_seized','slg_audit_list','slg_auction_bid','slg_sync'];
+  'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_loan_collateral','slg_loan_seized','slg_audit_list','slg_auction_bid','slg_sync','slg_set_name','slg_name_available'];
 begin
   for f in select p.oid::regprocedure as sig, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'slg\_%'

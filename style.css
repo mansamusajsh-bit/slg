@@ -116,6 +116,8 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      min-width: 0;
+      flex: 1 1 auto;
     }
 
     .commander-avatar {
@@ -135,25 +137,43 @@
     .commander-meta {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    /* 레벨 + 경험치 줄: 이름 위에 놓는다 */
+    .commander-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .commander-name {
-      font-size: 13px;
+      font-size: 15px;
       font-weight: 900;
       color: #0f2942;
       display: flex;
       align-items: center;
       gap: 5px;
       letter-spacing: -0.3px;
+      min-width: 0;
+    }
+
+    /* 긴 이름은 줄바꿈 대신 말줄임 (이름 칸이 레벨 태그와 폭을 나눠 쓰지 않는다) */
+    #ui-cmd-name-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
     }
 
     .commander-level-tag {
-      font-size: 9px;
+      flex-shrink: 0;
+      font-size: 10px;
       font-weight: 900;
       background: linear-gradient(135deg, #0284c7, #38bdf8);
       color: #ffffff;
-      padding: 1px 5px;
+      padding: 1px 6px;
       border-radius: 6px;
       box-shadow: 0 1px 3px rgba(2, 132, 199, 0.3);
     }
@@ -3363,27 +3383,20 @@
       flex: 1 1 auto;
       min-width: 0;
     }
-    .strat-commander-avatar {
-      width: 38px;
-      height: 38px;
-      border-radius: 12px;
-      background: linear-gradient(145deg, #ffffff 0%, #dbeafe 100%);
-      border: 2px solid #38bdf8;
-      box-shadow: 0 2px 8px rgba(2, 132, 199, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 20px;
-      position: relative;
-    }
     .strat-commander-meta {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
       min-width: 0;
     }
+    /* 레벨 + 경험치 줄: 이름 위에 놓는다 */
+    .strat-commander-top {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
     .strat-commander-name {
-      font-size: 13px;
+      font-size: 16px;
       font-weight: 900;
       color: #0f172a;
       display: flex;
@@ -3400,11 +3413,11 @@
     }
     .strat-lvl-tag {
       flex-shrink: 0;
-      font-size: 9px;
+      font-size: 10px;
       font-weight: 900;
       color: #ffffff;
       background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-      padding: 1px 5px;
+      padding: 1px 6px;
       border-radius: 6px;
     }
     .strat-exp-track {
@@ -3459,6 +3472,12 @@
       color: #0f172a;
       margin-top: 2px;
       line-height: 1;
+    }
+
+    /* 모바일: 지휘관 이름이 오른쪽 버튼/자원 칸에 밀려 한 글자만 남지 않도록 지휘관 영역이 한 줄을 다 쓴다 */
+    @media (max-width: 520px) {
+      .strat-profile-card { flex-wrap: wrap; }
+      .strat-commander-box { flex: 1 1 100%; }
     }
 
     /* 좁은 화면: 자원 칩을 한 줄짜리로 세로 배치해 상단 프로필 줄이 넘치지 않게 */
@@ -5795,6 +5814,12 @@
 .rbd-btn-small:hover:not(:disabled){background:#d97706}
 .rbd-btn-danger{background:#991b1b;border-color:#dc2626}
 .rbd-btn-danger:hover:not(:disabled){background:#b91c1c}
+/* 지휘관 이름 입력 창 (16px: iOS가 입력칸을 확대하지 않는 최소 크기) */
+.rbd-name-input{width:100%;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1.5px solid #475569;background:#1e293b;color:#f8fafc;font-size:16px;font-weight:800;text-align:center;outline:none;margin-bottom:6px}
+.rbd-name-input:focus{border-color:#38bdf8}
+.rbd-name-msg{min-height:18px;margin:0 0 10px;font-size:12px;font-weight:700;color:#94a3b8}
+.rbd-name-msg.good{color:#4ade80}
+.rbd-name-msg.bad{color:#f87171}
 .cmd-bonus-tag{color:#7c3aed;font-weight:800;font-size:.9em}
 .rbd-card .cmd-bonus-tag{color:#c4b5fd}
 .loop-counter{position:fixed;left:10px;bottom:10px;z-index:9000;padding:4px 10px;border-radius:999px;font-size:11px;font-weight:800;color:#ede9fe;background:rgba(76,29,149,.85);border:1px solid #8b5cf6;box-shadow:0 4px 12px rgba(76,29,149,.35);cursor:pointer;font-family:inherit}

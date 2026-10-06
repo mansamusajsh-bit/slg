@@ -8,7 +8,8 @@
 import { ensureEditorCss, getEngine, h, selectEl, numberEl } from './editorCommon.js';
 import { RecordEditorBase } from './recordEditorBase.js';
 
-const KIND_LABELS = { commander: '👑 지휘관 (commander)', gift: '🎁 선물 (gift)' };
+const KIND_LABELS = { commander: '👑 지휘관 (commander)', gift: '🎁 선물 (gift)', rename: '🪪 개명 (rename)' };
+const KIND_ICONS = { commander: '👑', gift: '🎁', rename: '🪪' };
 const SCOPE_LABELS = { self: '본인 (self)', army: '군 전체 (army)', battle: '전투 규칙 (battle)', run: '런 전체 (run)' };
 
 class RelicEditor extends RecordEditorBase {
@@ -29,14 +30,19 @@ class RelicEditor extends RecordEditorBase {
   }
   normalize(x) { return this.engine.normalizeRelic(x); }
   validate(x) { return this.engine.validateRelic(x); }
-  listMeta(r) { return `${r.kind === 'commander' ? '👑' : '🎁'} ${r.rarity || ''} · 효과 ${(r.effects || []).length}`; }
+  listMeta(r) { return `${KIND_ICONS[r.kind] || '🎁'} ${r.rarity || ''} · 효과 ${(r.effects || []).length}`; }
 
-  /** kind가 바뀌면 scope를 새 kind에 맞춘다 (gift → self 고정, commander → self였다면 army) */
+  /** kind가 바뀌면 scope를 새 kind에 맞춘다 (gift → self 고정, commander → self였다면 army, rename → 효과 없음) */
   setKind(kind) {
     const d = this.draft;
     d.kind = kind;
     const scopes = this.engine.RELIC_SCOPES[kind] || [];
-    d.effects = (d.effects || []).map(fx => ({ ...fx, scope: scopes.includes(fx.scope) ? fx.scope : scopes[0] }));
+    if (kind === 'rename') {
+      d.effects = [];
+    } else {
+      d.effects = (d.effects || []).map(fx => ({ ...fx, scope: scopes.includes(fx.scope) ? fx.scope : scopes[0] }));
+      if (!d.effects.length) d.effects = [{ scope: scopes[0], stat: 'atk', value: 1 }]; // rename에서 돌아오면 효과 1개부터
+    }
     this.markDirty();
     this.render();
   }
@@ -60,7 +66,10 @@ class RelicEditor extends RecordEditorBase {
     ]));
     form.appendChild(h('div', { class: 'slg-ed-muted', text: d.kind === 'gift'
       ? '선물 유물: 유닛에게 1개 선물, 받은 유닛 본인에게만 적용 → scope는 self 고정'
-      : '지휘관 유물: 지휘관이 착용, 군 전체/전투 규칙/런 전체에 적용 (슬롯 제한 있음)' }));
+      : d.kind === 'rename'
+        ? '개명 유물: 효과가 없다. 지휘관 창에서 쓰면 사라지고 지휘관 이름을 한 번 바꿀 수 있다 (이름은 다른 플레이어와 겹칠 수 없다).'
+        : '지휘관 유물: 지휘관이 착용, 군 전체/전투 규칙/런 전체에 적용 (슬롯 제한 있음)' }));
+    if (d.kind === 'rename') return;
 
     const scopes = E.RELIC_SCOPES[d.kind] || [];
     (d.effects || []).forEach((fx, i) => {

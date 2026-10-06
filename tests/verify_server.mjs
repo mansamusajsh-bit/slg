@@ -82,7 +82,7 @@ await s.at(T0 + 3 * H);
   await boot('c'); await boot('d');
   for (const w of ['a', 'b', 'c', 'd']) await setGold(w, 1000);
   const snap = await sync('a', '레오나르도');
-  ok(snap.ok && snap.player.gold === 1000 && snap.player.name === '레오나르도' && snap.player.loop === 0, '동기화: 지갑 · 이름 · 회차');
+  ok(snap.ok && snap.player.gold === 1000 && snap.player.name === 'a' && snap.player.nameSet === false && snap.player.loop === 0, '동기화: 지갑 · 회차 (이름은 sync 로 덮어쓸 수 없다)');
   ok(Object.keys(snap.nations).length === 16 && Object.values(snap.nations).every((n) => n.holders && typeof n.unowned === 'number'), '동기화: 16개 국가가 더미와 함께 만들어진다');
   ok(snap.fed.rateBp === 150 && snap.fed.price === 1 || Math.abs(snap.fed.price - 1) < 0.05, '동기화: 연준 기록 (금리 1.5%)');
 }
@@ -623,6 +623,54 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   await s.db.query('set role authenticated');
   await rejects(() => s.q('select * from slg_admin_emails'), '관리자 이메일 목록은 브라우저가 읽을 수 없다', /permission denied/);
   await s.db.query('reset role');
+}
+
+// ------------------------------------------------------------ 이름: 한 번 정하고 · 중복 금지 · 개명
+{
+  const nm = (who, n, change = false) => s.rpc('slg_set_name', [n, change], who);
+  const av = (who, n) => s.rpc('slg_name_available', [n], who);
+  for (const w of ['n1', 'n2', 'n3']) await boot(w, 0, 0, '임시' + w);
+  await sync('n1'); // 16개 국가(가상 보유자 포함)가 만들어져 있어야 한다
+
+  eq((await nm('n1', '가')).error, 'too_short', '이름은 2자 이상');
+  eq((await nm('n1', '가나다라마바사아자차카타파')).error, 'too_long', '이름은 12자 이하');
+  eq((await nm('n1', 'a<b>c')).error, 'bad_chars', '< > & 따옴표는 쓸 수 없다');
+  eq((await nm('n1', '레오나르도')).error, 'reserved', '기본 이름은 쓸 수 없다');
+  eq((await nm('n1', 'Guest_4821')).error, 'reserved', '게스트 표기는 쓸 수 없다');
+  eq((await nm('n1', ' 관 리 자 ')).error, 'reserved', '공백을 끼워도 운영 용어는 쓸 수 없다');
+  eq((await nm('n1', '철혈백작')).error, 'taken', '지분표의 가상 보유자 이름도 쓸 수 없다');
+  eq((await q1('select name_set from slg_players where user_id = $1', [await s.user('n1')])).name_set, false, '실패한 시도는 이름을 정하지 않는다');
+
+  const r1 = await nm('n1', '  아이린   블랙 ');
+  ok(r1.ok && r1.name === '아이린 블랙' && r1.changed === false, '처음에는 정리된 이름으로 정해진다 (공백 정리)');
+  const sn = await sync('n1', '남이 정한 이름', 0, []);
+  ok(sn.player.name === '아이린 블랙' && sn.player.nameSet === true, '동기화 응답에 이름과 확정 여부가 실린다 · sync 가 이름을 덮어쓰지 못한다');
+  await boot('n1', 0, 0, '덮어쓰기시도');
+  eq((await q1('select name from slg_players where user_id = $1', [await s.user('n1')])).name, '아이린 블랙', '다시 부트스트랩해도 이름은 그대로');
+
+  eq((await nm('n2', '아이린블랙')).error, 'taken', '공백만 달라도 같은 이름이다');
+  eq((await nm('n2', '아이린 블랙')).error, 'taken', '다른 플레이어와 이름이 같으면 안 된다');
+  eq((await av('n2', '아이린 블랙')).available, false, '사용 가능 여부 조회: 사용 중');
+  eq((await av('n2', '새이름')).available, true, '사용 가능 여부 조회: 사용 가능');
+  eq((await q1('select name_set from slg_players where user_id = $1', [await s.user('n2')])).name_set, false, '조회는 이름을 정하지 않는다');
+  ok((await nm('n2', 'Lumi')).ok, '다른 이름은 정할 수 있다');
+  eq((await nm('n3', 'LUMI')).error, 'taken', '대소문자만 달라도 같은 이름이다');
+
+  const again = await nm('n1', '다른이름');
+  ok(again.ok === false && again.error === 'already_set', '정한 뒤에는 (유물 없이) 바꿀 수 없다');
+  const ch = await nm('n1', '새아이린', true);
+  ok(ch.ok && ch.changed === true && ch.name === '새아이린', '개명(change=true)은 가능하다');
+  ok((await nm('n3', '아이린 블랙')).ok, '개명으로 비운 옛 이름은 다른 플레이어가 쓸 수 있다');
+  ok((await nm('n2', 'LUMI', true)).ok, '내 이름의 대소문자만 바꾸는 개명은 중복이 아니다');
+  eq((await nm('n2', '새아이린', true)).error, 'taken', '개명도 중복 검사를 거친다');
+  const audit = await q1("select count(*)::int c from slg_audit where kind = 'rename'");
+  eq(audit.c, 2, '개명은 감사 기록에 남는다');
+
+  await rejects(() => s.rpcAnon('slg_set_name', ['아무개', false]), '로그인 없이는 이름을 정할 수 없다', /not_authenticated/);
+  await rejects(() => s.rpcAnon('slg_name_available', ['아무개']), '로그인 없이는 조회할 수 없다', /not_authenticated/);
+  let dup = false;
+  try { await s.q("update slg_players set name_key = (select name_key from slg_players where user_id = $1) where user_id = $2", [await s.user('n3'), await s.user('n2')]); } catch (e) { dup = /unique|duplicate/i.test(String(e.message)); }
+  ok(dup, 'DB 유니크 인덱스가 중복 이름을 마지막으로 막는다');
 }
 
 console.log(fail ? `\n${fail}건 실패` : '\n전부 통과');

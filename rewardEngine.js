@@ -10,12 +10,13 @@
  *     RewardEntry:
  *       { type:'gold',    min, max, weight }
  *       { type:'item',    id | pool, weight }
- *       { type:'relic',   kind:'commander'|'gift', id | pool, weight }
+ *       { type:'relic',   kind:'commander'|'gift'|'rename', id | pool, weight }
  *       { type:'recruit', id | pool, weight }            // id = characters 컬렉션의 캐릭터 id
  *     - id(특정 대상)와 pool(하위 풀에서 1번 다시 뽑기) 중 정확히 하나만 쓴다.
  *     - 하위 풀의 entry는 모두 부모 entry와 같은 type(relic이면 같은 kind)이어야 한다.
- *   relics/{id}: { id, name, kind:'commander'|'gift', rarity, description, imageUrl?, effects:[{ scope, stat, value }] }
+ *   relics/{id}: { id, name, kind:'commander'|'gift'|'rename', rarity, description, imageUrl?, effects:[{ scope, stat, value }] }
  *     - gift는 scope가 항상 'self'. commander는 'army' | 'battle' | 'run'.
+ *     - rename(개명 유물)은 효과가 없다. 지휘관 창에서 쓰면 사라지고 지휘관 이름을 한 번 바꿀 수 있다.
  *   items/{id}:  { id, name, description, category?, rarity?, imageUrl? }   (category: ITEM_CATEGORIES)
  *
  * 노출: window.RewardEngine (브라우저), 전역 RewardEngine (node vm 테스트)
@@ -31,11 +32,12 @@
   });
 
   const ENTRY_TYPES = Object.freeze(['gold', 'item', 'relic', 'recruit']);
-  const RELIC_KINDS = Object.freeze(['commander', 'gift']);
+  const RELIC_KINDS = Object.freeze(['commander', 'gift', 'rename']);
   const RELIC_RARITIES = Object.freeze(['common', 'rare', 'epic', 'legendary']);
   const RELIC_SCOPES = Object.freeze({
     gift: Object.freeze(['self']),
-    commander: Object.freeze(['army', 'battle', 'run'])
+    commander: Object.freeze(['army', 'battle', 'run']),
+    rename: Object.freeze([]) // 효과가 없다
   });
   // 유물 효과 어휘. 값의 의미(단위)는 RELIC_STAT_LABELS에 적는다.
   // 게임에서의 적용 (game.js):
@@ -243,7 +245,7 @@
         return;
       }
 
-      if (e.type === 'relic' && !RELIC_KINDS.includes(e.kind)) r.error(i, 'kind', `relic kind는 commander 또는 gift여야 합니다. (현재: ${e.kind})`);
+      if (e.type === 'relic' && !RELIC_KINDS.includes(e.kind)) r.error(i, 'kind', `relic kind는 commander, gift 또는 rename이어야 합니다. (현재: ${e.kind})`);
 
       const hasId = hasValue(e.id);
       const hasPool = hasValue(e.pool);
@@ -292,10 +294,15 @@
     const idErr = validateId(x.id, '유물 id');
     if (idErr) r.error(null, 'id', idErr);
     if (!hasValue(x.name) || !String(x.name).trim()) r.error(null, 'name', '이름이 비어 있습니다.');
-    if (!RELIC_KINDS.includes(x.kind)) r.error(null, 'kind', `kind는 commander 또는 gift여야 합니다. (현재: ${x.kind})`);
+    if (!RELIC_KINDS.includes(x.kind)) r.error(null, 'kind', `kind는 commander, gift 또는 rename이어야 합니다. (현재: ${x.kind})`);
     if (!RELIC_RARITIES.includes(x.rarity)) r.error(null, 'rarity', `rarity는 ${RELIC_RARITIES.join('/')} 중 하나여야 합니다. (현재: ${x.rarity})`);
     if (x.description != null && typeof x.description !== 'string') r.error(null, 'description', '설명은 문자열이어야 합니다.');
     validateImageUrl(r, x.imageUrl);
+    // 개명 유물: 효과가 없다 (쓰면 이름을 한 번 바꿀 수 있다)
+    if (x.kind === 'rename') {
+      if (Array.isArray(x.effects) && x.effects.length) r.error(null, 'effects', '개명 유물은 효과(effects)를 가질 수 없습니다.');
+      return r.done();
+    }
     if (!Array.isArray(x.effects) || x.effects.length === 0) {
       r.error(null, 'effects', '효과(effects)를 1개 이상 추가하세요.');
       return r.done();

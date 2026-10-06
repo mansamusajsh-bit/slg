@@ -70,6 +70,20 @@ ok(RE.validateRelic(relics[2]).valid,'gift 유물 유효');
 ok(!RE.validateRelic({...relics[2],effects:[{scope:'army',stat:'atk',value:1}]}).valid,'gift 유물 scope=army → 오류');
 ok(!RE.validateRelic({...relics[0],effects:[{scope:'self',stat:'atk',value:1}]}).valid,'commander 유물 scope=self → 오류');
 ok(!RE.validateRelic({...relics[0],kind:'weird'}).valid,'알 수 없는 kind → 오류');
+// 개명 유물 (kind: rename) — 효과 없이 쓰면 지휘관 이름을 한 번 바꾼다
+const renameRelic={id:'name_seal',name:'개명의 인장',kind:'rename',rarity:'rare',description:'이름을 바꾼다',effects:[]};
+ok(RE.validateRelic(renameRelic).valid,'rename 유물은 효과 없이 유효: '+JSON.stringify(RE.validateRelic(renameRelic).errors));
+ok(RE.validateRelic({...renameRelic,effects:undefined}).valid,'rename 유물: effects 필드가 없어도 유효');
+ok(!RE.validateRelic({...renameRelic,effects:[{scope:'self',stat:'atk',value:1}]}).valid,'rename 유물에 효과를 달면 오류');
+ok(!RE.validateRelic({...renameRelic,kind:'commander'}).valid,'효과 없는 commander 유물은 여전히 오류');
+ok(RE.RELIC_KINDS.includes('rename'),'RELIC_KINDS 에 rename 포함');
+{
+  const withRename={...catalog,relics:[...(Array.isArray(catalog.relics)?catalog.relics:[...catalog.relics.values()]),renameRelic]};
+  const poolR={id:'rn',name:'개명 풀',rolls:1,allowDuplicates:true,entries:[{type:'relic',kind:'rename',id:'name_seal',weight:1}]};
+  ok(RE.validateRewardPool(poolR,withRename).valid,'풀 항목: rename 유물 참조 유효: '+JSON.stringify(RE.validateRewardPool(poolR,withRename).errors));
+  const poolBad={...poolR,entries:[{type:'relic',kind:'gift',id:'name_seal',weight:1}]};
+  ok(!RE.validateRewardPool(poolBad,withRename).valid,'풀 항목: kind 가 다르면 오류 (rename 유물을 gift 로 참조)');
+}
 ok(!RE.validateItem({id:'bad id',name:'x'}).valid,'공백 포함 id → 오류');
 
 // ---- 뽑기 결정론

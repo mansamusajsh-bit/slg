@@ -11,7 +11,7 @@ import {
 } from './editorCommon.js';
 
 const TYPE_LABELS = { gold: '💰 골드', item: '📦 아이템', relic: '💎 유물', recruit: '🧑 영입' };
-const KIND_LABELS = { commander: '지휘관', gift: '선물' };
+const KIND_LABELS = { commander: '지휘관', gift: '선물', rename: '개명' };
 const MAX_SIM_TIMES = 100000;
 
 class RewardPoolEditor {

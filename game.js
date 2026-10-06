@@ -516,22 +516,206 @@
       });
     }
 
-    // 지휘관 이름을 직접 입력받는다. first=true 면 취소할 수 없고(기본 이름 유지) 입력할 때까지 묻는다.
-    function promptCommanderName(first) {
-      if (!state.commander || typeof window.prompt !== 'function') return;
-      const cur = state.commander.name || '';
-      const input = window.prompt(first ? '지휘관 이름을 입력하세요 (최대 12자)' : '새 지휘관 이름을 입력하세요 (최대 12자)', first ? '' : cur);
-      const name = String(input || '').trim().slice(0, 12);
-      if (!name) {
-        if (first) state.commander.nameSet = false; // 취소하면 다음 로그인 때 다시 묻는다
-        return;
+    // ------------------------------------------------------------------------
+    // 지휘관(플레이어) 이름
+    //   - 시작할 때 한 번 정하면 바꿀 수 없다. 바꾸려면 개명 유물(kind 'rename')을 써야 한다 (useRenameRelic).
+    //   - 다른 플레이어와 겹치면 안 된다 (지분 · 표결 · 경매에서 이름으로 사람을 구분한다).
+    //     중복 검사는 서버(slg_name_available · slg_set_name)가 한다. 서버 경제에 연결되지 않은 상태에서는 검사할 수 없어
+    //     이 기기에서만 정하고, 서버에 연결되면 ensureCommanderName()이 그 이름을 서버에 등록해 본다 (겹치면 다시 정한다).
+    //   - 이름의 원본은 서버다. 동기화 응답(player.name · nameSet)이 오면 onServerPlayerName()이 로컬을 맞춘다.
+    // ------------------------------------------------------------------------
+    const COMMANDER_NAME_MIN = 2;
+    const COMMANDER_NAME_MAX = 12;
+    const COMMANDER_NAME_ERRORS = {
+      too_short: `이름은 ${COMMANDER_NAME_MIN}자 이상이어야 합니다.`,
+      too_long: `이름은 ${COMMANDER_NAME_MAX}자 이하여야 합니다.`,
+      bad_chars: '< > & " \' \\ 문자는 쓸 수 없습니다.',
+      reserved: '사용할 수 없는 이름입니다.',
+      taken: '이미 다른 플레이어가 쓰고 있는 이름입니다.',
+      already_set: '이름은 이미 정해져 있습니다. (바꾸려면 개명 유물이 필요합니다)',
+      same: '지금 쓰고 있는 이름입니다.',
+      network: '서버에 연결하지 못했습니다. 잠시 후 다시 시도하세요.'
+    };
+
+    /** 서버(slg_name_check)와 같은 규칙으로 이름을 정리한다: 제어문자 제거 · 공백 정리. */
+    function normalizeCommanderName(raw) {
+      return String(raw == null ? '' : raw).replace(/[\u0000-\u001f\u007f-\u009f]/g, '').replace(/\s+/g, ' ').trim();
+    }
+    /** 서버를 부르기 전의 형식 검사. 문제가 없으면 null, 있으면 오류 코드. */
+    function checkCommanderNameFormat(name) {
+      const len = Array.from(name).length;
+      if (len < COMMANDER_NAME_MIN) return 'too_short';
+      if (len > COMMANDER_NAME_MAX) return 'too_long';
+      if (/[<>&"'\\]/.test(name)) return 'bad_chars';
+      return null;
+    }
+    const commanderNameServerReady = () => !!(window.ServerEconomy && window.ServerEconomy.enabled);
+
+    /** 서버 이름 함수를 부른다. 결과는 항상 { ok, error?, ... }. 서버에 이름 함수가 없으면(SQL 미갱신) { missing: true }. */
+    async function serverNameCall(fn, args) {
+      const res = await window.ServerEconomy.call(fn, args);
+      if (res && res.network) {
+        if (/could not find the function|schema cache/i.test(String(res.error || ''))) {
+          console.warn(`[이름] 서버에 ${fn} 함수가 없습니다 — supabase-economy.sql 을 다시 실행하세요. 이 기기에서만 이름을 정합니다.`);
+          return { ok: false, missing: true };
+        }
+        return { ok: false, error: 'network' };
       }
+      return res || { ok: false, error: 'network' };
+    }
+
+    /** 이름을 로컬(지휘관 데이터)에 반영하고 저장한다. */
+    function applyCommanderName(name) {
+      if (!state || !state.commander) return;
       state.commander.name = name;
       state.commander.nameSet = true;
       saveGameState(true);
       renderAll();
     }
-    window.promptCommanderName = promptCommanderName;
+
+    /**
+     * 이름 입력 창. mode 'first' = 처음 정하기(취소 불가), 'change' = 개명 유물로 바꾸기(취소 가능, 성공하면 유물 소모).
+     * 이름이 정해지면 정해진 이름을, 취소하면 null 을 돌려준다.
+     */
+    function openCommanderNameModal({ mode = 'first', notice = '', relicInstanceId = null } = {}) {
+      if (!state || !state.commander || document.getElementById('modal-commander-name')) return Promise.resolve(null);
+      return new Promise(resolve => {
+        const isChange = mode === 'change';
+        const { overlay, card } = rbdModal('modal-commander-name', isChange ? '#a78bfa' : '#38bdf8');
+        const esc = escapeGachaHtml;
+        card.innerHTML = `
+          <div class="rbd-icon">${isChange ? '🪪' : '✍️'}</div>
+          <h2 class="rbd-title" style="color:${isChange ? '#c4b5fd' : '#7dd3fc'};">${isChange ? '개명' : '지휘관 이름을 정하세요'}</h2>
+          <p class="rbd-text">${isChange
+            ? '새 이름을 정하세요. 개명 유물은 쓰면 사라집니다.'
+            : '이름은 <b>한 번 정하면 바꿀 수 없습니다</b>. (개명 유물이 있어야 바꿀 수 있습니다)'}<br/>${COMMANDER_NAME_MIN}~${COMMANDER_NAME_MAX}자 · 다른 플레이어와 겹치는 이름은 쓸 수 없습니다.</p>
+          ${notice ? `<p class="rbd-text" style="color:#fca5a5;">${esc(notice)}</p>` : ''}
+          <input type="text" id="cmd-name-input" class="rbd-name-input" maxlength="${COMMANDER_NAME_MAX}" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="이름 입력" value="${isChange ? esc(state.commander.name || '') : ''}" />
+          <div id="cmd-name-msg" class="rbd-name-msg" aria-live="polite"></div>
+          <button type="button" class="rbd-btn" id="cmd-name-ok">${isChange ? '이름 바꾸기' : '이 이름으로 시작'}</button>
+          ${isChange ? '<button type="button" class="rbd-btn" id="cmd-name-cancel" style="margin-top:6px;">취소</button>' : ''}`;
+        const input = card.querySelector('#cmd-name-input');
+        const msg = card.querySelector('#cmd-name-msg');
+        const okBtn = card.querySelector('#cmd-name-ok');
+        const setMsg = (text, kind) => { msg.textContent = text; msg.className = `rbd-name-msg${kind ? ' ' + kind : ''}`; };
+        let checkSeq = 0, timer = null, busy = false;
+        const close = (result) => { clearTimeout(timer); overlay.remove(); resolve(result); };
+
+        // 입력을 멈추면 서버에 쓸 수 있는 이름인지 물어본다.
+        const checkAvailability = async () => {
+          const name = normalizeCommanderName(input.value);
+          const seq = ++checkSeq;
+          if (!name) { setMsg('', ''); return; }
+          const bad = checkCommanderNameFormat(name);
+          if (bad) { setMsg(COMMANDER_NAME_ERRORS[bad], 'bad'); return; }
+          if (isChange && name === state.commander.name) { setMsg(COMMANDER_NAME_ERRORS.same, 'bad'); return; }
+          if (!commanderNameServerReady()) { setMsg('', ''); return; }
+          setMsg('확인 중…', '');
+          const res = await serverNameCall('slg_name_available', { p_name: name });
+          if (seq !== checkSeq) return; // 그 사이 입력이 바뀌었다
+          if (res.missing || res.error === 'network') { setMsg('', ''); return; }
+          if (res.ok && res.available) setMsg('✅ 사용할 수 있는 이름입니다.', 'good');
+          else setMsg(COMMANDER_NAME_ERRORS[res.error] || '사용할 수 없는 이름입니다.', 'bad');
+        };
+        input.addEventListener('input', () => { clearTimeout(timer); setMsg('', ''); timer = setTimeout(checkAvailability, 350); });
+
+        const submit = async () => {
+          if (busy) return;
+          const name = normalizeCommanderName(input.value);
+          const bad = checkCommanderNameFormat(name) || (isChange && name === state.commander.name ? 'same' : null);
+          if (bad) { setMsg(COMMANDER_NAME_ERRORS[bad], 'bad'); input.focus(); return; }
+          clearTimeout(timer); checkSeq++; // 보류 중인 중복 확인이 오류 안내를 덮어쓰지 않게
+          busy = true; okBtn.disabled = true; setMsg('저장 중…', '');
+          let finalName = name;
+          if (commanderNameServerReady()) {
+            const res = await serverNameCall('slg_set_name', { p_name: name, p_change: isChange });
+            if (res.ok) finalName = res.name || name;
+            else if (!res.missing) {
+              busy = false; okBtn.disabled = false;
+              setMsg(COMMANDER_NAME_ERRORS[res.error] || '이름을 정하지 못했습니다.', 'bad');
+              input.focus();
+              return;
+            }
+          }
+          const before = state.commander.name;
+          if (isChange && relicInstanceId) {
+            const relics = getOwnedRelics();
+            const idx = relics.findIndex(r => r.instanceId === relicInstanceId && r.kind === 'rename');
+            if (idx >= 0) relics.splice(idx, 1); // 서버가 받아들인 뒤에만 유물을 쓴다
+          }
+          if (isChange) addLog(`🪪 [개명] ${before} → ${finalName}`, 'gold');
+          applyCommanderName(finalName);
+          close(finalName);
+        };
+        okBtn.onclick = submit;
+        input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } });
+        const cancelBtn = card.querySelector('#cmd-name-cancel');
+        if (cancelBtn) cancelBtn.onclick = () => close(null);
+        setTimeout(() => { try { input.focus(); input.select(); } catch (e) { /* 포커스 실패는 무시 */ } }, 50);
+      });
+    }
+    window.openCommanderNameModal = openCommanderNameModal;
+
+    /**
+     * 이름이 정해져 있지 않으면 정하게 한다. 로그인(클라우드 세이브 복원 + 서버 연결) 뒤와,
+     * 서버 동기화 응답에 이름이 아직 없다고 올 때 부른다. 한 번에 하나만 돌고, 이미 정해졌으면 아무것도 하지 않는다.
+     */
+    let ensureNameRunning = false;
+    async function ensureCommanderName() {
+      if (ensureNameRunning || !state || !state.commander) return;
+      if (document.getElementById('modal-commander-name')) return;
+      ensureNameRunning = true;
+      try {
+        const SE = window.ServerEconomy;
+        if (SE && SE.enabled) {
+          const sp = SE.snapshot && SE.snapshot.player;
+          if (sp && sp.nameSet) { onServerPlayerName(sp); return; }
+          let notice = '';
+          // 이전 버전에서 이미 정한 이름이 있으면 그 이름을 서버에 등록해 본다. 겹치면 다시 정한다.
+          if (state.commander.nameSet && state.commander.name) {
+            const res = await serverNameCall('slg_set_name', { p_name: state.commander.name, p_change: false });
+            if (res.ok) { applyCommanderName(res.name || state.commander.name); return; }
+            if (res.error === 'already_set') { if (res.name) applyCommanderName(res.name); return; }
+            if (res.missing || res.error === 'network') return; // 다음 동기화 때 다시 시도
+            notice = res.error === 'taken'
+              ? `"${state.commander.name}" 이름은 다른 플레이어가 이미 쓰고 있습니다. 새 이름을 정하세요.`
+              : `"${state.commander.name}" 이름은 쓸 수 없습니다 (${COMMANDER_NAME_ERRORS[res.error] || res.error}). 새 이름을 정하세요.`;
+          }
+          await openCommanderNameModal({ mode: 'first', notice });
+          return;
+        }
+        if (SE && SE.status === 'error') return; // 서버 연결을 다시 시도하는 중 — 연결되면 동기화 응답이 이 함수를 다시 부른다
+        if (!state.commander.nameSet) await openCommanderNameModal({ mode: 'first' }); // 서버 경제 없음: 이 기기에서만 정한다
+      } finally {
+        ensureNameRunning = false;
+      }
+    }
+    window.ensureCommanderName = ensureCommanderName;
+
+    /** 서버 동기화 응답의 player. 서버가 정한 이름이 원본이므로 로컬을 맞추고, 아직 이름이 없으면 정하게 한다. */
+    function onServerPlayerName(sp) {
+      if (!sp || !state || !state.commander) return;
+      if (sp.nameSet) {
+        if (state.commander.name !== sp.name || !state.commander.nameSet) applyCommanderName(sp.name);
+      } else if (!document.getElementById('modal-commander-name')) {
+        ensureCommanderName();
+      }
+    }
+    window.onServerPlayerName = onServerPlayerName;
+
+    /** 개명 유물을 쓴다: 새 이름을 정하는 창을 열고, 이름이 정해지면 유물이 사라진다. */
+    function useRenameRelic(instanceId) {
+      const relic = getOwnedRelics().find(r => r.instanceId === instanceId && r.kind === 'rename');
+      if (!relic) return false;
+      openCommanderNameModal({ mode: 'change', relicInstanceId: instanceId }).then(name => {
+        if (name) {
+          if (typeof window.UI?.showToast === 'function') window.UI.showToast(`🪪 이름이 "${name}"(으)로 바뀌었습니다.`, 'success');
+          renderCommanderRelics();
+        }
+      });
+      return true;
+    }
+    window.useRenameRelic = useRenameRelic;
 
     function createInitialCommander() {
       return {
@@ -3642,6 +3826,8 @@
 
     function renderHeaderAndCard() {
       // Header Info
+      const cmdNameText = document.getElementById('ui-cmd-name-text');
+      if (cmdNameText) cmdNameText.textContent = state.commander.name || '레오나르도';
       document.getElementById('ui-cmd-level').textContent = `Lv.${state.commander.level}`;
       document.getElementById('ui-cmd-exp-fill').style.width = `${Math.min(100, (state.commander.exp / state.commander.maxExp) * 100)}%`;
       document.getElementById('ui-gold').textContent = `${state.gold}G`;
@@ -5760,7 +5946,7 @@
           <span>👑 통솔력 <b>${levelPart + relicPart}부대</b></span>
           <small>지휘관 Lv.${state.commander ? state.commander.level : 1} ${levelPart}부대${relicPart ? ` + 유물 ${relicPart}부대` : ''}</small>
         </div>
-        <div class="relic-note">지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지 장착할 수 있고 장착한 것만 효과가 납니다 (지금은 통솔력 효과만 적용). 선물 유물은 캐릭터에게 선물하면 등급에 따라 호감도가 오르고(${Object.values(RELIC_RARITY_META).map(m => `${m.label} +${m.giftAffection}`).join(' · ')}) 유물 능력치도 더해집니다. 회귀하면 유물은 사라집니다.</div>`;
+        <div class="relic-note">지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지 장착할 수 있고 장착한 것만 효과가 납니다 (지금은 통솔력 효과만 적용). 선물 유물은 캐릭터에게 선물하면 등급에 따라 호감도가 오르고(${Object.values(RELIC_RARITY_META).map(m => `${m.label} +${m.giftAffection}`).join(' · ')}) 유물 능력치도 더해집니다. 개명 유물을 쓰면 지휘관 이름을 한 번 바꿀 수 있습니다 (이름은 처음 정하면 유물 없이는 바꿀 수 없습니다). 회귀하면 유물은 사라집니다.</div>`;
       const pending = state.run && state.run.pendingRelicChoice
         ? `<button type="button" class="adj-btn relic-pending-btn" onclick="openRelicChoiceModal()">👑 보스 유물 선택이 남아 있습니다 — 고르기</button>` : '';
       const slots = Array.from({ length: COMMANDER_RELIC_SLOTS }, (_, i) => {
@@ -5778,8 +5964,9 @@
         <div class="relic-section-title">장착 슬롯 <small>${equipped.length} / ${COMMANDER_RELIC_SLOTS}</small></div>
         <div class="relic-slots">${slots}</div>
         ${locked ? '<div class="relic-note">전투 중에는 장착을 바꿀 수 없습니다.</div>' : ''}`;
-      const commander = relics.filter(r => r.kind !== 'gift');
+      const commander = relics.filter(r => r.kind !== 'gift' && r.kind !== 'rename');
       const gifts = relics.filter(r => r.kind === 'gift');
+      const renames = relics.filter(r => r.kind === 'rename');
       const full = equipped.length >= COMMANDER_RELIC_SLOTS;
       const commanderCards = commander.map(r => {
         const on = isRelicEquipped(r);
@@ -5791,14 +5978,18 @@
       const giftCards = gifts.map(r => relicCardHtml(r, {
         button: `<button type="button" class="relic-pick-btn gift" data-relic-gift="${escapeGachaHtml(r.instanceId)}">🎁 선물하기</button>`
       })).join('');
+      const renameCards = renames.map(r => relicCardHtml(r, {
+        button: `<button type="button" class="relic-pick-btn gift" data-relic-rename="${escapeGachaHtml(r.instanceId)}">🪪 이름 바꾸기</button>`
+      })).join('');
       const section = (title, count, cards) => count
         ? `<div class="relic-section-title">${title} <small>${count}</small></div><div class="relic-grid">${cards}</div>` : '';
       list.innerHTML = summary + pending + slotBox + (relics.length
-        ? section('지휘관 유물', commander.length, commanderCards) + section('선물 유물 (보관 중)', gifts.length, giftCards)
+        ? section('지휘관 유물', commander.length, commanderCards) + section('선물 유물 (보관 중)', gifts.length, giftCards) + section('개명 유물 (쓰면 사라짐)', renames.length, renameCards)
         : '<div class="adj-empty">아직 가진 유물이 없습니다.</div>');
       list.querySelectorAll('[data-relic-equip]').forEach(b => { b.onclick = () => setRelicEquipped(b.dataset.relicEquip, true); });
       list.querySelectorAll('[data-relic-unequip]').forEach(b => { b.onclick = () => setRelicEquipped(b.dataset.relicUnequip, false); });
       list.querySelectorAll('[data-relic-gift]').forEach(b => { b.onclick = () => openRelicGiftPicker({ relicInstanceId: b.dataset.relicGift }); });
+      list.querySelectorAll('[data-relic-rename]').forEach(b => { b.onclick = () => useRenameRelic(b.dataset.relicRename); });
       // 효과 이름표(RewardEngine)가 아직 없으면 불러온 뒤 다시 그린다
       if (!window.RewardEngine && relics.length) ensureRewardDataLoaded().then(data => { if (data) renderCommanderRelics(); });
     }
@@ -9368,10 +9559,11 @@
                 loadGameState(data);
                 addLog(`☁️ [클라우드 복원] 이전 게임 진행 상태가 Supabase에서 복원되었습니다. (Turn ${state.turn})`, 'system');
               }
-              // 로그인 계정은 지휘관 이름을 직접 정한다. (한 번 정하면 nameSet 으로 기억)
-              if (state.commander && !state.commander.nameSet) promptCommanderName(true);
               saveGameState(true);
-              if (window.ServerEconomy) window.ServerEconomy.start(); // 로그인 계정이면 서버 경제에 연결 (골드 · 지분 · 대출 · 경매)
+              // 로그인 계정이면 서버 경제에 연결 (골드 · 지분 · 대출 · 경매). 지휘관 이름은 서버가 중복을 검사하므로 연결된 뒤에 정한다.
+              // (한 번 정하면 바꿀 수 없다 — ensureCommanderName)
+              const economyStart = window.ServerEconomy ? window.ServerEconomy.start() : Promise.resolve(false);
+              Promise.resolve(economyStart).then(() => ensureCommanderName()).catch(e => console.warn('[이름]', e));
             }).catch(e => {
               cloudLoadPending = false;
               console.warn(e);
@@ -11553,6 +11745,8 @@
         if (window.FedSystem) window.FedSystem.onReturnByDeath(); // 대출은 이 런과 함께 사라진다
         if (window.ServerEconomy) await window.ServerEconomy.onReturnByDeath(state.player.loopCount); // 서버: 골드·지분·대출 초기화
         state.run = createInitialRun(seed, reward);
+        // 이름은 플레이어의 것이라 회귀해도 남는다 (레벨 · 경험치는 새 지휘관으로 다시 시작한다).
+        if (run.commander && run.commander.nameSet) { state.run.commander.name = run.commander.name; state.run.commander.nameSet = true; }
         if (window.Wallet) window.Wallet.afterRunCreated(); // 비상금 카드의 골드는 서버가 회차당 한 번만 인정한다
         // 최후의 기억: 전멸 직전 마지막 생존자가 새 시작 파티에 있으면 다음 런 첫 전투에서 행동 +1
         if (echo && state.run.party.some(u => getCharacterId(u) === String(echo.characterId))) {
@@ -12360,6 +12554,7 @@
     }
 
     function describeRelicEffects(relic) {
+      if (relic.kind === 'rename') return '지휘관 이름을 한 번 바꿀 수 있다';
       const parts = (relic.effects || []).map(relicStatText);
       if (relic.kind === 'gift') parts.unshift(`호감도 +${getGiftAffectionBonus(relic)} (선물 보너스)`);
       return parts.join(', ') || '효과 없음';
@@ -12367,7 +12562,7 @@
 
     function relicCardHtml(relic, opts = {}) {
       const rarity = RELIC_RARITY_META[relic.rarity] || RELIC_RARITY_META.common;
-      const kindLabel = relic.kind === 'gift' ? '선물' : '지휘관';
+      const kindLabel = relic.kind === 'gift' ? '선물' : relic.kind === 'rename' ? '개명' : '지휘관';
       const effects = (relic.effects || []).map(fx => {
         // 지휘관 유물: 장착 중인 통솔력 효과만 적용 / 선물 유물: 선물하면 바로 오르는 능력치인지 표시
         const works = relic.kind === 'gift' ? (isGiftEffectApplied(fx) || RELIC_PASSIVE_STATS.includes(fx.stat)) : isCommanderRelicStatApplied(fx.stat);
@@ -12380,11 +12575,11 @@
       return `
         <div class="relic-card${opts.equipped ? ' equipped' : ''}" style="--relic-color:${rarity.color}">
           <div class="relic-card-head">
-            <span class="relic-icon">${relic.imageUrl ? `<img src="${escapeGachaHtml(relic.imageUrl)}" alt="">` : '💎'}</span>
+            <span class="relic-icon">${relic.imageUrl ? `<img src="${escapeGachaHtml(relic.imageUrl)}" alt="">` : (relic.kind === 'rename' ? '🪪' : '💎')}</span>
             <span class="relic-title"><b>${escapeGachaHtml(relic.name)}</b><small>${rarity.label} · ${kindLabel} 유물</small></span>
           </div>
           ${relic.description ? `<div class="relic-desc">${escapeGachaHtml(relic.description)}</div>` : ''}
-          <ul class="relic-fx-list">${giftBonus}${effects}</ul>
+          <ul class="relic-fx-list">${relic.kind === 'rename' ? '<li class="relic-fx">쓰면 지휘관 이름을 한 번 바꿀 수 있다 <small>(사용하면 사라짐)</small></li>' : ''}${giftBonus}${effects}</ul>
           ${opts.button || ''}
         </div>`;
     }

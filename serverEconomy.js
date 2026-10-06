@@ -283,6 +283,8 @@
     const delivered = handleInbox(snap.inbox);
     if (delivered && typeof saveGameState === 'function') saveGameState(true);
     updateGoldUi();
+    // 지휘관 이름의 원본은 서버다 — 로컬 이름을 맞추고, 아직 이름을 안 정했으면 정하게 한다 (game.js onServerPlayerName)
+    if (typeof global.onServerPlayerName === 'function') { try { global.onServerPlayerName(snap.player); } catch (e) { console.warn(e); } }
     listeners.forEach((fn) => { try { fn(snap); } catch (e) { console.warn(e); } });
   }
 
