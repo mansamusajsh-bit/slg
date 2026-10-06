@@ -653,6 +653,8 @@
       const seen = new Set();
       return allUnits()
         .filter(u => isHostileTo(caster, u) === wantHostile && inRange(u))
+        // 대상 지정 제한 (game.js가 넘겨준다: 국가 규칙 은신 등)
+        .filter(u => !wantHostile || typeof ctx.canTarget !== 'function' || ctx.canTarget(caster, u))
         .filter(u => { const k = `${u.x},${u.y}`; if (seen.has(k)) return false; seen.add(k); return true; })
         .map(u => ({ x: u.x, y: u.y }));
     }
@@ -771,6 +773,12 @@
 
       recipients.forEach(u => {
         if (u.isDead) return;
+        // 효과 면역 (game.js가 넘겨준다: 국가 규칙 — 기절·밀쳐내기·도발 면역 등)
+        if (isHostileTo(caster, u) && typeof ctx.isEffectImmune === 'function' && ctx.isEffectImmune(u, e.type)) {
+          pushResult(u, '면역', '#94a3b8');
+          ctx.log(`🛡️ ${u.name}은(는) ${def.label}에 면역입니다. (국가 규칙)`, 'warning');
+          return;
+        }
         switch (e.type) {
           case 'DAMAGE':
           case 'DRAIN': {
@@ -867,7 +875,9 @@
     if (!caster.skillCooldowns) caster.skillCooldowns = {};
     // 유물(skillCooldown)이 재사용 대기를 늘리거나 줄인다 (대기가 있는 스킬은 최소 1턴)
     const cdMod = typeof ctx.getCooldownModifier === 'function' ? num(ctx.getCooldownModifier(caster)) : 0;
-    const cooldown = skill.coolDown > 0 ? Math.max(1, skill.coolDown + cdMod) : 0;
+    let cooldown = skill.coolDown > 0 ? Math.max(1, skill.coolDown + cdMod) : 0;
+    // 추가 보정 (game.js가 넘겨준다: 국가 규칙 — 마법사 재사용 대기 감소, 최소 0)
+    if (cooldown > 0 && typeof ctx.adjustCooldown === 'function') cooldown = Math.max(0, num(ctx.adjustCooldown(caster, cooldown)));
     if (cooldown > 0) caster.skillCooldowns[skill.id] = cooldown;
     if (skill.isSignature) caster.customSkillCooldown = cooldown;
     if (hostileUsed) breakStealth(caster);

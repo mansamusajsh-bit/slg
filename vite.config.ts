@@ -9,6 +9,7 @@ const staticFilesToCopy = [
   'mapSchema.js',
   'config.js',
   'skillEngine.js',
+  'nationRules.js',
   'skillEditor.js',
   'ui.js',
   'dbManager.js',

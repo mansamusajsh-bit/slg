@@ -1014,14 +1014,27 @@
         // 유물 스킬 재사용 대기(skillCooldown): 시전자에게 걸린 유물 수치만큼 쿨다운이 늘고 준다
         getCooldownModifier: (unit) => Math.round(getRelicStatFor(unit, 'skillCooldown')),
         log: (msg, type) => addLog(msg, type),
+        // 국가 규칙(nationRules.js): 상태이상 면역 · 스킬 재사용 대기 보정 · 은신 대상 지정
+        isEffectImmune: (unit, type) => !!(window.NationRules && NationRules.isEffectImmune(unit, type)),
+        adjustCooldown: (unit, cd) => (window.NationRules ? NationRules.adjustSkillCooldown(unit, cd) : cd),
+        canTarget: (caster, target) => !window.NationRules || NationRules.canTargetUnit(caster, target),
         onUnitKilled: (unit) => {
           if (unit.owner === 'ENEMY') {
             window.defeatedEnemyCount = (window.defeatedEnemyCount || 0) + 1;
             defeatedEnemyCount = window.defeatedEnemyCount;
+            if (window.NationRules) NationRules.onUnitDeath(unit);
           } else {
             awardCommanderCasualtyExp(unit);
           }
         }
+      });
+    }
+    // 국가별 전투 규칙(nationRules.js)에 전투 상태 접근 경로를 연결한다. 규칙은 상대국 적 유닛에게만 걸린다.
+    if (window.NationRules) {
+      NationRules.configure({
+        getState: () => state,
+        getTile: (x, y) => getTile(x, y),
+        log: (msg, type) => addLog(msg, type)
       });
     }
 
@@ -1561,7 +1574,8 @@
         stackMoveEnabled: state.stackMoveEnabled,
         commander: state.commander,
         playerUnits: state.playerUnits,
-        enemyUnits: state.enemyUnits
+        enemyUnits: state.enemyUnits,
+        nationState: (state.currentBattle && state.currentBattle.nationState) || null
       });
       historyStack.push(snapshot);
       if (historyStack.length > 8) historyStack.shift();
@@ -1614,6 +1628,7 @@
       state.commander = prev.commander;
       state.playerUnits = prev.playerUnits;
       state.enemyUnits = prev.enemyUnits;
+      if (state.currentBattle) state.currentBattle.nationState = prev.nationState || {}; // 국가 규칙 (모르 부활 대기 등)
       cancelSkillTargeting(true);
 
       const where = rewoundToThisTurn ? `제 ${prev.turn}턴 시작 시점` : `직전 턴(제 ${prev.turn}턴) 시작 시점`;
@@ -1720,6 +1735,11 @@
     /* --------------------------------------------------------------------------
        Combat Odds & Range Query Helper Functions
        -------------------------------------------------------------------------- */
+    // 국가 규칙(루마 은신 등)으로 지금 이 대상을 노릴 수 있는가
+    function canTargetEnemy(attacker, target) {
+      return !window.NationRules || NationRules.canTargetUnit(attacker, target);
+    }
+
     function getEnemiesInRange(unit) {
       if (!unit || unit.isDead || unit.isInactivated || unit.ap <= 0) return [];
       const range = getUnitAttackRange(unit); // 신속한 진격 + 유물 사거리
@@ -1727,7 +1747,7 @@
       state.enemyUnits.forEach(e => {
         if (!e.isDead) {
           const dist = Math.abs(e.x - unit.x) + Math.abs(e.y - unit.y);
-          if (dist > 0 && dist <= range) {
+          if (dist > 0 && dist <= range && canTargetEnemy(unit, e)) {
             inRange.push(e);
           }
         }
@@ -1952,6 +1972,15 @@
         atkBonus += attacker.customSkillBuffAtk;
         addFactor('atk', '커스텀 스킬 버프', attacker.customSkillBuffAtk * 100);
       }
+      // 병과 특성 (config.js UnitClasses.innatePassives): 기사 기마 돌격 — 이번 턴 이동한 칸당 +4% (최대 +20%)
+      const chargePct = getMountedChargePct(attacker);
+      if (chargePct) { atkBonus += chargePct / 100; addFactor('atk', `병과 특성: 기마 돌격 (${Number(attacker.movedTilesThisTurn) || 0}칸 이동)`, chargePct); }
+      // 국가 규칙 (nationRules.js): 상대국 적에게만 걸린다
+      const nationMods = window.NationRules ? NationRules.getCombatMods(attacker, defender, { tile: targetTile }) : null;
+      if (nationMods) {
+        atkBonus += nationMods.atkPct / 100;
+        nationMods.factors.forEach(f => factors.push(f));
+      }
       const effectiveAtk = calculateEffectiveStrength(attacker, 'atk');
       const finalAtk = effectiveAtk * atkBonus;
 
@@ -1991,8 +2020,17 @@
         defBonus += defender.customSkillBuffDef;
         addFactor('def', '커스텀 스킬 버프', defender.customSkillBuffDef * 100);
       }
+      // 병과 특성: 근접 방진 구축 — 방어 지형(언덕·산·숲·도시)에서 방어 +15% (받는 피해 -15%를 방어 보정으로 반영)
+      if (getUnitClassKey(defender) === 'MELEE' && (tileFlags.isHillTile || tileFlags.isForestTile || tileFlags.isCityTile)) {
+        defBonus += MELEE_FORTIFY_DEF;
+        addFactor('def', '병과 특성: 방진 구축', MELEE_FORTIFY_DEF * 100);
+      }
+      if (nationMods && nationMods.defPct) defBonus += nationMods.defPct / 100;
+      defBonus = Math.max(0.1, defBonus);
       const effectiveDef = calculateEffectiveStrength(defender, 'def');
-      const finalDef = effectiveDef * defBonus;
+      // 국가 규칙: 방어력 일부 무시 (발렌 총병)
+      const ignoreDef = nationMods ? Math.min(90, Math.max(0, nationMods.ignoreDefPct || 0)) : 0;
+      const finalDef = effectiveDef * defBonus * (1 - ignoreDef / 100);
 
       // 3. 문명4 방식 승리 확률 P = (공격력 * W_atk) / (공격력 * W_atk + 방어력 * W_def)
       const wAtk = debugParams.winChanceAttackerWeight ?? 1.0;
@@ -2138,8 +2176,45 @@
 
     /** 사거리 보정: 지휘관 신속한 진격(이동·공격 2칸) 위에 유물 사거리를 얹는다 (공격만 늘어난다). */
     function getUnitAttackRange(unit) {
-      const base = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
-      return Math.max(1, base + Math.round(getRelicStatFor(unit, 'range')));
+      // 신속한 진격은 지휘관(아군) 패시브다. 적은 기본 1칸.
+      const base = (isPlayerSideUnit(unit) && state.commander.unlockedSkills.RapidAdvance) ? 2 : 1;
+      const eagleEye = getEagleEyeRangeBonus(unit); // 병과 특성: 궁수 독수리의 눈 (산악 +1)
+      const nation = window.NationRules ? NationRules.getAttackRangeBonus(unit) : 0; // 국가 규칙 (미라 장궁)
+      return Math.max(1, base + Math.round(getRelicStatFor(unit, 'range')) + eagleEye + nation);
+    }
+
+    /* --------------------------------------------------------------------------
+       병과 특성 (config.js UnitClasses.innatePassives) — 아군·적 공통
+       -------------------------------------------------------------------------- */
+    const MELEE_FORTIFY_DEF = 0.15;          // 근접 방진 구축: 방어 지형에서 방어 +15%
+    const KNIGHT_CHARGE_PER_TILE = 4;        // 기사 기마 돌격: 이번 턴 이동한 칸당 공격 +4%
+    const KNIGHT_CHARGE_MAX = 20;            //   최대 +20%
+    const MAGE_BURST_PER_ADJ = 0.05;         // 마법사 연쇄 폭발: 인접 적 1명당 스플래시 +5%p
+    const MAGE_BURST_MAX = 0.20;             //   최대 +20%p
+
+    function getUnitClassKey(unit) {
+      return String((unit && (unit.classType || unit.unitClass)) || '').toUpperCase();
+    }
+    function getMountedChargePct(unit) {
+      if (getUnitClassKey(unit) !== 'KNIGHT') return 0;
+      return Math.min(KNIGHT_CHARGE_MAX, Math.max(0, Number(unit.movedTilesThisTurn) || 0) * KNIGHT_CHARGE_PER_TILE);
+    }
+    function getEagleEyeRangeBonus(unit) {
+      if (getUnitClassKey(unit) !== 'ARCHER' || !(unit.x >= 0)) return 0;
+      const t = getTile(unit.x, unit.y);
+      return String((t && (t.terrain || t.type)) || '').toLowerCase() === 'mountain' ? 1 : 0;
+    }
+    /** 마법사 연쇄 폭발: 피격 칸에 인접한(8방향) 상대 수만큼 스플래시 비율 가산 */
+    function getCollateralBurstBonus(attacker, adjacentCount) {
+      if (getUnitClassKey(attacker) !== 'MAGE' || !(adjacentCount > 0)) return 0;
+      return Math.min(MAGE_BURST_MAX, adjacentCount * MAGE_BURST_PER_ADJ);
+    }
+    /** 이동 기록: 기마 돌격(이동 칸 수) · 티노 부동 반격(이동하지 않은 유닛)이 읽는다. 진영 턴 시작마다 0으로. */
+    function recordUnitMove(unit, tiles) {
+      if (unit) unit.movedTilesThisTurn = (Number(unit.movedTilesThisTurn) || 0) + Math.max(1, Number(tiles) || 1);
+    }
+    function resetMoveRecords(units) {
+      (units || []).forEach(u => { if (u) u.movedTilesThisTurn = 0; });
     }
 
     /** 전투 시작: 이동력(ap/mobility)·보호막(shield/hp)·첫 턴 AP(firstTurnAp)를 아군 출전 유닛에게 건다. */
@@ -2239,10 +2314,23 @@
        Combat Math & Engine (Civ4 Formula + Affection Check + Permadeath)
        -------------------------------------------------------------------------- */
     function executeCombat(attacker, defender) {
+      if (!attacker || !defender) return;
+      // 국가 규칙: 은신(루마)한 적은 바로 곁에서만 노릴 수 있다
+      if (!canTargetEnemy(attacker, defender)) {
+        addLog(`🌫️ [국가 규칙: 습지 은신] ${defender.name}이(가) 숲·습지에 숨어 있어 보이지 않습니다. 바로 곁까지 다가가야 공격할 수 있습니다.`, 'warning');
+        return;
+      }
+      // 국가 규칙: 호위(토르바) — 곁의 근접병이 대신 맞는다. 교전마다 한 번만 판정한다 (근접병은 다시 넘기지 않는다).
+      if (window.NationRules) defender = NationRules.redirectAttackTarget(attacker, defender);
       saveHistorySnapshot();
 
       const odds = getCombatOdds(attacker, defender);
       if (!odds) return;
+      // 교전 직전 위치·이동 기록 (국가 규칙: 아라 돌파 넉백 · 실바 치고 빠지기 · 티노 부동 반격)
+      const attackerStart = { x: attacker.x, y: attacker.y };
+      const defenderPos = { x: defender.x, y: defender.y };
+      const preStrikeDist = Math.abs(attacker.x - defender.x) + Math.abs(attacker.y - defender.y);
+      const movedBeforeAttack = (Number(attacker.movedTilesThisTurn) || 0) > 0;
 
       const { finalAtk, finalDef, tileDefBonus, weightedAtk, weightedDef, P, winPercent, evasion } = odds;
       const skills = state.commander.unlockedSkills;
@@ -2283,7 +2371,13 @@
       }
 
       // 전투 교환 피해 계산 (Round Combat Damage & Clean Integer HP)
-      const roundDmg = calculateRoundCombatDamage(attacker, defender, isWin, parseFloat(winPercent));
+      let roundDmg = calculateRoundCombatDamage(attacker, defender, isWin, parseFloat(winPercent));
+      // 국가 규칙: 부동 반격(티노) — 이동하지 않은 근접병은 받은 근접 공격에 승패와 상관없이 반격 피해를 준다
+      if (window.NationRules) {
+        roundDmg = NationRules.adjustExchangeDamage(attacker, defender, roundDmg, {
+          strikeDist: preStrikeDist, defenderAtk: calculateEffectiveStrength(defender, 'atk')
+        });
+      }
 
       // 불굴(PROTECT) 스킬: 패배한 쪽이 치명상을 1회 버티면 교전은 무승부로 끝난다.
       if (window.SkillEngine) SkillEngine.breakStealth(attacker);
@@ -2342,13 +2436,17 @@
           if (!spokeThisCombat && Math.random() < 0.35) {
             speakUnitLine(attacker, 'enemy_defeated', 'victory', lineVars);
           }
-          const splashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
-          if (splashRatio > 0) {
-            const splashDamage = Math.round(finalAtk * splashRatio);
+          const baseSplashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
+          if (baseSplashRatio > 0) {
             const adjEnemies = state.enemyUnits.filter(e =>
               !e.isDead && e.id !== defender.id &&
               Math.abs(e.x - defender.x) <= 1 && Math.abs(e.y - defender.y) <= 1
             );
+            // 병과 특성: 마법사 연쇄 폭발 — 인접 적 1명당 스플래시 +5%p (최대 +20%p)
+            const burst = getCollateralBurstBonus(attacker, adjEnemies.length);
+            if (burst > 0) addLog(`🔥 [병과 특성: 연쇄 폭발] 인접 적 ${adjEnemies.length}명 — 2차 피해 +${Math.round(burst * 100)}%p`, 'warning');
+            const splashRatio = baseSplashRatio + burst;
+            const splashDamage = Math.round(finalAtk * splashRatio);
             if (adjEnemies.length > 0) {
               adjEnemies.forEach(adj => {
                 // 스플래시는 피해만 준다: HP 1 아래로는 깎지 않는다 (스플래시로는 아무도 죽지 않는다).
@@ -2359,11 +2457,14 @@
           }
 
           // 포섭 판정: 확률·초기 호감도는 지휘관의 포섭 방침이 정한다. 포섭하지 못하면 전리품.
-          if (!tryCaptureEnemy(defender, defender.x, defender.y)) {
+          const defenderCaptured = tryCaptureEnemy(defender, defender.x, defender.y);
+          if (!defenderCaptured) {
             const lootGold = scaleIncomeWithRelics(Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult));
             Wallet.earn('earn_loot', lootGold);
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
+          // 국가 규칙: 불사(모르) — 포섭되지 않고 쓰러진 첫 적은 다음 적 턴에 부활
+          if (window.NationRules) NationRules.onUnitDeath(defender, { captured: defenderCaptured });
 
           // 호감도 (지휘관의 통솔: +30%). 병과 경험치 보너스는 awardPromotionXp가 준다.
           // 승률 50% 이하의 무모한 교전에서 이기면 오히려 호감도가 소폭 떨어진다.
@@ -2407,15 +2508,19 @@
             addLog(`💀 [아군 전사 (Permadeath)] 적 ${attacker.name}의 치명적인 공격에 아군 ${defender.name}이(가) 전사하여 영구 삭제되었습니다!`, 'danger');
             addLog(`💡 앗! 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
           }
+          // 국가 규칙: 현상금 사냥(나루) — 아군을 쓰러뜨린 적은 AP 1 회복
+          if (window.NationRules) NationRules.onKill(attacker, defender);
 
           // 인접 아군 유닛들에게 스플래시 피해
-          const splashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
-          if (splashRatio > 0) {
-            const splashDamage = Math.round(finalAtk * splashRatio);
+          const baseSplashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
+          if (baseSplashRatio > 0) {
             const adjPlayers = state.playerUnits.filter(p =>
               !p.isDead && p.id !== defender.id &&
               Math.abs(p.x - defender.x) <= 1 && Math.abs(p.y - defender.y) <= 1
             );
+            // 병과 특성: 마법사 연쇄 폭발 (적 마법사도 같다)
+            const splashRatio = baseSplashRatio + getCollateralBurstBonus(attacker, adjPlayers.length);
+            const splashDamage = Math.round(finalAtk * splashRatio);
             if (adjPlayers.length > 0) {
               adjPlayers.forEach(adj => {
                 const dealt = applySplashDamage(adj, splashDamage);
@@ -2426,7 +2531,8 @@
 
           // 해당 타일에 아군이 모두 없으면 적군이 전진 돌파
           const remainingPlayersAtTile = state.playerUnits.filter(p => !p.isDead && p.x === defender.x && p.y === defender.y);
-          if (remainingPlayersAtTile.length === 0) {
+          // 원거리(사거리 2 이상)에서 쏜 적은 그 자리에서 쏜 것이라 전진하지 않는다
+          if (remainingPlayersAtTile.length === 0 && preStrikeDist <= 1) {
             attacker.x = defender.x;
             attacker.y = defender.y;
             const targetTile = getTile(defender.x, defender.y);
@@ -2455,6 +2561,8 @@
             addLog(`💀 [영구 사망 (Permadeath)] ${attacker.name}이(가) 치명타를 입고 전사하여 영구 삭제되었습니다!`, 'danger');
             addLog(`💡 앗! 실수인가요? 상단의 [⏳ 리와인더] 버튼을 눌러 직전 턴 상태로 복구할 수 있습니다!`, 'warning');
           }
+          // 국가 규칙: 현상금 사냥(나루) — 수비하던 적이 공격해 온 아군을 쓰러뜨려도 AP 1 회복
+          if (window.NationRules) NationRules.onKill(defender, attacker);
         } else {
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
@@ -2464,8 +2572,14 @@
           grantCommanderExp(20, '반격 섬멸');
 
           // 반격 승리 시 적 포섭 판정 (포섭 방침)
-          tryCaptureEnemy(attacker, defender.x, defender.y);
+          const attackerCaptured = tryCaptureEnemy(attacker, defender.x, defender.y);
+          if (window.NationRules) NationRules.onUnitDeath(attacker, { captured: attackerCaptured });
         }
+      }
+
+      // 국가 규칙: 교전 후 효과 (아라 돌파 넉백 · 실바 치고 빠지기)
+      if (window.NationRules) {
+        NationRules.onAfterAttack(attacker, defender, { isWin, attackerStart, defenderPos, strikeDist: preStrikeDist, movedBeforeAttack });
       }
 
       // 유물 흡혈(lifesteal): 승자가 입힌 피해의 일부만큼 HP를 회복한다
@@ -2590,6 +2704,7 @@
           m.x = targetX;
           m.y = targetY;
           m.ap = Math.max(0, m.ap - costAP);
+          recordUnitMove(m, Math.abs(targetX - startX) + Math.abs(targetY - startY));
         });
 
         const minRemainingAP = Math.min(...friendlyAtStart.map(m => m.ap));
@@ -2607,6 +2722,7 @@
         unit.x = targetX;
         unit.y = targetY;
         unit.ap = Math.max(0, unit.ap - costAP);
+        recordUnitMove(unit, Math.abs(targetX - startX) + Math.abs(targetY - startY));
 
         const friendlyStack = state.playerUnits.filter(u => !u.isDead && u.x === targetX && u.y === targetY);
         if (friendlyStack.length > 1) {
@@ -2709,28 +2825,30 @@
       // ========================================================================
       if (livingPlayers.length > 0) {
         const attackCandidates = [];
+        // 적 사거리: 기본 1칸 + 병과 특성(독수리의 눈) + 국가 규칙(미라 장궁)
+        const enemyRange = getUnitAttackRange(enemy);
 
         livingPlayers.forEach(p => {
           const dist = Math.abs(p.x - enemy.x) + Math.abs(p.y - enemy.y);
-          if (dist === 1) {
-            // 즉시 공격 가능 (사거리 1)
+          if (dist >= 1 && dist <= enemyRange) {
+            // 즉시 공격 가능 (사거리 안)
             attackCandidates.push({
               target: p,
-              dist: 1,
+              dist,
               requiresMove: false,
               hp: p.hp
             });
-          } else if (dist === 2 && enemy.ap >= 2 && enemyCanMove) {
+          } else if (dist === enemyRange + 1 && enemy.ap >= 2 && enemyCanMove) {
             // 1보 전진 후 공격 가능 (AP 2 필요)
             // 전진 가능한 중간 타일 탐색 (아군 플레이어 유닛이 없는 빈 타일)
             const midTiles = directions
               .map(d => ({ x: enemy.x + d.dx, y: enemy.y + d.dy }))
-              .filter(pt => getTile(pt.x, pt.y) && MapSchema.getTileMoveCost(getTile(pt.x, pt.y)) < enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y) && (Math.abs(pt.x - p.x) + Math.abs(pt.y - p.y) === 1));
+              .filter(pt => getTile(pt.x, pt.y) && getUnitMoveCost(enemy, getTile(pt.x, pt.y)) < enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y) && (Math.abs(pt.x - p.x) + Math.abs(pt.y - p.y) === enemyRange));
 
             if (midTiles.length > 0) {
               attackCandidates.push({
                 target: p,
-                dist: 2,
+                dist,
                 requiresMove: true,
                 moveStep: midTiles[0],
                 hp: p.hp
@@ -2758,7 +2876,8 @@
           if (chosen.requiresMove && chosen.moveStep) {
             enemy.x = chosen.moveStep.x;
             enemy.y = chosen.moveStep.y;
-            enemy.ap -= MapSchema.getTileMoveCost(getTile(chosen.moveStep.x, chosen.moveStep.y));
+            enemy.ap -= getUnitMoveCost(enemy, getTile(chosen.moveStep.x, chosen.moveStep.y));
+            recordUnitMove(enemy, 1);
             const destTile = getTile(chosen.moveStep.x, chosen.moveStep.y);
             addLog(`👟 [적군 돌격 기동] ${enemy.name}이(가) 아군 ${chosen.target.name}을(를) 요격하기 위해 [${destTile ? destTile.name : '타일'}](${chosen.moveStep.x}, ${chosen.moveStep.y})로 전진했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
@@ -2780,7 +2899,7 @@
       // 유닛이 이동할 수 있는 인접 타일 탐색 (플레이어 유닛이 주둔 중이지 않은 타일)
       const validMoves = directions
         .map(d => ({ x: enemy.x + d.dx, y: enemy.y + d.dy }))
-        .filter(pt => getTile(pt.x, pt.y) && MapSchema.getTileMoveCost(getTile(pt.x, pt.y)) <= enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y));
+        .filter(pt => getTile(pt.x, pt.y) && getUnitMoveCost(enemy, getTile(pt.x, pt.y)) <= enemy.ap && !state.playerUnits.some(pu => !pu.isDead && pu.x === pt.x && pu.y === pt.y));
 
       if (validMoves.length === 0) return false;
 
@@ -2833,7 +2952,8 @@
         if (bestTile) {
           enemy.x = bestTile.x;
           enemy.y = bestTile.y;
-          enemy.ap -= MapSchema.getTileMoveCost(getTile(bestTile.x, bestTile.y));
+          enemy.ap -= getUnitMoveCost(enemy, getTile(bestTile.x, bestTile.y));
+          recordUnitMove(enemy, 1);
           const targetTile = getTile(bestTile.x, bestTile.y);
           addLog(`🛡️ [적군 ZOC 차단선 형성] ${enemy.name}이(가) 동료 적군과 2셀 간격의 ZOC 포위망을 형성하며 [${targetTile ? targetTile.name : '길목'}](${bestTile.x}, ${bestTile.y})을(를) 차단했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
           renderAll();
@@ -2873,7 +2993,8 @@
           if (bestBaseMove) {
             enemy.x = bestBaseMove.x;
             enemy.y = bestBaseMove.y;
-            enemy.ap -= MapSchema.getTileMoveCost(getTile(bestBaseMove.x, bestBaseMove.y));
+            enemy.ap -= getUnitMoveCost(enemy, getTile(bestBaseMove.x, bestBaseMove.y));
+            recordUnitMove(enemy, 1);
             const targetTile = getTile(bestBaseMove.x, bestBaseMove.y);
             addLog(`🏰 [적군 거점 압박] ${enemy.name}이(가) [${nearestBase.name}] 방면으로 전진 진격했습니다! -> [${targetTile ? targetTile.name : '타일'}](${bestBaseMove.x}, ${bestBaseMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
@@ -2907,7 +3028,8 @@
       if (bestRoamMove) {
         enemy.x = bestRoamMove.x;
         enemy.y = bestRoamMove.y;
-        enemy.ap -= MapSchema.getTileMoveCost(getTile(bestRoamMove.x, bestRoamMove.y));
+        enemy.ap -= getUnitMoveCost(enemy, getTile(bestRoamMove.x, bestRoamMove.y));
+        recordUnitMove(enemy, 1);
         const targetTile = getTile(bestRoamMove.x, bestRoamMove.y);
         addLog(`🧭 [적군 수색 정찰] ${enemy.name}이(가) 아군 거점 방면을 수색 정찰 중입니다 -> [${targetTile ? targetTile.name : '타일'}](${bestRoamMove.x}, ${bestRoamMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
         renderAll();
@@ -2924,8 +3046,11 @@
       renderAll();
       await sleep(400);
 
+      // 국가 규칙: 적 턴 시작 (모르 불사 — 쓰러졌던 적이 일어선다). 부활한 적도 이번 턴에 바로 행동한다.
+      if (window.NationRules) NationRules.onTurnStart('ENEMY');
       // 생존 적 유닛 AP 회복
       const aliveEnemies = state.enemyUnits.filter(e => !e.isDead);
+      resetMoveRecords(aliveEnemies); // 이번 턴 이동 기록 (기마 돌격 · 부동 반격)
       aliveEnemies.forEach(e => {
         e.owner = 'ENEMY';
         if (typeof e.baseAP !== 'number') e.baseAP = 2;
@@ -3045,6 +3170,8 @@
       addLog(`========== [제 ${state.turn}턴 아군 작전 개시] ==========`, 'system');
 
       const currentLiving = state.playerUnits.filter(u => !u.isDead);
+      resetMoveRecords(currentLiving); // 이번 턴 이동 기록 (기마 돌격)
+      if (window.NationRules) NationRules.onTurnStart('PLAYER');
       currentLiving.forEach(u => {
         u.ap = u.isInactivated ? 0 : u.baseAP;
         // 고유 스킬 쿨다운 1턴 감소 및 버프 리셋
@@ -3336,9 +3463,10 @@
         currentTiles.forEach(t => {
           const dist = Math.abs(t.x - selUnit.x) + Math.abs(t.y - selUnit.y);
           if (dist > 0 && dist <= attackRange) {
-            const hasEnemy = state.enemyUnits.some(e => !e.isDead && e.x === t.x && e.y === t.y);
-            if (hasEnemy) {
-              attackTiles.push(t);
+            const enemiesHere = state.enemyUnits.filter(e => !e.isDead && e.x === t.x && e.y === t.y);
+            if (enemiesHere.length) {
+              // 국가 규칙(습지 은신)으로 보이지 않는 적은 공격 대상으로 표시하지 않는다 (적이 있는 칸이라 이동도 안 된다)
+              if (enemiesHere.some(e => canTargetEnemy(selUnit, e))) attackTiles.push(t);
             } else if (dist <= range && getUnitMoveCost(selUnit, t) <= selUnit.ap) {
               // 적이 없는 타일은 빈 타일 및 아군 유닛이 이미 있는 타일 모두 이동/중첩 가능! (AP가 지형 비용 이상일 때)
               moveTiles.push(t);
@@ -4776,6 +4904,10 @@
       state.currentBattle.seed = seed;
       // 작전지도 구역. 구역 진입 흐름이 붙기 전까지는 시작 구역으로 고정한다.
       state.currentBattle.regionId = (state.run.campaign && state.run.campaign.currentRegionId) || CAMPAIGN_MAP.startRegionId;
+      // 상대 국가 (국가별 전투 규칙 nationRules.js가 읽는다). 노드의 구역이 우선, 없으면 현재 작전 구역.
+      // 구역 작전이 없는 전투(시작 구역으로 고정된 경우 포함)는 노드에 regionId가 없으면 국가 규칙을 걸지 않는다.
+      state.currentBattle.nationId = node.regionId || getCurrentRegionId() || null;
+      state.currentBattle.nationState = {};
       state.selectedNodeId = node.id;
       registerBattleOnServer(state.currentBattle); // 서버 권위 아이템: 전투 시작 시각을 서버가 기록한다 (승리 보상 수령의 기준)
       historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
@@ -4839,6 +4971,9 @@
         startDeployPhase(battle, 'card');
       }
       applyRelicBattleStart();
+      resetMoveRecords(state.playerUnits);
+      resetMoveRecords(state.enemyUnits);
+      if (window.NationRules) NationRules.onBattleStart(state.currentBattle); // 국가 규칙: 이동력 보정 · 신성 가호 보호막
       applyEchoAtBattleStart();
       speakBattleStartLine(battle);
 
@@ -9994,7 +10129,10 @@
     }
 
     // 유닛이 이 타일에 들어갈 때 드는 AP. 게릴라 II(언덕/산악) · 삼림 전문 II(숲)는 1 줄여 준다 (최소 1).
+    // 국가 규칙(사보 도하: 상대국 적은 물 칸을 1 AP로)이 있으면 그 값을 먼저 쓴다. 적 AI 이동도 이 함수를 쓴다.
     function getUnitMoveCost(unit, tile) {
+      const nationCost = (window.NationRules && unit) ? NationRules.getMoveCostOverride(unit, tile) : null;
+      if (nationCost != null) return nationCost;
       const base = MapSchema.getTileMoveCost(tile);
       if (base <= 1 || !unit) return base;
       const promo = getPromotionEffectSummary(unit);
@@ -10524,7 +10662,9 @@
       // Count remaining enemy units/monsters on the active map grid
       const enemyList = Array.isArray(state.enemyUnits) ? state.enemyUnits : [];
       const remainingEnemies = enemyList.filter(e => !e.isDead && (typeof e.hp === 'number' ? e.hp > 0 : true));
-      const remainingEnemyCount = remainingEnemies.length;
+      // 국가 규칙: 부활 대기 중인 적(모르 불사)도 아직 남은 적으로 센다
+      const pendingRevives = window.NationRules ? NationRules.countPendingRevives() : 0;
+      const remainingEnemyCount = remainingEnemies.length + pendingRevives;
 
       // If remaining enemy count == 0 and victory has not yet been processed for current battle
       if (remainingEnemyCount === 0 && !victoryProcessed && !window.victoryProcessed && state && state.isCombatActive) {

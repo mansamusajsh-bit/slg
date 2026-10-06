@@ -15,6 +15,7 @@ const files = [
   'campaignRegions.js',
   'config.js',
   'skillEngine.js',
+  'nationRules.js',
   'skillEditor.js',
   'dialogueLines.js',
   'skill-system.css',
