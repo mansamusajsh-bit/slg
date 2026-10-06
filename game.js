@@ -1624,10 +1624,11 @@
       return DialogueLines.pick(source, situation, vars);
     }
 
-    function speakUnitLine(unit, situation, mood, vars = {}) {
+    // opts.hideIllust: 말풍선만 띄운다 (캐릭터 창이 이미 같은 일러스트를 보여주고 있을 때)
+    function speakUnitLine(unit, situation, mood, vars = {}, opts = {}) {
       const line = pickUnitLine(unit, situation, vars);
       if (!line) return '';
-      window.UI?.showUnitSpeech?.(unit, line, { imageUrl: getUnitIllustration(unit), mood });
+      window.UI?.showUnitSpeech?.(unit, line, { imageUrl: opts.hideIllust ? '' : getUnitIllustration(unit), mood });
       addLog(`💬 "${unit.name}: ${line}"`, mood === 'refuse' ? 'danger' : 'system');
       return line;
     }
@@ -8383,7 +8384,7 @@
         addLog(`⚠️ [${skill.name}] 사용 불가: ${check.reason}`, 'warning');
         return;
       }
-      const hostile = skill.effects.some(e => (SkillEngine.EFFECTS[e.type] || {}).hostile);
+      const hostile = isHostileSkill(skill);
       if (hostile && unit.affection <= 30 && !state.commander.unlockedSkills.Berserk) {
         addLog(`❌ [스킬 거부!] ${unit.name}의 호감도가 ${unit.affection}으로 극히 낮아 위험한 스킬 명령을 거부합니다!`, 'danger');
         const line = pickUnitLine(unit, 'refuse_skill');
@@ -8413,6 +8414,36 @@
       performSkillCast(unit, skill, x, y);
     }
 
+    // 적에게 해로운 효과가 하나라도 있는 스킬인가 (호감도가 낮으면 거부 대상이 되는 스킬)
+    function isHostileSkill(skill) {
+      return !!skill?.effects?.some(e => (SkillEngine.EFFECTS[e.type] || {}).hostile);
+    }
+
+    // 스킬 시전 대사: 호감도 구간마다 다른 상황 키·말풍선 색·출력 확률을 쓴다.
+    // (명령 거부는 useUnitSkill 에서 이미 처리됐고, 여기는 실제로 시전된 뒤의 대사다.)
+    const SKILL_CAST_LINE_TIERS = [
+      { minAffection: 70,        situation: 'skill_cast_trust',     mood: 'brave',     chance: 0.60 },
+      { minAffection: 50,        situation: 'skill_cast_normal',    mood: 'normal',    chance: 0.25 },
+      { minAffection: -Infinity, situation: 'skill_cast_reluctant', mood: 'reluctant', chance: 0.70 }
+    ];
+    const SKILL_FORCED_LINE = { situation: 'skill_forced', mood: 'forced', chance: 1 };
+
+    function speakSkillCastLine(unit, skill, res) {
+      if (!unit || unit.isDead || unit.owner === 'ENEMY') return '';
+      const affection = unit.affection ?? 50;
+      // 광폭화로 거부를 뚫고 억지로 쓰는 공격 스킬은 항상 말한다
+      const forced = isHostileSkill(skill) && affection <= 30 && !!state.commander?.unlockedSkills?.Berserk;
+      const tier = forced ? SKILL_FORCED_LINE : SKILL_CAST_LINE_TIERS.find(t => affection >= t.minAffection);
+      if (!tier || Math.random() >= tier.chance) return '';
+
+      const targetName = (res?.results || []).find(r => r.unit && r.unit.owner === 'ENEMY')?.unit.name;
+      // 풀샷 창이 이 유닛을 이미 크게 보여주고 있으면 일러스트는 겹치지 않게 말풍선만 띄운다
+      const overlayShowsUnit = !!document.getElementById('unit-fullshot-overlay')?.classList.contains('active')
+        && currentOverlayTargetUnit?.id === unit.id;
+      return speakUnitLine(unit, tier.situation, tier.mood,
+        { skill: skill.name, target: targetName || '적군' }, { hideIllust: overlayShowsUnit });
+    }
+
     function performSkillCast(unit, skill, x, y) {
       if (!SkillEngine.isValidTarget(unit, skill, x, y)) return false;
       saveHistorySnapshot();
@@ -8428,6 +8459,7 @@
       renderAll();
       showSkillFloatTexts(res.results);
       updateFullShotOverlay();
+      speakSkillCastLine(unit, skill, res);
       updateDebugInspector();
       saveGameState();
       return true;

@@ -5859,6 +5859,9 @@
 .unit-speech-layer.mood-forced .unit-speech-bubble{border-color:#7c3aed;background:#f5f3ff}
 .unit-speech-layer.mood-forced .unit-speech-bubble::after{border-top-color:#7c3aed}
 .unit-speech-layer.mood-forced .unit-speech-name{color:#6d28d9}
+.unit-speech-layer.mood-reluctant .unit-speech-bubble{border-color:#64748b;background:#f1f5f9}
+.unit-speech-layer.mood-reluctant .unit-speech-bubble::after{border-top-color:#64748b}
+.unit-speech-layer.mood-reluctant .unit-speech-name{color:#475569}
 .unit-speech-layer.mood-victory .unit-speech-bubble{border-color:#0284c7;background:#f0f9ff}
 .unit-speech-layer.mood-victory .unit-speech-bubble::after{border-top-color:#0284c7}
 .unit-speech-layer.mood-victory .unit-speech-name{color:#0369a1}
