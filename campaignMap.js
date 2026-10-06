@@ -75,6 +75,7 @@
   const STATUS_LABEL = { locked: '미확인', available: '진입 가능', secured: '확보', current: '작전 중' };
 
   let selectedRegionId = null;
+  let lastEnemySpokenRegion = ''; // 전략맵에서 마지막으로 적 설명을 한 구역
   let lastSpokenKey = ''; // 마지막으로 큰 일러스트로 말한 부관+대사 (같은 대사 반복 방지)
 
   // game.js의 state는 전역 let이라 window 속성이 아니다. 같은 전역 스코프에서 직접 읽는다.
@@ -161,8 +162,11 @@
     const run = getState() && state.run;
     const adjutant = run && getAdjutantUnit(run);
     if (!adjutant || typeof REGIONS === 'undefined') return false;
+    // 같은 구역의 노드를 연달아 눌러도 한 번만 말한다. 작전지도로 돌아갔다 다시 들어오면 초기화된다.
+    if (regionId === lastEnemySpokenRegion) return false;
     const line = enemyBriefing(regionId, adjutant);
     if (!line) return false;
+    lastEnemySpokenRegion = regionId;
     const img = typeof getUnitIllustration === 'function' ? getUnitIllustration(adjutant) : adjutant.imageUrl;
     global.UI?.showUnitSpeech?.(adjutant, line, { imageUrl: img || '', mood: 'adjutant', durationMs: 4500 });
     return true;
@@ -511,7 +515,7 @@
   // 작전지도를 떠났다가 돌아오면 같은 대사라도 부관이 다시 말한다 (선택한 구역은 그대로 남아 있으므로).
   const campaignViewEl = document.getElementById('view-campaign-map');
   if (campaignViewEl && typeof MutationObserver !== 'undefined') {
-    new MutationObserver(() => { if (!campaignViewEl.classList.contains('active')) lastSpokenKey = ''; })
+    new MutationObserver(() => { lastEnemySpokenRegion = ''; if (!campaignViewEl.classList.contains('active')) lastSpokenKey = ''; })
       .observe(campaignViewEl, { attributes: true, attributeFilter: ['class'] });
   }
 
