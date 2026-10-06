@@ -410,7 +410,7 @@
 
     root.querySelector('.cmp-map-wrap').appendChild(renderMapSvg(campaign));
     root.querySelectorAll('[data-region]').forEach((el) => {
-      const pick = () => { selectedRegionId = el.dataset.region; campaign.lastSecured = null; render(); };
+      const pick = () => { selectedRegionId = el.dataset.region; campaign.lastSecured = null; lastSpokenKey = ''; render(); };
       el.addEventListener('click', pick);
       el.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(); } });
     });
@@ -484,6 +484,13 @@
         render();
       };
     });
+  }
+
+  // 작전지도를 떠났다가 돌아오면 같은 대사라도 부관이 다시 말한다 (선택한 구역은 그대로 남아 있으므로).
+  const campaignViewEl = document.getElementById('view-campaign-map');
+  if (campaignViewEl && typeof MutationObserver !== 'undefined') {
+    new MutationObserver(() => { if (!campaignViewEl.classList.contains('active')) lastSpokenKey = ''; })
+      .observe(campaignViewEl, { attributes: true, attributeFilter: ['class'] });
   }
 
   global.CampaignMapView = { render, BRIEFING };
