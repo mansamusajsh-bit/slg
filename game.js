@@ -7953,7 +7953,7 @@
           if (typeof window.UI?.showToast === 'function') window.UI.showToast(res.reason, 'warning');
         }
         renderCharacterPool();
-        renderStrategyView();
+        renderAll(); // 지금 보이는 화면(작전지도/전략맵/전술맵)을 다시 그린다 — 전략맵만 그리면 공용 헤더가 숨은 화면으로 옮겨진다
       };
       listEl.querySelectorAll('[data-pool-view]').forEach(b => { b.onclick = () => openPoolCharacterWindow(b.dataset.poolView); });
       listEl.querySelectorAll('[data-pool-enlist]').forEach(b => { b.onclick = () => after(enlistCharacterFromPool(b.dataset.poolEnlist)); });
