@@ -8531,6 +8531,8 @@
       if (overlay) {
         overlay.classList.add('active');
         updateFullShotOverlay(unit);
+        // 다른 캐릭터를 열 때 이전 캐릭터의 스크롤 위치가 남지 않게 맨 위로
+        overlay.querySelector('.fullshot-right-col')?.scrollTo(0, 0);
       }
     }
 

@@ -93,8 +93,12 @@
 .skl-tag.ok { color: #4ade80; }
 
 /* ---------- 전투: 풀샷 스킬 목록 ---------- */
-.fs-skill-list { display: flex; flex-direction: column; gap: 4px; max-height: 168px; overflow-y: auto; }
-.fs-skill-head { display: flex; justify-content: space-between; align-items: center; font-size: 10px; font-weight: 900; color: #4c1d95; margin-bottom: 3px; }
+/* 목록 자체에는 높이 제한/내부 스크롤을 두지 않는다: 바깥(.fullshot-right-col)이 단일 스크롤 영역이라
+   이중 스크롤로 아래 스킬이 가려지던 문제를 막는다. */
+.fs-skill-list { display: flex; flex-direction: column; gap: 4px; }
+.fs-skill-head { display: flex; justify-content: space-between; align-items: center; gap: 4px; font-size: 10px; font-weight: 900; color: #4c1d95; margin-bottom: 3px; }
+.fs-skill-head > span { min-width: 0; }
+.fs-skill-head > button { flex-shrink: 0; white-space: nowrap; }
 .fs-skill { display: flex; gap: 6px; align-items: center; background: #fff; border: 1px solid #ede9fe; border-radius: 8px; padding: 4px 5px; }
 .fs-skill.passive { border-color: #a7f3d0; background: #f0fdf4; }
 .fs-skill-icon { width: 24px; height: 24px; flex-shrink: 0; border-radius: 6px; background: #1e1b4b; display: flex; align-items: center; justify-content: center; overflow: hidden; }

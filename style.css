@@ -2600,12 +2600,18 @@
       display: flex;
       flex-direction: column;
       transform: translateY(105%);
-      transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
-      overflow: hidden;
+      /* 닫힌 상태: 패널 위로 솟는 일러스트가 화면 아래에서 비쳐 보이지 않도록, 슬라이드가 끝난 뒤 숨긴다 */
+      visibility: hidden;
+      transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1), visibility 0s linear 0.32s;
+      /* 일러스트(#fullshot-character-stage)가 패널 밖(위)으로 크게 서 있을 수 있게 clip 하지 않는다.
+         #mobile-app 이 overflow:hidden 이라 화면 밖으로는 새지 않는다. */
+      overflow: visible;
       pointer-events: auto;
     }
     .unit-fullshot-overlay.active {
       transform: translateY(0%);
+      visibility: visible;
+      transition: transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
     .fullshot-top-handle {
@@ -2614,6 +2620,7 @@
       justify-content: space-between;
       padding: 5px 12px 2px 12px;
       position: relative;
+      z-index: 4; /* 닫기(✕) 버튼이 일러스트·오른쪽 열 위에 오도록 */
     }
     .fullshot-drag-pill {
       width: 40px;
@@ -2652,31 +2659,18 @@
       display: flex;
       gap: 8px;
       padding: 2px 10px 6px 10px;
+      position: relative; /* 일러스트(#fullshot-character-stage)의 기준점 */
     }
 
-    /* Left: Full-shot Character Showcase (object-fit: contain) */
+    /* Left: 일러스트 자리. 실제 그림은 #fullshot-character-stage 가 절대배치로 이 영역 위에 크게 선다 */
     .fullshot-left-col {
-      width: 40%;
+      width: 38%;
+      flex-shrink: 0;
       height: 100%;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      position: relative;
+      pointer-events: none;
     }
-    .fullshot-character-stage {
-      width: 100%;
-      height: 100%;
-      border-radius: 16px;
-      background: radial-gradient(circle at 50% 60%, rgba(224, 242, 254, 0.6) 0%, rgba(241, 245, 249, 0.5) 100%);
-      border: 1.5px solid rgba(226, 232, 240, 0.95);
-      position: relative;
-      overflow: hidden;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.03);
-    }
+    /* 일러스트 연출: 박스에 가두지 않고 대사 연출(.unit-speech-illust)처럼 패널 위로 솟아 서 있게 한다.
+       높이 = 본문 영역 + 위로 솟는 만큼. 크기·위치는 아래 "Character Fullshot Stage" 블록에서 정한다. */
     #fullshot-character-stage > div,
     .fullshot-character-stage > div:nth-of-type(1) {
       display: none !important;
@@ -2768,15 +2762,30 @@
 
     /* Right: Stats, Info & Pastels Grid & Custom Skill Card */
     .fullshot-right-col {
-      flex: 1;
+      flex: 0 0 auto;
+      width: 57%;
+      margin-left: auto;
       min-width: 0;
       height: 100%;
       display: flex;
       flex-direction: column;
       justify-content: flex-start;
       gap: 4px;
+      /* 이 열이 유일한 스크롤 영역이다 (스킬이 많아져도 아래까지 스크롤로 닿는다) */
       overflow-y: auto;
-      padding-right: 2px;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+      padding: 4px 4px 8px 12px;
+      position: relative;
+      z-index: 2; /* 일러스트(z-index:1) 위. 일러스트와 겹치는 왼쪽 가장자리는 부드럽게 번지는 배경으로 글자만 읽히게 한다 */
+      border-radius: 14px;
+      background: linear-gradient(90deg, rgba(255, 255, 255, 0) 0, rgba(255, 255, 255, 0.86) 14px, rgba(255, 255, 255, 0.86) 100%);
+    }
+    /* 핵심: flex column 안에서 overflow:hidden 인 자식(스킬 카드 등)이 스크롤되는 대신 찌그러지며 잘리던 문제.
+       자식은 줄어들지 않게 하고, 넘치는 만큼은 이 열이 스크롤한다. */
+    .fullshot-right-col > * {
+      flex-shrink: 0;
     }
 
     .fullshot-unit-title-row {
@@ -4165,20 +4174,36 @@
     /* ==========================================================================
        Character Fullshot Stage & Zero-Crop Illustration Display
        ========================================================================== */
+    /* 일러스트는 박스(배경/테두리/클리핑) 없이 투명하게, 대사 연출(.unit-speech-illust)처럼
+       패널 왼쪽 아래에서 위로 크게 솟아 선다. 패널 높이 + 위로 솟는 만큼(최대 280px) 이 높이다. */
     .fullshot-character-stage,
     #fullshot-character-stage {
-      width: 100%;
-      min-height: 260px;
-      max-height: 480px;
+      position: absolute;
+      left: -5%;
+      bottom: 0;
+      z-index: 1;
+      width: 62%;
+      height: calc(100% + min(30dvh, 280px));
+      min-height: 0;
+      max-height: none;
+      padding: 0;
+      border: 0;
+      border-radius: 0;
+      background: none;
+      box-shadow: none;
+      overflow: visible;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      background: radial-gradient(circle at 50% 40%, rgba(240, 249, 255, 0.95) 0%, rgba(224, 242, 254, 0.7) 100%);
-      border-radius: 16px;
-      border: 1px solid rgba(186, 230, 253, 0.5);
-      padding: 12px;
-      overflow: hidden;
-      position: relative;
+      align-items: flex-end;
+      justify-content: flex-start;
+      pointer-events: none; /* 그림 위로도 맵 터치가 통과한다 */
+      /* 열릴 때 왼쪽에서 슬라이드 인 (대사 연출과 같은 곡선) */
+      opacity: 0;
+      transform: translateX(-30%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1) 0.05s, opacity 0.3s ease 0.05s;
+    }
+    .unit-fullshot-overlay.active #fullshot-character-stage {
+      opacity: 1;
+      transform: translateX(0);
     }
 
     .fullshot-main-img,
@@ -4186,10 +4211,10 @@
       width: auto !important;
       height: auto !important;
       max-width: 100% !important;
-      max-height: 440px !important;
+      max-height: 100% !important;
       object-fit: contain !important;
-      object-position: center bottom !important;
-      filter: drop-shadow(0 8px 20px rgba(15, 23, 42, 0.25));
+      object-position: left bottom !important;
+      filter: drop-shadow(0 8px 18px rgba(15, 23, 42, 0.4));
       display: block;
     }
 
