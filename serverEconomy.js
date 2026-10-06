@@ -242,9 +242,11 @@
       max = Math.max(max, e.id);
       const t = eventText(e);
       if (t) { log(t[0], t[1]); if (t[2]) toast(t[2], t[3]); }
-      if (e.kind === 'tax' && global.NationShares && global.NationShares.awardTaxRelics) {
+      if (e.kind === 'tax') {
         const p = e.payload || {};
-        global.NationShares.awardTaxRelics(Object.keys(p.byRegion || {}), Number(p.count) || 0);
+        // 세금 유물은 서버가 굴려서 이미 지급했다 (items 로 내려온다) — 서버 모드에서는 알려 주기만 한다
+        if (Array.isArray(p.relics)) { if (global.onServerTaxRelics) global.onServerTaxRelics(p.relics); }
+        else if (global.NationShares && global.NationShares.awardTaxRelics) global.NationShares.awardTaxRelics(Object.keys(p.byRegion || {}), Number(p.count) || 0);   // 아이템 서버가 없는 예전 서버
       }
     });
     lastEventId = max;
@@ -283,6 +285,8 @@
     const delivered = handleInbox(snap.inbox);
     if (delivered && typeof saveGameState === 'function') saveGameState(true);
     updateGoldUi();
+    // 리와인더 · 유물의 원본도 서버다 — 로컬 값을 서버 값으로 맞춘다 (game.js onServerItems). 서버에 아이템 함수가 없으면(snap.items 없음) 예전 방식 그대로.
+    if (snap.items && typeof global.onServerItems === 'function') { try { global.onServerItems(snap.items); } catch (e) { console.warn(e); } }
     // 지휘관 이름의 원본은 서버다 — 로컬 이름을 맞추고, 아직 이름을 안 정했으면 정하게 한다 (game.js onServerPlayerName)
     if (typeof global.onServerPlayerName === 'function') { try { global.onServerPlayerName(snap.player); } catch (e) { console.warn(e); } }
     listeners.forEach((fn) => { try { fn(snap); } catch (e) { console.warn(e); } });
@@ -325,6 +329,7 @@
         await flushNow();
         const res = await rpc(name, args);
         if (res && typeof res.balance === 'number') reconcile(res.balance);
+        if (res && res.items && SE.snapshot) { SE.snapshot.items = res.items; if (typeof global.onServerItems === 'function') { try { global.onServerItems(res.items); } catch (e) { console.warn(e); } } }
         return res;
       } catch (e) {
         console.warn(`[ServerEconomy] ${name} 실패`, e);
@@ -402,6 +407,8 @@
     get enabled() { return SE.enabled; },
     get status() { return SE.status; },
     get snapshot() { return SE.snapshot; },
+    /** 서버가 리와인더 · 유물의 원본인가 (서버 경제가 켜져 있고 서버가 아이템 함수를 가지고 있다) */
+    get itemsActive() { return !!(SE.enabled && SE.snapshot && SE.snapshot.items); },
     get isAdmin() { return !!(SE.snapshot && SE.snapshot.player && SE.snapshot.player.admin); },
     start, sync, call, rpc, onReturnByDeath, serverNow, reconcile,
     onSnapshot(fn) { listeners.add(fn); return () => listeners.delete(fn); },

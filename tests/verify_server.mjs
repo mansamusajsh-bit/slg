@@ -42,6 +42,19 @@ const unit = (o = {}) => ({ id: 'u_x', name: '용병', level: 1, classType: 'KNI
 
 await s.at(T0 + 3 * H);
 
+// 아이템 테스트용 보조: 유물 정의 · 보상 풀을 넣고, 전투를 시작 → (최소 시간 경과) → 수령한다
+const putRec = (col, id, data) => s.q('insert into slg_records (collection_name, record_id, data) values ($1, $2, $3) on conflict (collection_name, record_id) do update set data = excluded.data', [col, id, JSON.stringify(data)]);
+let nowMs = T0 + 3 * H;
+const claimBattle = async (who, ref, { node = 'N-' + ref, sector = 'A-1', type = 'battle', enemies = 5, choice } = {}) => {
+  await s.rpc('slg_encounter_start', [ref, node, sector, type, enemies], who);
+  nowMs += 30000; await s.at(nowMs);
+  return s.rpc('slg_encounter_claim', choice == null ? [ref] : [ref, choice], who);
+};
+const giveRelic = async (who, relicId, kind = 'rename') => {
+  await putRec('relics', relicId, { id: relicId, name: relicId, kind, rarity: 'common', effects: [] });
+  return (await q1('select public.slg_grant_relic($1, $2, $3, $4) as id', [await s.user(who), relicId, JSON.stringify({ type: 'test' }), nowMs])).id;
+};
+
 // ------------------------------------------------------------ 스키마
 {
   const regions = await s.q('select region_id, threat, neighbors, is_start, tax_mult::float8 as tax_mult from slg_regions order by region_id');
@@ -106,7 +119,13 @@ await s.at(T0 + 3 * H);
   ok(r.results.every((x) => x.reason === 'unknown_kind') && r.balance === 700, '모르는 종류의 수입은 거절');
   r = await wallet('a', [{ id: 'neg', kind: 'earn_loot', amount: -50 }, { id: 'frac', kind: 'earn_loot', amount: '1e9' }, { kind: 'spend', amount: 1 }]);
   ok(r.results.every((x) => x.ok === false) && r.balance === 700, '음수 · 지수 표기 · id 없는 거래는 모두 거절');
-  r = await wallet('a', [tx('earn_reward', 500, 'enc-1'), tx('earn_reward', 500, 'enc-1')]);
+  r = await wallet('a', [tx('earn_reward', 500, '0:enc-none')]);
+  ok(r.results[0].reason === 'no_encounter' && r.balance === 700, '서버가 수령을 기록하지 않은 전투의 보상 골드는 거절');
+  const cb = await claimBattle('a', 'enc-1', { enemies: 5 });
+  ok(cb.ok && cb.gold === 500, '전투 수령: 골드 기준액은 서버가 정한다 (적 5 × 100)');
+  r = await wallet('a', [tx('earn_reward', 5000, '0:enc-1')]);
+  ok(r.results[0].reason === 'no_encounter' && r.balance === 700, '서버가 정한 기준액(최대 유물 보너스 ×2)을 넘는 청구는 거절');
+  r = await wallet('a', [tx('earn_reward', 500, '0:enc-1'), tx('earn_reward', 500, '0:enc-1')]);
   ok(r.results[0].ok && r.results[1].reason === 'already_claimed' && r.balance === 1200, '전투 보상은 같은 ref(전투)로 한 번만');
   r = await wallet('a', [tx('earn_reward', 10)]);
   ok(r.results[0].reason === 'ref_required', '전투 보상은 ref 가 필요하다');
@@ -658,11 +677,16 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
 
   const again = await nm('n1', '다른이름');
   ok(again.ok === false && again.error === 'already_set', '정한 뒤에는 (유물 없이) 바꿀 수 없다');
+  eq((await nm('n1', '새아이린', true)).error, 'no_relic', '개명 유물이 없으면 p_change=true 로도 바꿀 수 없다');
+  await giveRelic('n1', 'rename-a'); await giveRelic('n2', 'rename-b');
   const ch = await nm('n1', '새아이린', true);
-  ok(ch.ok && ch.changed === true && ch.name === '새아이린', '개명(change=true)은 가능하다');
+  ok(ch.ok && ch.changed === true && ch.name === '새아이린', '개명 유물이 있으면 개명할 수 있다');
+  eq((await nm('n1', '또바꿈', true)).error, 'no_relic', '개명 유물은 한 번 쓰면 사라진다');
   ok((await nm('n3', '아이린 블랙')).ok, '개명으로 비운 옛 이름은 다른 플레이어가 쓸 수 있다');
   ok((await nm('n2', 'LUMI', true)).ok, '내 이름의 대소문자만 바꾸는 개명은 중복이 아니다');
+  await giveRelic('n2', 'rename-c');
   eq((await nm('n2', '새아이린', true)).error, 'taken', '개명도 중복 검사를 거친다');
+  eq((await q1('select count(*)::int c from slg_relics where user_id = $1 and used_ms is null', [await s.user('n2')])).c, 1, '중복으로 실패한 개명은 유물을 쓰지 않는다');
   const audit = await q1("select count(*)::int c from slg_audit where kind = 'rename'");
   eq(audit.c, 2, '개명은 감사 기록에 남는다');
 

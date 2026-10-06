@@ -534,6 +534,7 @@
       taken: '이미 다른 플레이어가 쓰고 있는 이름입니다.',
       already_set: '이름은 이미 정해져 있습니다. (바꾸려면 개명 유물이 필요합니다)',
       same: '지금 쓰고 있는 이름입니다.',
+      no_relic: '개명 유물이 없습니다. (서버가 확인합니다)',
       network: '서버에 연결하지 못했습니다. 잠시 후 다시 시도하세요.'
     };
 
@@ -1580,12 +1581,31 @@
         addLog('⚠️ [리와인더] 되돌릴 이전 턴 기록이 없습니다.', 'warning');
         return;
       }
+      // 서버 권위: 리와인더 보유는 서버가 원본이다. 서버가 하나를 차감해 줘야 되돌린다.
+      if (itemsServerMode()) {
+        if (rewindServerBusy) return;
+        rewindServerBusy = true;
+        window.ServerEconomy.call('slg_rewinder_use', {}).then((res) => {
+          rewindServerBusy = false;
+          if (!res || res.ok !== true) {
+            if (res && Number.isFinite(Number(res.rewinders))) { state.rewinders = Number(res.rewinders); renderAll(); }   // 서버가 알려 준 실제 보유로 맞춘다
+            addLog(res && res.error === 'none' ? '⚠️ [리와인더 고갈] 서버 기록상 사용 가능한 리와인더가 없습니다.' : '⚠️ [리와인더] 서버와 통신하지 못해 사용하지 못했습니다. 잠시 후 다시 시도하세요.', 'warning');
+            return;
+          }
+          if (historyStack.length === 0) { addLog('⚠️ [리와인더] 되돌릴 이전 턴 기록이 없습니다.', 'warning'); return; }
+          performRewind(Number(res.rewinders) || 0);
+        });
+        return;
+      }
+      performRewind(state.rewinders - 1);
+    }
+    let rewindServerBusy = false;
 
+    function performRewind(currentRewinders) {
       // 이번 턴에 행동했다면 이번 턴 시작으로, 아직 아무것도 안 했다면 직전 턴 시작으로 돌아간다.
       const prevJson = historyStack.pop();
       const prev = JSON.parse(prevJson);
       const rewoundToThisTurn = prev.turn === state.turn;
-      const currentRewinders = state.rewinders - 1;
 
       state.turn = prev.turn;
       Wallet.rewindTo(prev.gold); // 서버 경제에서는 쓴 만큼만 돌려받는다
@@ -3212,6 +3232,23 @@
       }
 
       const unit = getSelectedUnit();
+      if (type === 'REWIND' && itemsServerMode()) {
+        // 서버가 가격 · 보유 상한 · 잔액을 확인하고 리와인더를 준다 (값은 서버가 정한다)
+        window.ServerEconomy.call('slg_rewinder_buy', { p_src: 'village' }).then((res) => {
+          if (!res || res.ok !== true) {
+            const msg = res && res.error === 'full' ? '⚠️ 리와인더가 가득 찼습니다. (최대 10개)'
+              : res && res.error === 'insufficient' ? `⚠️ 골드가 부족합니다! (필요: ${res.cost}G)` : '⚠️ 서버와 통신하지 못해 구매하지 못했습니다.';
+            addLog(msg, 'warning');
+            if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+            return;
+          }
+          addLog(`⏳ [리와인더 충전] 시공간 리와인더 1개 충전 완료! -${res.cost}G (보유: ${res.rewinders}개)`, 'gold');
+          closeAllModals();
+          renderAll();
+          saveGameState();
+        });
+        return;
+      }
       if (type === 'REWIND') {
         saveHistorySnapshot();
         state.gold -= cost;
@@ -4146,7 +4183,7 @@
       const lines = [];
       (effects || []).forEach(e => {
         if (e.type === 'gold') { const g = scaleIncomeWithRelics(e.amount); Wallet.earn('earn_event', g, ref); lines.push(`+${g}G`); }
-        else if (e.type === 'rewinder') { state.rewinders += e.amount; lines.push(`리와인더 +${e.amount}`); }
+        else if (e.type === 'rewinder') { if (!itemsServerMode()) state.rewinders += e.amount; lines.push(`리와인더 +${e.amount}`); }
         else if (e.type === 'heal_all') { healAllPlayerUnits(); lines.push('전원 체력 회복'); }
       });
       return lines.join(', ');
@@ -4190,7 +4227,31 @@
       const btnCss = 'width:100%;padding:10px;border-radius:10px;font-weight:800;font-size:13px;cursor:pointer;border:1px solid #475569;background:#1e293b;color:#e2e8f0;margin-top:8px;';
 
       if (node.type === 'event') {
-        const ev = RunEngine.rollEvent(run, node);
+        let ev = RunEngine.rollEvent(run, node);
+        if (itemsServerMode()) {
+          // 서버 권위: 이벤트 결과(리와인더 포함)를 서버가 굴린다. 노드마다 회차당 한 번이라 다시 열어도 같은 결과다.
+          card.appendChild(el('div', 'font-size:40px;', '❓'));
+          card.appendChild(el('p', 'font-size:12px;color:#cbd5e1;', '이벤트를 확인하는 중…'));
+          document.body.appendChild(overlay);
+          window.ServerEconomy.call('slg_event_roll', { p_node_id: String(node.id), p_sector: String(node.sectorId || 'event') }).then((res) => {
+            if (!overlay.isConnected) return;
+            if (!res || res.ok !== true) {
+              card.textContent = '';
+              card.appendChild(el('p', 'font-size:13px;color:#fca5a5;margin-bottom:10px;', res && res.error === 'rate_limited' ? '지금은 이벤트를 열 수 없습니다. 잠시 후 다시 시도하세요.' : '서버와 통신하지 못했습니다.'));
+              const close = el('button', btnCss, '닫기'); close.onclick = closeRunNodeModal; card.appendChild(close);
+              return;
+            }
+            const r = res.event || {};
+            ev = r.id === 'supply_cache' ? { id: r.id, title: '버려진 보급 창고', text: `방치된 보급 창고에서 군자금 ${r.gold}G를 발견했다.`, effects: [{ type: 'gold', amount: Number(r.gold) || 0 }] }
+              : r.id === 'time_fragment' ? { id: r.id, title: '시간의 파편', text: '전장 한켠에서 시공간 리와인더 파편을 주웠다.', effects: [{ type: 'rewinder', amount: Number(r.rewinders) || 0 }] }
+              : { id: r.id || 'field_camp', title: '야전 진료소', text: '근처 주민들이 야전 진료소를 열어 주었다. 생존한 모든 영웅의 체력이 회복된다.', effects: [{ type: 'heal_all', amount: 1 }] };
+            card.textContent = '';
+            fillEventCard();
+          });
+          return;
+        }
+        fillEventCard();
+        function fillEventCard() {
         card.appendChild(el('div', 'font-size:40px;', '❓'));
         card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', ev.title));
         card.appendChild(el('p', 'font-size:12px;color:#cbd5e1;line-height:1.6;margin-bottom:10px;', ev.text));
@@ -4202,9 +4263,11 @@
           completeNonBattleNode(node, ev.id);
         };
         card.appendChild(ok);
+        }
       } else {
         const offers = RunEngine.getShopOffers(run, node).map(o => ({ ...o, cost: scaleShopGold(o.cost) })); // 기준가 × 물가 × 유물 할인
         const bought = new Set();
+        let shopBusy = false;
         card.appendChild(el('div', 'font-size:40px;', '🛒'));
         card.appendChild(el('h2', 'font-size:17px;font-weight:900;margin:6px 0;color:#7dd3fc;', '보급 상점'));
         const goldLine = el('p', 'font-size:12px;color:#fbbf24;font-weight:800;margin-bottom:6px;');
@@ -4221,6 +4284,26 @@
             if (b.disabled) b.style.opacity = '0.5';
             b.onclick = () => {
               if (bought.has(o.id) || state.gold < o.cost) return;
+              if (o.id === 'rewinder' && itemsServerMode()) {
+                // 서버가 가격(유물 할인 포함) · 보유 상한 · 잔액을 확인하고 리와인더를 준다
+                if (shopBusy) return;
+                shopBusy = true;
+                window.ServerEconomy.call('slg_rewinder_buy', { p_src: 'shop' }).then((res) => {
+                  shopBusy = false;
+                  if (!res || res.ok !== true) {
+                    const msg = res && res.error === 'full' ? '⚠️ 리와인더가 가득 찼습니다. (최대 10개)' : res && res.error === 'insufficient' ? `⚠️ 골드가 부족합니다! (필요: ${res.cost}G)` : '⚠️ 서버와 통신하지 못해 구매하지 못했습니다.';
+                    addLog(msg, 'warning');
+                    if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
+                    return;
+                  }
+                  bought.add(o.id);
+                  addLog(`🛒 [상점] ${o.label} 구매 (-${res.cost}G) → 리와인더 +1 (보유 ${res.rewinders}개)`, 'gold');
+                  refresh();
+                  renderAll();
+                  saveGameState(true);
+                });
+                return;
+              }
               state.gold -= o.cost;
               bought.add(o.id);
               const applied = applyNodeEffects(o.effects, `${Number(state.player && state.player.loopCount) || 0}:${node.id}:${o.id}`);
@@ -4694,6 +4777,7 @@
       // 작전지도 구역. 구역 진입 흐름이 붙기 전까지는 시작 구역으로 고정한다.
       state.currentBattle.regionId = (state.run.campaign && state.run.campaign.currentRegionId) || CAMPAIGN_MAP.startRegionId;
       state.selectedNodeId = node.id;
+      registerBattleOnServer(state.currentBattle); // 서버 권위 아이템: 전투 시작 시각을 서버가 기록한다 (승리 보상 수령의 기준)
       historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
       state.selectedSectorId = targetSectorId;
       state.currentSector = targetSectorId;
@@ -10507,12 +10591,27 @@
         rewinderGranted: rewinderGranted,
         defeatedCount: totalDefeatedCount
       };
+      const serverRewards = !!battle && itemsServerMode();
+      if (serverRewards) { rewardData.gold = 0; rewardData.rewinderGranted = false; rewardData.pending = true; }   // 서버가 정한 값이 올 때까지 표시를 비워 둔다
       if (battle) {
         battle.status = 'won';
         battle.result = { ...rewardData };
       }
 
-      addLog(`✨ [전투 승리 전리품] 적군 ${totalDefeatedCount}기 격퇴 보상: +${goldEarned}G${rewinderGranted ? ' · ⏳ 시공간 리와인더 +1개' : ''} (전략맵 복귀 시 지급)`, 'gold');
+      if (serverRewards) {
+        addLog(`✨ [전투 승리] 적군 ${totalDefeatedCount}기 격퇴 — 보상은 서버가 확정합니다…`, 'gold');
+        // 서버에서 보상을 수령하고, 서버가 정한 값으로 승리 창을 다시 그린다
+        claimBattleReward(battle).then((res) => {
+          const shown = res && res.ok === true
+            ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount: totalDefeatedCount }
+            : { gold: 0, rewinderGranted: false, defeatedCount: totalDefeatedCount, failed: true };
+          battle.result = { ...shown };
+          const m = document.getElementById('modal-tactical-victory');
+          if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown);
+        });
+      } else {
+        addLog(`✨ [전투 승리 전리품] 적군 ${totalDefeatedCount}기 격퇴 보상: +${goldEarned}G${rewinderGranted ? ' · ⏳ 시공간 리와인더 +1개' : ''} (전략맵 복귀 시 지급)`, 'gold');
+      }
 
       // 5. Trigger UI: Call window.UI.showVictoryModal(rewardData) immediately upon victory calculation
       if (window.UI && typeof window.UI.showVictoryModal === 'function') {
@@ -10547,6 +10646,8 @@
         const gold = rewardData?.gold ?? 0;
         const rewinderGranted = !!rewardData?.rewinderGranted;
         const defeatedCount = rewardData?.defeatedCount ?? 0;
+        const rewardPending = !!rewardData?.pending;
+        const rewardFailed = !!rewardData?.failed;
         const curGold = window.playerState?.gold ?? (state?.gold ?? 0);
         const curRewinders = window.playerState?.rewinders ?? (state?.rewinders ?? 0);
 
@@ -10579,7 +10680,7 @@
                 <span class="victory-reward-label">
                   <span>💰</span> 국고 승리 전리품
                 </span>
-                <span class="victory-reward-val victory-gold-text">+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span></span>
+                <span class="victory-reward-val victory-gold-text">${rewardPending ? '서버 확인 중…' : rewardFailed ? '지급되지 않음' : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>`}</span>
               </div>
 
               <!-- Rewinder Item Reward (50% Chance) -->
@@ -10587,7 +10688,7 @@
                 <span class="victory-reward-label">
                   <span>⏳</span> 시간 회귀의 모래시계
                 </span>
-                ${rewinderGranted 
+                ${rewardPending ? `<span class="victory-rewinder-none">서버 확인 중…</span>` : rewinderGranted 
                   ? `<span class="victory-rewinder-highlight">✨ Rewinder Item Obtained (+1)</span>`
                   : `<span class="victory-rewinder-none">Rewinder Item: None (50% Chance)</span>`
                 }
@@ -12316,6 +12417,18 @@
       if (isCharacterPoolLocked()) return fail('전투 중에는 유물 장착을 바꿀 수 없습니다.');
       const relic = getOwnedRelics().find(r => r.instanceId === instanceId);
       if (!relic || relic.kind !== 'commander') return fail('장착할 수 있는 지휘관 유물이 아닙니다.');
+      if (itemsServerMode()) {
+        // 서버가 보유 · 슬롯을 확인하고 장착 상태를 바꾼다 (결과는 onServerItems 로 돌아온다)
+        window.ServerEconomy.call('slg_relic_equip', { p_instance: String(instanceId), p_equip: !!equip }).then((res) => {
+          if (!res || res.ok !== true) {
+            fail(res && res.error === 'slots_full' ? `지휘관 유물은 ${COMMANDER_RELIC_SLOTS}개까지만 장착할 수 있습니다. 먼저 하나를 해제하세요.` : '서버와 통신하지 못해 장착을 바꾸지 못했습니다.');
+            return;
+          }
+          addLog(`💎 [유물 ${equip ? '장착' : '해제'}] ${relic.name}`, equip ? 'gold' : 'system');
+          saveGameState(true);
+        });
+        return true;
+      }
       const before = getLeadership();
       // 없어진 유물 id는 이참에 정리한다
       state.run.equippedRelics = getEquippedCommanderRelics().map(r => r.instanceId);
@@ -12382,7 +12495,19 @@
       if (!relic || relic.kind !== 'gift') return fail('선물할 수 있는 유물이 아닙니다.');
       const unit = getGiftableUnits().find(u => u.id === unitId);
       if (!unit) return fail('선물을 받을 캐릭터를 찾을 수 없습니다.');
+      if (itemsServerMode()) {
+        // 서버가 유물을 한 번 쓴 것으로 처리해야 선물이 이루어진다 (능력치를 더하는 것은 캐릭터를 가진 이쪽이 한다)
+        window.ServerEconomy.call('slg_relic_gift', { p_instance: String(instanceId), p_unit: String(unitId) }).then((res) => {
+          if (!res || res.ok !== true) { fail('서버가 선물을 인정하지 않았습니다. (이미 사용했거나 연결 오류)'); return; }
+          applyGiftToUnit({ ...relic, ...(res.relic || {}) }, unit);
+        });
+        return true;
+      }
       relics.splice(idx, 1);
+      return applyGiftToUnit(relic, unit);
+    }
+
+    function applyGiftToUnit(relic, unit) {
       const applied = [];
       const affectionBefore = getUnitAffection(unit);
       // 1) 등급별 호감도 보너스: 어떤 선물 유물이든 받으면 오른다
@@ -12472,6 +12597,8 @@
     window.closeRelicGiftPicker = closeRelicGiftPicker;
 
     function grantRelic(relicId, source) {
+      // 서버 권위: 유물은 서버가 지급한다 (onServerItems 로 내려온다). 클라이언트가 직접 만든 유물은 다음 동기화 때 사라진다.
+      if (itemsServerMode()) return null;
       const def = rewardDataCache && rewardDataCache.relics.get(String(relicId));
       if (!def || !state.run) return null;
       if (!Array.isArray(state.run.relics)) state.run.relics = [];
@@ -12509,6 +12636,7 @@
 
     // 전투 승리 보상 유물. finishEncounter가 부른다 (데이터 로드를 기다려야 하므로 비동기).
     async function awardBattleRelics(battle, node) {
+      if (itemsServerMode()) return;   // 서버가 수령(slg_encounter_claim) 때 굴려서 이미 지급했다
       const suffix = RELIC_POOL_SUFFIX[node && node.type];
       if (!suffix || !battle) return;
       const data = await ensureRewardDataLoaded();
@@ -12615,11 +12743,31 @@
     }
     window.openRelicChoiceModal = openRelicChoiceModal;
 
+    let relicChoiceBusy = false;
     function chooseRelicReward(index) {
       const pending = state.run && state.run.pendingRelicChoice;
       if (!pending) return;
       const relicId = pending.options[index];
       if (relicId == null) return;
+      if (itemsServerMode() && pending.ref) {
+        // 서버가 고른 번호를 확인하고 그 유물 하나만 지급한다
+        if (relicChoiceBusy) return;
+        relicChoiceBusy = true;
+        window.ServerEconomy.call('slg_encounter_claim', { p_ref: String(pending.ref), p_choice: Number(index) }).then((res) => {
+          relicChoiceBusy = false;
+          if (!res || res.ok !== true) {
+            if (typeof window.UI?.showToast === 'function') window.UI.showToast('⚠️ 서버와 통신하지 못해 유물을 받지 못했습니다. 다시 시도하세요.', 'warning');
+            return;
+          }
+          document.getElementById('modal-relic-choice')?.remove();
+          const got = (res.items && res.items.relics || []).filter(r => (res.relics || []).includes(r.instanceId));
+          got.forEach(r => addLog(`💎 [유물 획득] ${r.name} — ${describeRelicEffects(r)}`, 'gold'));
+          if (got.length && typeof window.UI?.showToast === 'function') window.UI.showToast(`💎 유물 획득: ${got.map(r => r.name).join(', ')}`, 'success');
+          saveGameState(true);
+          renderAll();
+        });
+        return;
+      }
       state.run.pendingRelicChoice = null;
       const { options, ...source } = pending;
       const relic = grantRelic(relicId, source);
@@ -12629,6 +12777,146 @@
       renderAll();
     }
     window.chooseRelicReward = chooseRelicReward;
+
+    // ========================================================================
+    // 서버 권위 아이템 (리와인더 · 유물)
+    //   서버(supabase-economy.sql)가 리와인더 개수와 유물 보유의 원본이다. 이 브라우저의 state.rewinders / state.run.relics 는
+    //   서버 값을 비추는 거울일 뿐이고, 동기화(onServerItems) 때마다 서버 값으로 덮어쓴다 — 개발자 도구로 고쳐도 다음 동기화에 되돌아온다.
+    //   서버에 아이템 함수가 없으면(supabase-economy.sql 을 다시 실행하기 전) 예전처럼 이 브라우저가 가진다.
+    // ========================================================================
+    const itemsServerMode = () => !!(window.ServerEconomy && window.ServerEconomy.itemsActive);
+    window.itemsServerMode = itemsServerMode;
+
+    let itemsMigrating = false;
+    function migrateLegacyItems() {
+      if (itemsMigrating) return;
+      itemsMigrating = true;
+      // 서버 호출 안에서 바로 또 부르면 직렬화 큐가 서로를 기다린다 — 큐가 빈 뒤에 부른다
+      setTimeout(() => {
+        const relics = (state && state.run && Array.isArray(state.run.relics) ? state.run.relics : [])
+          .filter(r => r && r.id && r.kind !== 'rename').map(r => ({ id: String(r.id) }));
+        const rewinders = Math.max(0, Math.floor(Number(state && state.rewinders) || 0));
+        window.ServerEconomy.call('slg_items_migrate', { p_rewinders: rewinders, p_relics: relics })
+          .then((res) => { if (!res || res.ok !== true) console.warn('[아이템] 예전 세이브 이전 실패 — 다음 동기화 때 다시 시도합니다.', res); })
+          .finally(() => { itemsMigrating = false; });
+      }, 0);
+    }
+
+    /** 서버가 알려 준 리와인더 · 유물로 이 브라우저의 값을 맞춘다. */
+    function onServerItems(items) {
+      if (!items || !state || !state.run) return;
+      if (items.migrated === false) { migrateLegacyItems(); return; }   // 예전 세이브의 아이템을 서버가 한 번 인정하고 나서 맞춘다
+      const relics = (items.relics || []).map(r => ({ ...r }));
+      const equipped = relics.filter(r => r.kind === 'commander' && r.equipped).map(r => r.instanceId);
+      const pending = items.pending && Array.isArray(items.pending.options)
+        ? { ref: items.pending.ref, nodeId: items.pending.nodeId, sectorId: items.pending.sectorId, type: items.pending.type, options: items.pending.options.map(String) } : null;
+      const rewinders = Number(items.rewinders) || 0;
+      const before = JSON.stringify([state.rewinders, state.run.relics, state.run.equippedRelics, state.run.pendingRelicChoice]);
+      state.rewinders = rewinders;
+      state.run.relics = relics;
+      state.run.equippedRelics = equipped;
+      state.run.pendingRelicChoice = pending;
+      if (before !== JSON.stringify([state.rewinders, state.run.relics, state.run.equippedRelics, state.run.pendingRelicChoice])) {
+        try { renderAll(); renderCommanderRelics(); } catch (e) { console.warn(e); }
+      }
+      if (pending && !document.getElementById('modal-relic-choice')) openRelicChoiceModal();
+      if (!pending) document.getElementById('modal-relic-choice')?.remove();
+      retryPendingClaims();
+    }
+    window.onServerItems = onServerItems;
+
+    /** 서버가 정산 때 지급한 세금 유물을 알려 준다 (유물 자체는 items 로 내려온다). */
+    function onServerTaxRelics(list) {
+      if (!Array.isArray(list) || !list.length) return;
+      const where = [...new Set(list.map(x => (REGIONS[x.regionId] && REGIONS[x.regionId].title && REGIONS[x.regionId].title.ko) || x.regionId))].join(', ');
+      addLog(`🏛️ [세금 유물] ${where}(지분 1위 아님)에서 유물 ${list.length}개를 받았습니다.`, 'gold');
+      if (typeof window.UI?.showToast === 'function') window.UI.showToast(`💎 세금 유물 ${list.length}개 수령`, 'success');
+    }
+    window.onServerTaxRelics = onServerTaxRelics;
+
+    // ---- 전투 보상: 서버에 전투 시작을 알리고, 승리하면 서버에서 수령한다 ----
+    const claimMemo = new Map();   // ref → Promise (같은 전투를 한 번만 수령한다)
+    const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+    const battleInfo = (battle) => ({
+      ref: String(battle.id), nodeId: String(battle.nodeId), sectorId: String(battle.sectorId),
+      type: ['battle', 'elite', 'boss'].includes(battle.type) ? battle.type : 'battle',
+      enemies: Array.isArray(battle.enemies) ? battle.enemies.length || 1 : 1,
+      loop: Number(state.player && state.player.loopCount) || 0
+    });
+    function registerBattleOnServer(battle) {
+      if (!itemsServerMode() || !battle) return;
+      const i = battleInfo(battle);
+      window.ServerEconomy.call('slg_encounter_start', { p_ref: i.ref, p_node_id: i.nodeId, p_sector: i.sectorId, p_type: i.type, p_enemies: i.enemies })
+        .then((res) => { if (res && res.ok === false && res.error !== 'bad_request') console.warn('[전투] 서버 시작 기록 거절:', res.error); });
+    }
+    async function serverClaimBattle(info) {
+      const SE = window.ServerEconomy;
+      const args = { p_ref: info.ref };
+      let res = await SE.call('slg_encounter_claim', args);
+      if (res && res.error === 'no_encounter') {
+        // 시작 기록이 없다 (예전 세이브에서 이어한 전투 등) — 지금 시작으로 기록하고 최소 전투 시간을 기다린 뒤 수령한다
+        const st = await SE.call('slg_encounter_start', { p_ref: info.ref, p_node_id: info.nodeId, p_sector: info.sectorId, p_type: info.type, p_enemies: info.enemies });
+        if (st && st.ok !== false) res = await SE.call('slg_encounter_claim', args);
+      }
+      for (let i = 0; i < 3 && res && res.error === 'too_fast'; i++) {
+        await sleepMs(Math.min(15000, (Number(res.waitMs) || 2000) + 300));
+        res = await SE.call('slg_encounter_claim', args);
+      }
+      return res;
+    }
+    const CLAIM_ERRORS = { rate_limited: '수령 횟수 상한에 걸렸습니다', node_done: '이미 보상을 받은 노드입니다', boss_done: '이 구역의 보스 보상은 이미 받았습니다', void: '무효가 된 전투입니다', no_encounter: '서버에 전투 기록이 없습니다', too_fast: '전투 시간이 너무 짧습니다' };
+    function applyClaimResult(info, res) {
+      const run = state && state.run;
+      if (!run) return;
+      if (!Array.isArray(run.pendingClaims)) run.pendingClaims = [];
+      const queued = run.pendingClaims.findIndex(c => c.ref === info.ref && c.loop === info.loop);
+      if (!res || res.ok !== true) {
+        if (!res || res.network) {
+          // 연결 문제: 다음 동기화 때 다시 수령한다 (세이브에 남는다)
+          if (queued < 0) run.pendingClaims.push(info);
+          claimMemo.delete(info.ref);
+          addLog('⚠️ [보상] 서버와 통신하지 못했습니다. 연결되면 보상이 지급됩니다.', 'warning');
+        } else {
+          if (queued >= 0) run.pendingClaims.splice(queued, 1);
+          addLog(`⚠️ [보상] 서버가 전투 보상을 지급하지 않았습니다 — ${CLAIM_ERRORS[res.error] || res.error}`, 'warning');
+        }
+        return;
+      }
+      if (queued >= 0) run.pendingClaims.splice(queued, 1);
+      if (!Array.isArray(run.paidRefs)) run.paidRefs = [];
+      const key = `${info.loop}:${info.ref}`;
+      if (!run.paidRefs.includes(key)) {
+        run.paidRefs.push(key);
+        if (run.paidRefs.length > 60) run.paidRefs = run.paidRefs.slice(-60);
+        const gold = scaleIncomeWithRelics(Number(res.gold) || 0);
+        if (gold > 0) Wallet.earn('earn_reward', gold, key);
+        const got = (res.items && res.items.relics || []).filter(r => (res.relics || []).includes(r.instanceId));
+        addLog(`✨ [전투 보상] +${gold}G${res.rewinders > 0 ? ` · ⏳ 리와인더 +${res.rewinders}` : ''}${got.length ? ` · 💎 ${got.map(r => r.name).join(', ')}` : ''}${res.needChoice ? ' · 💎 보스 유물 선택 대기' : ''}`, 'gold');
+        if (got.length && typeof window.UI?.showToast === 'function') window.UI.showToast(`💎 유물 획득: ${got.map(r => r.name).join(', ')}`, 'success');
+      }
+      if (res.needChoice) openRelicChoiceModal();
+      saveGameState(true);
+      renderAll();
+    }
+    /** 이 전투의 승리 보상을 서버에서 한 번만 수령한다 (같은 전투로 여러 번 불러도 같은 Promise). */
+    function claimBattleReward(battle, info) {
+      info = info || battleInfo(battle);
+      if (!claimMemo.has(info.ref)) {
+        claimMemo.set(info.ref, serverClaimBattle(info).then((res) => { applyClaimResult(info, res); return res; }));
+      }
+      return claimMemo.get(info.ref);
+    }
+    window.claimBattleReward = claimBattleReward;
+    function retryPendingClaims() {
+      const run = state && state.run;
+      if (!run || !Array.isArray(run.pendingClaims) || !run.pendingClaims.length || !itemsServerMode()) return;
+      const cur = Number(state.player && state.player.loopCount) || 0;
+      run.pendingClaims.filter(c => c.loop !== cur).forEach(c => { run.pendingClaims.splice(run.pendingClaims.indexOf(c), 1); });   // 지난 회차의 보상은 소멸
+      run.pendingClaims.slice().forEach(info => {
+        if (claimMemo.has(info.ref)) return;
+        setTimeout(() => claimBattleReward(null, info), 0);
+      });
+    }
 
     /**
      * 12단계: 전투 결과 처리의 단일 진입점.
@@ -12686,10 +12974,15 @@
       const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];
       // 골드는 전투 하나당 한 번만 청구한다 (서버가 같은 전투 id 로 두 번 받지 못하게 막는다)
       const goldReward = rewards.filter(r => r.type === 'gold').reduce((sum, r) => sum + scaleIncomeWithRelics(Number(r.amount) || 0), 0);
-      if (goldReward > 0) Wallet.earn('earn_reward', goldReward, `${Number(state.player && state.player.loopCount) || 0}:${battle.id}`);
-      rewards.forEach(r => {
-        if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
-      });
+      if (victory && itemsServerMode()) {
+        // 서버 권위: 골드 · 리와인더 · 유물은 서버가 수령(slg_encounter_claim)에서 정한 값만 받는다 (승리 순간에 이미 수령했으면 그 결과를 쓴다)
+        claimBattleReward(battle);
+      } else {
+        if (goldReward > 0) Wallet.earn('earn_reward', goldReward, `${Number(state.player && state.player.loopCount) || 0}:${battle.id}`);
+        rewards.forEach(r => {
+          if (r.type === 'rewinder') state.rewinders += Number(r.amount) || 0;
+        });
+      }
 
       // 4) 노드 완료 처리 + 다음 노드 해금
       let unlockedNodes = [];
@@ -12729,7 +13022,7 @@
       // 6) 로그
       const secLabel = `${battle.sectorId}`;
       if (victory) {
-        const rewardText = rewards.map(r => r.type === 'gold' ? `+${scaleIncomeWithRelics(r.amount)}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
+        const rewardText = itemsServerMode() ? '서버 확정' : rewards.map(r => r.type === 'gold' ? `+${scaleIncomeWithRelics(r.amount)}G` : r.type === 'rewinder' ? `리와인더 +${r.amount}` : `${r.type} +${r.amount}`).join(', ');
         addLog(`🚩 [작전 완수] ${battle.nodeId} (${secLabel}) 클리어 — 보상: ${rewardText || '없음'} · 다음 노드: ${unlockedNodes.join(', ') || '없음'}`, 'gold');
         if (casualties.length) addLog(`🕯️ [사상자] ${casualties.map(c => c.name).join(', ')}`, 'warning');
         if (secured) {
