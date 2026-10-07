@@ -1690,6 +1690,13 @@
       return getBattleTiles().find(t => t.x === x && t.y === y);
     }
 
+    // 로그용 칸 이름. 맵 에디터로 만든 칸에는 name 이 없을 수 있어 지형 이름으로 대신한다 ("[undefined]" 방지).
+    const TILE_TERRAIN_NAMES = { plain: '평야', forest: '숲', hill: '언덕', mountain: '암벽', river: '강', sea: '바다', village: '마을', city: '도시' };
+    function tileLabel(t, fallback = '전선') {
+      if (!t) return fallback;
+      return t.name || TILE_TERRAIN_NAMES[t.type] || TILE_TERRAIN_NAMES[t.terrain] || fallback;
+    }
+
     function getUnitsAt(x, y) {
       const players = state.playerUnits.filter(u => !u.isDead && u.x === x && u.y === y);
       const enemies = state.enemyUnits.filter(u => !u.isDead && u.x === x && u.y === y);
@@ -2495,11 +2502,11 @@
                 m.x = targetX;
                 m.y = targetY;
               });
-              addLog(`🚩 [적진 돌파 점령!] ${attacker.name} 부대(총 ${squad.length}기)가 적을 소탕하고 [${targetTile ? targetTile.name : '목표'}] 타일로 전진 진격했습니다!`, 'gold');
+              addLog(`🚩 [적진 돌파 점령!] ${attacker.name} 부대(총 ${squad.length}기)가 적을 소탕하고 [${tileLabel(targetTile, '목표')}] 타일로 전진 진격했습니다!`, 'gold');
             } else {
               attacker.x = targetX;
               attacker.y = targetY;
-              addLog(`🚩 [적진 돌파 점령!] ${attacker.name}이(가) 적을 격퇴하고 [${targetTile ? targetTile.name : '목표'}] 타일로 전진 진격했습니다!`, 'gold');
+              addLog(`🚩 [적진 돌파 점령!] ${attacker.name}이(가) 적을 격퇴하고 [${tileLabel(targetTile, '목표')}] 타일로 전진 진격했습니다!`, 'gold');
             }
           }
         } else {
@@ -2536,7 +2543,7 @@
             attacker.x = defender.x;
             attacker.y = defender.y;
             const targetTile = getTile(defender.x, defender.y);
-            addLog(`🚩 [적군 전선 돌파] ${attacker.name}이(가) 아군 거점을 돌파하고 [${targetTile ? targetTile.name : '타일'}]로 진격했습니다!`, 'danger');
+            addLog(`🚩 [적군 전선 돌파] ${attacker.name}이(가) 아군 거점을 돌파하고 [${tileLabel(targetTile)}]로 진격했습니다!`, 'danger');
           }
         }
       } else {
@@ -2709,7 +2716,7 @@
 
         const minRemainingAP = Math.min(...friendlyAtStart.map(m => m.ap));
         const totalAtDest = state.playerUnits.filter(u => !u.isDead && u.x === targetX && u.y === targetY).length;
-        addLog(`👟 [부대 동시 진격 완료!] 아군 총 ${friendlyAtStart.length}기가 [${targetTile.name}] 타일로 최소 AP(${costAP})를 소모하여 함께 이동했습니다! (부대 최소 잔여 AP: ${minRemainingAP}) [도착 타일 총 ${totalAtDest}기 주둔]`, 'success');
+        addLog(`👟 [부대 동시 진격 완료!] 아군 총 ${friendlyAtStart.length}기가 [${tileLabel(targetTile)}] 타일로 최소 AP(${costAP})를 소모하여 함께 이동했습니다! (부대 최소 잔여 AP: ${minRemainingAP}) [도착 타일 총 ${totalAtDest}기 주둔]`, 'success');
       } else {
         // 개별 단독 이동
         if (unit.isInactivated || unit.ap < costAP) {
@@ -2726,9 +2733,9 @@
 
         const friendlyStack = state.playerUnits.filter(u => !u.isDead && u.x === targetX && u.y === targetY);
         if (friendlyStack.length > 1) {
-          addLog(`👟 [중첩 이동 완료] ${unit.name} -> [${targetTile.name}] (해당 타일에 아군 총 ${friendlyStack.length}기 중첩 집결! 잔여 AP: ${unit.ap})`, 'success');
+          addLog(`👟 [중첩 이동 완료] ${unit.name} -> [${tileLabel(targetTile)}] (해당 타일에 아군 총 ${friendlyStack.length}기 중첩 집결! 잔여 AP: ${unit.ap})`, 'success');
         } else {
-          addLog(`👟 [이동 완료] ${unit.name} -> [${targetTile.name}] (잔여 AP: ${unit.ap})`, 'system');
+          addLog(`👟 [이동 완료] ${unit.name} -> [${tileLabel(targetTile)}] (잔여 AP: ${unit.ap})`, 'system');
         }
       }
 
@@ -2854,7 +2861,7 @@
             enemy.ap -= getUnitMoveCost(enemy, getTile(chosen.moveStep.x, chosen.moveStep.y));
             recordUnitMove(enemy, 1);
             const destTile = getTile(chosen.moveStep.x, chosen.moveStep.y);
-            addLog(`👟 [적군 돌격 기동] ${enemy.name}이(가) 아군 ${chosen.target.name}을(를) 요격하기 위해 [${destTile ? destTile.name : '타일'}](${chosen.moveStep.x}, ${chosen.moveStep.y})로 전진했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
+            addLog(`👟 [적군 돌격 기동] ${enemy.name}이(가) 아군 ${chosen.target.name}을(를) 요격하기 위해 [${tileLabel(destTile)}](${chosen.moveStep.x}, ${chosen.moveStep.y})로 전진했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
             await sleep(350);
           }
@@ -2913,7 +2920,7 @@
             enemy.ap -= getUnitMoveCost(enemy, getTile(bestBaseMove.x, bestBaseMove.y));
             recordUnitMove(enemy, 1);
             const targetTile = getTile(bestBaseMove.x, bestBaseMove.y);
-            addLog(`🏰 [적군 거점 압박] ${enemy.name}이(가) [${nearestBase.name}] 방면으로 전진 진격했습니다! -> [${targetTile ? targetTile.name : '타일'}](${bestBaseMove.x}, ${bestBaseMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
+            addLog(`🏰 [적군 거점 압박] ${enemy.name}이(가) [${tileLabel(nearestBase, '거점')}] 방면으로 전진 진격했습니다! -> [${tileLabel(targetTile)}](${bestBaseMove.x}, ${bestBaseMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
             renderAll();
             return true;
           }
@@ -2948,7 +2955,7 @@
         enemy.ap -= getUnitMoveCost(enemy, getTile(bestRoamMove.x, bestRoamMove.y));
         recordUnitMove(enemy, 1);
         const targetTile = getTile(bestRoamMove.x, bestRoamMove.y);
-        addLog(`🧭 [적군 수색 정찰] ${enemy.name}이(가) 아군 거점 방면을 수색 정찰 중입니다 -> [${targetTile ? targetTile.name : '타일'}](${bestRoamMove.x}, ${bestRoamMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
+        addLog(`🧭 [적군 수색 정찰] ${enemy.name}이(가) 아군 거점 방면을 수색 정찰 중입니다 -> [${tileLabel(targetTile)}](${bestRoamMove.x}, ${bestRoamMove.y}) (잔여 AP: ${enemy.ap})`, 'warning');
         renderAll();
         return true;
       }
@@ -8636,7 +8643,7 @@
       if (coordEl) {
         if (unit.x !== undefined && unit.y !== undefined) {
           const curTile = getTile(unit.x, unit.y);
-          const tileName = curTile ? curTile.name : '평지';
+          const tileName = tileLabel(curTile, '평지');
           coordEl.innerHTML = `(${unit.x}, ${unit.y}) <span style="font-size:9px; font-weight:700; opacity:0.85;">${tileName}</span>`;
         } else {
           coordEl.innerHTML = `<span style="font-size:10px; font-weight:800; color:#0284c7;">본대 대기</span>`;

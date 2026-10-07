@@ -148,7 +148,7 @@
             <label>습득 SP<input type="number" min="0" max="9" class="dbg-form-control" data-f="spCost" value="${s.spCost}" /></label>
             ${passive ? '<span></span><span></span>' : `
             <label>소모 AP<input type="number" min="0" max="6" class="dbg-form-control" data-f="costAP" value="${s.costAP}" /></label>
-            <label>재사용 대기(턴)<input type="number" min="0" max="10" class="dbg-form-control" data-f="coolDown" value="${s.coolDown}" /></label>`}
+            <label>재사용 대기(턴)<input type="number" min="1" max="10" class="dbg-form-control" data-f="coolDown" value="${s.coolDown}" /></label>`}
           </div>
           <label class="sk-check"><input type="checkbox" data-f="startsLearned" ${s.startsLearned ? 'checked' : ''}/> 시작 시 습득 (★ 캐릭터 생성 시 바로 사용 가능)</label>
 

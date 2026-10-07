@@ -196,7 +196,7 @@
       spCost: Math.max(0, num(raw.spCost, Math.max(1, num(raw.tier, 1)))),
       startsLearned: !!raw.startsLearned,
       costAP: type === 'ACTIVE' ? Math.max(0, num(raw.costAP, 1)) : 0,
-      coolDown: type === 'ACTIVE' ? Math.max(0, num(raw.coolDown, 1)) : 0,
+      coolDown: type === 'ACTIVE' ? Math.max(1, num(raw.coolDown, 1)) : 0,   // 액티브 스킬은 최소 1턴: 한 턴에 같은 스킬을 두 번 쓰지 못한다
       targeting,
       effects
     };
@@ -875,10 +875,11 @@
     if (!caster.skillCooldowns) caster.skillCooldowns = {};
     // 유물(skillCooldown)이 재사용 대기를 늘리거나 줄인다 (대기가 있는 스킬은 최소 1턴)
     const cdMod = typeof ctx.getCooldownModifier === 'function' ? num(ctx.getCooldownModifier(caster)) : 0;
-    let cooldown = skill.coolDown > 0 ? Math.max(1, skill.coolDown + cdMod) : 0;
-    // 추가 보정 (game.js가 넘겨준다: 국가 규칙 — 마법사 재사용 대기 감소, 최소 0)
-    if (cooldown > 0 && typeof ctx.adjustCooldown === 'function') cooldown = Math.max(0, num(ctx.adjustCooldown(caster, cooldown)));
-    if (cooldown > 0) caster.skillCooldowns[skill.id] = cooldown;
+    // 액티브 스킬은 어떤 보정을 받아도 최소 1턴 대기한다 → 같은 스킬은 한 턴에 한 번만 (AP가 남아도 연속 사용 불가)
+    let cooldown = Math.max(1, num(skill.coolDown) + cdMod);
+    // 추가 보정 (game.js가 넘겨준다: 국가 규칙 — 마법사 재사용 대기 감소)
+    if (typeof ctx.adjustCooldown === 'function') cooldown = Math.max(1, num(ctx.adjustCooldown(caster, cooldown)));
+    caster.skillCooldowns[skill.id] = cooldown;
     if (skill.isSignature) caster.customSkillCooldown = cooldown;
     if (hostileUsed) breakStealth(caster);
 

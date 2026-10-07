@@ -197,7 +197,7 @@
   }
   function adjustSkillCooldown(unit, cooldown) {
     const r = ruleFor(unit, 'MAGE_COOLDOWN');
-    if (r && classOf(unit) === 'MAGE') return Math.max(0, num(cooldown) + r.value);
+    if (r && classOf(unit) === 'MAGE') return Math.max(1, num(cooldown) + r.value);   // 최소 1턴: 0이 되면 AP가 남는 만큼 연속으로 쓴다
     return cooldown;
   }
 
