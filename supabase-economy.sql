@@ -281,6 +281,9 @@ create index if not exists slg_auctions_status on public.slg_auctions (status, e
 -- ---------------------------------------------------------------- 아이템 (리와인더 · 유물): 서버가 원본
 -- 리와인더 개수 · 유물 보유는 이 테이블들에만 있다. 브라우저는 읽기만 하고 (slg_sync 의 items), 바꾸는 것은 전부 아래 RPC 가 한다.
 alter table public.slg_players add column if not exists rewinders int not null default 3 check (rewinders >= 0);
+-- 보유 리와인더 중 운영자 선물(우편)로 받은 개수. 보유 상한(rewinder_hold_max)은 게임에서 얻은 것(rewinders - rewinders_gift)에만 걸린다.
+-- 리와인더를 쓰면 선물분부터 줄어든다.
+alter table public.slg_players add column if not exists rewinders_gift int not null default 0 check (rewinders_gift >= 0);
 -- 이 버전 이전부터 있던 플레이어(items_migrated = false)만 예전 세이브의 리와인더 · 유물을 한 번 이전할 수 있다. 새 플레이어는 처음부터 true.
 alter table public.slg_players add column if not exists items_migrated boolean not null default false;
 alter table public.slg_players alter column items_migrated set default true;
@@ -324,9 +327,14 @@ create table if not exists public.slg_encounters (
   claimed_ms bigint,
   primary key (user_id, "loop", ref)
 );
--- 한 노드의 보상은 회차당 한 번, 보스는 구역(섹터)마다 회차당 한 번 (가짜 노드 id 로 반복 수령하는 것을 막는다)
+-- 한 노드의 보상은 회차당 한 번, 보스는 국가(구역)마다 회차당 한 번 (가짜 노드 id 로 반복 수령하는 것을 막는다)
+--   노드 id 는 "<구역>-<섹터>-<번호>" (예: liona-B-2-007). 모든 구역의 보스가 같은 섹터(마지막 섹터)를 쓰므로 섹터가 아니라 구역으로 센다.
+--   구역 접두어가 없는 노드(예전 단일 맵 런)는 섹터를 구역 자리에 쓴다.
+alter table public.slg_encounters add column if not exists region_id text;
+update public.slg_encounters set region_id = sector_id where region_id is null and type = 'boss';
 create unique index if not exists slg_enc_node_once on public.slg_encounters (user_id, "loop", node_id) where status in ('awaiting', 'claimed');
-create unique index if not exists slg_enc_boss_once on public.slg_encounters (user_id, "loop", sector_id) where type = 'boss' and status in ('awaiting', 'claimed');
+drop index if exists public.slg_enc_boss_once;
+create unique index if not exists slg_enc_boss_region_once on public.slg_encounters (user_id, "loop", region_id) where type = 'boss' and status in ('awaiting', 'claimed');
 create index if not exists slg_enc_recent on public.slg_encounters (user_id, claimed_ms);
 
 create table if not exists public.slg_item_log (
@@ -343,8 +351,8 @@ create index if not exists slg_item_log_user on public.slg_item_log (user_id, ki
 
 insert into public.slg_config (key, value) values
   ('rewinder_hold_max', 10), ('rewinder_loop_grants', 40), ('rewinder_price_village', 120), ('rewinder_price_shop', 150),
-  ('relic_loop_cap', 60), ('commander_slots', 3), ('migrate_rewinder_cap', 5), ('migrate_relic_cap', 10),
-  ('enc_min_ms', 10000), ('rewinder_day_grants', 20), ('rewinder_day_buys', 10), ('boss_per_loop', 4), ('enc_max_enemies', 12), ('claims_per_hour', 30), ('claims_per_loop', 80), ('enc_max_node_len', 48)
+  ('commander_slots', 3), ('migrate_rewinder_cap', 5), ('migrate_relic_cap', 10),
+  ('enc_min_ms', 10000), ('rewinder_day_grants', 20), ('rewinder_day_buys', 10), ('enc_max_enemies', 12), ('claims_per_hour', 30), ('enc_max_node_len', 48)
 on conflict (key) do nothing;
 
 -- ---------------------------------------------------------------- 운영자 메일 (재화 · 리와인더 · 유물 · 캐릭터 선물)
@@ -378,6 +386,8 @@ create table if not exists public.slg_mail_state (
 insert into public.slg_config (key, value) values
   ('mail_gold_max', 1000000), ('mail_rewinder_max', 20), ('mail_relic_max', 10), ('mail_char_max', 10), ('mail_days_max', 365)
 on conflict (key) do nothing;
+-- 아래 셋은 고정값 대신 실제 런 구조로 계산한다 (slg_run_relic_cap · slg_run_boss_cap · slg_run_claim_cap). 예전 값은 지운다.
+delete from public.slg_config where key in ('relic_loop_cap', 'boss_per_loop', 'claims_per_loop');
 
 -- ---------------------------------------------------------------- 권한: 브라우저는 테이블을 직접 못 본다 (RPC 만)
 do $$
@@ -1812,7 +1822,7 @@ begin
   if coalesce(p_n, 0) <= 0 then return 0; end if;
   select * into p from slg_players where user_id = p_uid for update;
   if not found then raise exception 'no_player'; end if;
-  room := greatest(0, slg_cfg('rewinder_hold_max')::int - p.rewinders);
+  room := greatest(0, slg_cfg('rewinder_hold_max')::int - (p.rewinders - least(p.rewinders, p.rewinders_gift)));   -- 선물분은 상한에 세지 않는다
   cap_left := greatest(0, slg_cfg('rewinder_loop_grants')::int
               - coalesce((select sum(l.qty) from slg_item_log l where l.user_id = p_uid and l."loop" = p."loop" and l.kind = 'rewinder_grant'), 0)::int);
   day_left := greatest(0, slg_cfg('rewinder_day_grants')::int
@@ -1836,7 +1846,11 @@ begin
   v_rar := case when def ->> 'rarity' in ('common', 'rare', 'epic', 'legendary') then def ->> 'rarity' else 'common' end;
   select * into p from slg_players where user_id = p_uid for update;
   if not found then raise exception 'no_player'; end if;
-  if (select count(*) from slg_relics r where r.user_id = p_uid and r."loop" = p."loop") >= slg_cfg('relic_loop_cap') then return null; end if;
+  -- 회차 유물 상한은 전투 · 정예 · 보스에서 나온 유물(source 에 nodeId)에만 건다: 한 런을 끝까지 돌아 나올 수 있는 최대치(slg_run_relic_cap).
+  -- 운영 메일은 운영자가 정한 양, 세금 유물은 정산 1회 5개 · 예전 세이브 이전은 migrate_relic_cap 으로 따로 제한된다.
+  if p_source ? 'nodeId' and (select count(*) from slg_relics r where r.user_id = p_uid and r."loop" = p."loop" and r.source ? 'nodeId') >= slg_run_relic_cap() then
+    return null;
+  end if;
   if v_kind = 'commander' and exists (select 1 from slg_relics r where r.user_id = p_uid and r.relic_id = p_relic_id and r.kind = 'commander' and r.used_ms is null) then
     return null;
   end if;
@@ -1880,7 +1894,7 @@ begin
   select jsonb_build_object('ref', e.ref, 'nodeId', e.node_id, 'sectorId', e.sector_id, 'type', e.type, 'options', e.result -> 'options')
     into pend from slg_encounters e where e.user_id = p_uid and e."loop" = p."loop" and e.status = 'awaiting' order by e.started_ms desc limit 1;
   return jsonb_build_object(
-    'rewinders', p.rewinders, 'holdMax', slg_cfg('rewinder_hold_max'), 'migrated', p.items_migrated, 'pending', pend,
+    'rewinders', p.rewinders, 'giftRewinders', least(p.rewinders, p.rewinders_gift), 'holdMax', slg_cfg('rewinder_hold_max'), 'migrated', p.items_migrated, 'pending', pend,
     'relics', coalesce((select jsonb_agg(slg_relic_json(r) order by r.id) from slg_relics r where r.user_id = p_uid and r.used_ms is null), '[]'::jsonb));
 end $$;
 
@@ -1890,6 +1904,41 @@ language sql stable set search_path = public as $$
   select coalesce(sum((f ->> 'value')::numeric), 0)
   from slg_relics r, jsonb_array_elements(r.snapshot -> 'effects') f
   where r.user_id = p_uid and r.kind = 'commander' and r.equipped and r.used_ms is null and f ->> 'stat' = p_stat
+$$;
+
+-- ---------------------------------------------------------------- 한 런(회차)에서 실제로 나올 수 있는 최대치
+-- 런 구조 (runEngine.js DEFAULT_LAYER_SIZES = [1,3,3,3,3,2,1] → 구역마다 7층):
+--   국가(구역)마다 한 경로 = 첫 층 일반 전투 1 + 중간 5층(전투 · 정예 · 이벤트 · 상점) + 보스 1
+--   → 구역당 보상 수령은 최대 7번 (전투 6 + 보스 1), 그중 유물이 나오는 전투는 6번 + 보스 1개(3택1)
+-- 구역 수는 slg_regions, 전투 한 번의 유물 수는 보상 풀(rewardPools)의 rolls 로 정해진다 (운영자가 풀을 바꾸면 상한도 따라간다).
+create or replace function public.slg_run_regions() returns int
+language sql stable set search_path = public as $$ select greatest(1, count(*))::int from slg_regions $$;
+
+create or replace function public.slg_pool_max_rolls(p_suffix text) returns int
+language sql stable set search_path = public as $$
+  select coalesce(max(least(10, greatest(1, slg_int(data ->> 'rolls', 1)))), 0)::int
+  from slg_records where collection_name = 'rewardPools' and record_id like '%-' || p_suffix
+$$;
+
+-- 회차당 보스: 구역 수만큼
+create or replace function public.slg_run_boss_cap() returns int
+language sql stable set search_path = public as $$ select slg_run_regions() $$;
+
+-- 회차당 보상 수령(전투 · 정예 · 보스 · 이벤트): 구역 수 × 7
+create or replace function public.slg_run_claim_cap() returns int
+language sql stable set search_path = public as $$ select slg_run_regions() * 7 $$;
+
+-- 회차당 전투 유물: 구역마다 (첫 전투 1 × 일반 전투 rolls + 중간 5층 × 일반·정예 중 큰 rolls + 보스 1)
+create or replace function public.slg_run_relic_cap() returns int
+language sql stable set search_path = public as $$
+  select slg_run_regions() * (slg_pool_max_rolls('battle') + 5 * greatest(slg_pool_max_rolls('battle'), slg_pool_max_rolls('elite')) + 1)
+$$;
+
+-- 노드가 속한 구역: 노드 id 앞부분이 실제 구역이면 그것, 아니면 섹터
+create or replace function public.slg_enc_region(p_node_id text, p_sector text) returns text
+language sql stable set search_path = public as $$
+  select case when exists (select 1 from slg_regions r where r.region_id = split_part(coalesce(p_node_id, ''), '-', 1))
+              then split_part(p_node_id, '-', 1) else p_sector end
 $$;
 
 -- ---------------------------------------------------------------- 전투 · 이벤트
@@ -1910,15 +1959,15 @@ begin
   if exists (select 1 from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.node_id = p_node_id and x.status in ('awaiting', 'claimed')) then
     return jsonb_build_object('ok', false, 'error', 'node_done');
   end if;
-  if p_type = 'boss' and exists (select 1 from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.sector_id = p_sector and x.type = 'boss' and x.status in ('awaiting', 'claimed')) then
+  if p_type = 'boss' and exists (select 1 from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.region_id = slg_enc_region(p_node_id, p_sector) and x.type = 'boss' and x.status in ('awaiting', 'claimed')) then
     return jsonb_build_object('ok', false, 'error', 'boss_done');
   end if;
-  if p_type = 'boss' and (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.type = 'boss' and x.status in ('awaiting', 'claimed')) >= slg_cfg('boss_per_loop') then
+  if p_type = 'boss' and (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.type = 'boss' and x.status in ('awaiting', 'claimed')) >= slg_run_boss_cap() then
     return jsonb_build_object('ok', false, 'error', 'boss_done');
   end if;
   update slg_encounters set status = 'void' where user_id = uid and status = 'active';   -- 동시에 진행 중인 전투는 하나뿐
-  insert into slg_encounters (user_id, "loop", ref, node_id, sector_id, type, enemies, started_ms)
-    values (uid, p."loop", p_ref, p_node_id, p_sector, p_type, least(greatest(coalesce(p_enemies, 1), 1), slg_cfg('enc_max_enemies')::int), now_ms);
+  insert into slg_encounters (user_id, "loop", ref, node_id, sector_id, region_id, type, enemies, started_ms)
+    values (uid, p."loop", p_ref, p_node_id, p_sector, slg_enc_region(p_node_id, p_sector), p_type, least(greatest(coalesce(p_enemies, 1), 1), slg_cfg('enc_max_enemies')::int), now_ms);
   return jsonb_build_object('ok', true, 'status', 'active');
 end $$;
 
@@ -1946,7 +1995,7 @@ begin
       return jsonb_build_object('ok', false, 'error', 'too_fast', 'waitMs', (slg_cfg('enc_min_ms') - (now_ms - e.started_ms))::bigint);
     end if;
     if (select count(*) from slg_encounters x where x.user_id = uid and x.claimed_ms > now_ms - 3600000) >= slg_cfg('claims_per_hour')
-       or (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.claimed_ms is not null) >= slg_cfg('claims_per_loop') then
+       or (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.claimed_ms is not null) >= slg_run_claim_cap() then
       return jsonb_build_object('ok', false, 'error', 'rate_limited');
     end if;
     mult := case e.type when 'boss' then 10 when 'elite' then 1.5 else 1 end;
@@ -2003,7 +2052,7 @@ begin
   v_ref := 'ev:' || p_node_id;
   select * into e from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.ref = v_ref;
   if found then return jsonb_build_object('ok', true, 'dup', true, 'event', e.result, 'items', slg_items_json(uid)); end if;
-  if (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.claimed_ms is not null) >= slg_cfg('claims_per_loop') then
+  if (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.claimed_ms is not null) >= slg_run_claim_cap() then
     return jsonb_build_object('ok', false, 'error', 'rate_limited');
   end if;
   if (select count(*) from slg_encounters x where x.user_id = uid and x.claimed_ms > now_ms - 3600000) >= slg_cfg('claims_per_hour') then
@@ -2030,7 +2079,8 @@ begin
   perform slg_lock();
   now_ms := slg_now_ms();
   p := slg_player_for(uid);
-  update slg_players set rewinders = rewinders - 1 where user_id = uid and rewinders > 0 returning rewinders into left_n;
+  update slg_players set rewinders = rewinders - 1, rewinders_gift = greatest(0, least(rewinders_gift, rewinders) - 1)
+    where user_id = uid and rewinders > 0 returning rewinders into left_n;   -- 선물분부터 쓴다
   if left_n is null then return jsonb_build_object('ok', false, 'error', 'none', 'rewinders', p.rewinders); end if;
   perform slg_item_log_add(uid, p."loop", 'rewinder_use', 1, null, null, now_ms);
   return jsonb_build_object('ok', true, 'rewinders', left_n);
@@ -2047,7 +2097,7 @@ begin
   p := slg_player_for(uid);
   perform slg_tick(uid, now_ms);
   select * into p from slg_players where user_id = uid;
-  if p.rewinders >= slg_cfg('rewinder_hold_max') then return jsonb_build_object('ok', false, 'error', 'full', 'rewinders', p.rewinders); end if;
+  if p.rewinders - least(p.rewinders, p.rewinders_gift) >= slg_cfg('rewinder_hold_max') then return jsonb_build_object('ok', false, 'error', 'full', 'rewinders', p.rewinders); end if;
   if (select count(*) from slg_item_log l where l.user_id = uid and l.kind = 'rewinder_buy' and l.at_ms > now_ms - 86400000) >= slg_cfg('rewinder_day_buys') then
     return jsonb_build_object('ok', false, 'error', 'daily_limit', 'rewinders', p.rewinders);
   end if;
@@ -2110,8 +2160,8 @@ begin
   now_ms := slg_now_ms();
   p := slg_player_for(uid);
   if p.items_migrated then return jsonb_build_object('ok', true, 'already', true, 'items', slg_items_json(uid)); end if;
-  update slg_players set items_migrated = true, rewinders = least(slg_cfg('rewinder_hold_max')::int,
-      greatest(rewinders, least(greatest(coalesce(p_rewinders, 0), 0), slg_cfg('migrate_rewinder_cap')::int))) where user_id = uid;
+  update slg_players set items_migrated = true, rewinders = least(rewinders, rewinders_gift) + least(slg_cfg('rewinder_hold_max')::int,
+      greatest(rewinders - least(rewinders, rewinders_gift), least(greatest(coalesce(p_rewinders, 0), 0), slg_cfg('migrate_rewinder_cap')::int))) where user_id = uid;
   if jsonb_typeof(p_relics) = 'array' then
     for x in select v from jsonb_array_elements(p_relics) v limit 40 loop
       exit when n >= slg_cfg('migrate_relic_cap');
@@ -2162,7 +2212,7 @@ end $$;
 --   * 보내기 · 목록 · 회수는 운영자(slg_admin_uid)만. 받는 쪽은 자기에게 보이는 메일만 본다.
 --   * 받기(slg_mail_claim)는 메일당 한 번. 골드 · 리와인더 · 유물은 서버가 바로 지급하고,
 --     캐릭터는 클라이언트가 가진 용병 명부에 들어가야 하므로 우편(slg_inbox 'unit_gift')으로 보낸다 (받을 때까지 다시 전달된다).
---   * 운영자 선물은 플레이어의 회차 · 하루 획득 상한에 세지 않는다 (운영자가 정한 양을 그대로 준다).
+--   * 운영자 선물은 플레이어의 획득 상한(리와인더 보유 · 회차 · 하루, 회차 전투 유물 상한)에 세지 않는다 (운영자가 정한 양을 그대로 준다).
 -- ============================================================================
 
 -- 첨부 검사. 통과하면 { ok, attach }, 아니면 { ok:false, error, detail }
@@ -2339,7 +2389,7 @@ begin
   rw := coalesce((a ->> 'rewinders')::int, 0);
   if g > 0 then perform slg_credit(p_uid, g, 'earn_mail', 'mail:' || p_id, p_now); end if;
   if rw > 0 then
-    update slg_players set rewinders = rewinders + rw where user_id = p_uid;
+    update slg_players set rewinders = rewinders + rw, rewinders_gift = least(rewinders, rewinders_gift) + rw where user_id = p_uid;
     perform slg_item_log_add(p_uid, p."loop", 'rewinder_mail', rw, 'mail:' || p_id, null, p_now);   -- rewinder_grant 가 아니라서 획득 상한에 세지 않는다
   end if;
   for x in select v from jsonb_array_elements(coalesce(a -> 'relics', '[]'::jsonb)) v loop

@@ -387,8 +387,8 @@ await put('rewardPools', 'loop-b', { id: 'loop-b', rolls: 1, entries: [{ type: '
   for (let i = 0; i < 3; i++) await start('atk4', 'a' + i, 'N-a' + i);
   eq(Number((await q1("select count(*) c from slg_encounters where user_id = $1 and status = 'active'", [await uid('atk4')])).c), 1, '진행 중인 전투는 하나뿐');
   let bosses = 0;
-  for (let i = 0; i < 8; i++) { const r = await fight('atk4', 'bs' + i, { node: 'B-' + i, sector: 'FAKE' + i, type: 'boss', n: 12 }); if (r.ok) bosses++; if (r.needChoice) await claim('atk4', 'bs' + i, 0); }
-  ok(bosses <= 4, `가짜 구역으로 보스를 반복해도 회차당 4번까지 (${bosses})`);
+  for (let i = 0; i < 20; i++) { const r = await fight('atk4', 'bs' + i, { node: 'B-' + i, sector: 'FAKE' + i, type: 'boss', n: 12 }); if (r.ok) bosses++; if (r.needChoice) await claim('atk4', 'bs' + i, 0); }
+  ok(bosses <= 16, `가짜 구역으로 보스를 반복해도 회차당 국가 수(16)까지 (${bosses})`);
   // 5) 이전: 전설 유물은 못 받는다
   await boot('atk5', 450); await s.q('update slg_players set items_migrated = false where user_id = $1', [await uid('atk5')]);
   const m = await s.rpc('slg_items_migrate', [0, JSON.stringify([{ id: 'leg1' }, { id: 'g1' }])], 'atk5');

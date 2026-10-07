@@ -127,7 +127,7 @@
       const txt = resultText(merged);
       if (txt) { toast(`📬 우편 수령: ${txt}`, 'success'); log(`📬 [우편 수령] ${txt}`, 'gold'); }
       else toast('받을 우편이 없습니다.', 'info');
-      if (merged.relicsFailed.length) toast(`⚠️ 유물 ${merged.relicsFailed.length}개는 받지 못했습니다 (이번 회차 유물 상한 또는 이미 가진 지휘관 유물).`, 'warning');
+      if (merged.relicsFailed.length) toast(`⚠️ 유물 ${merged.relicsFailed.length}개는 받지 못했습니다 (이미 가진 지휘관 유물은 하나만 가질 수 있습니다).`, 'warning');
       setBadge(r.badge);
       await SE().sync('now');   // 리와인더 · 유물 · 캐릭터(우편) · 골드를 화면에 맞춘다
       await refresh();
@@ -230,7 +230,7 @@
       <div class="mailbox-attach">
         <div class="mailbox-attach-title">첨부 ${claimed ? '— 받음' : ''}</div>
         <div class="mailbox-attach-grid">${parts.map((p) => `<span class="mailbox-chip${claimed ? ' done' : ''}">${p.icon} ${esc(p.text)}</span>`).join('')}</div>
-        ${claimed && m.result && (m.result.relicsFailed || []).length ? `<div class="mailbox-note">⚠️ 유물 ${m.result.relicsFailed.length}개는 받지 못했습니다 (이번 회차 유물 상한 또는 이미 가진 지휘관 유물).</div>` : ''}
+        ${claimed && m.result && (m.result.relicsFailed || []).length ? `<div class="mailbox-note">⚠️ 유물 ${m.result.relicsFailed.length}개는 받지 못했습니다 (이미 가진 지휘관 유물은 하나만 가질 수 있습니다).</div>` : ''}
         ${!claimed && ((m.attach && Number(m.attach.gold) > 0) || (m.attach && (m.attach.relics || []).length)) ? '<div class="mailbox-note">골드와 유물은 회귀하면 사라집니다. 필요할 때 받으세요.</div>' : ''}
       </div>` : '';
     return `

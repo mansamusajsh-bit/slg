@@ -3280,7 +3280,7 @@
         // 서버가 가격 · 보유 상한 · 잔액을 확인하고 리와인더를 준다 (값은 서버가 정한다)
         window.ServerEconomy.call('slg_rewinder_buy', { p_src: 'village' }).then((res) => {
           if (!res || res.ok !== true) {
-            const msg = res && res.error === 'full' ? '⚠️ 리와인더가 가득 찼습니다. (최대 10개)'
+            const msg = res && res.error === 'full' ? '⚠️ 게임에서 얻은 리와인더가 가득 찼습니다. (최대 10개 · 우편 선물은 제외)'
               : res && res.error === 'insufficient' ? `⚠️ 골드가 부족합니다! (필요: ${res.cost}G)` : '⚠️ 서버와 통신하지 못해 구매하지 못했습니다.';
             addLog(msg, 'warning');
             if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
@@ -4334,7 +4334,7 @@
                 window.ServerEconomy.call('slg_rewinder_buy', { p_src: 'shop' }).then((res) => {
                   shopBusy = false;
                   if (!res || res.ok !== true) {
-                    const msg = res && res.error === 'full' ? '⚠️ 리와인더가 가득 찼습니다. (최대 10개)' : res && res.error === 'insufficient' ? `⚠️ 골드가 부족합니다! (필요: ${res.cost}G)` : '⚠️ 서버와 통신하지 못해 구매하지 못했습니다.';
+                    const msg = res && res.error === 'full' ? '⚠️ 게임에서 얻은 리와인더가 가득 찼습니다. (최대 10개 · 우편 선물은 제외)' : res && res.error === 'insufficient' ? `⚠️ 골드가 부족합니다! (필요: ${res.cost}G)` : '⚠️ 서버와 통신하지 못해 구매하지 못했습니다.';
                     addLog(msg, 'warning');
                     if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, 'warning');
                     return;
