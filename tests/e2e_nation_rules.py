@@ -224,13 +224,12 @@ with sync_playwright() as pw:
       getTile(3,5).terrain='forest'; const fort=getCombatOdds(k,e).factors.find(f=>f.label.startsWith('병과 특성: 방진'));
       const a=__mk('pA','ARCHER','PLAYER',2,2); __scene(null,[a],[e],{'2,2':'mountain'});
       const eagle=getUnitAttackRange(a);
-      return {charge:charge&&charge.pct, chargeMax, fort:fort&&fort.pct, eagle, burst:[getCollateralBurstBonus(__mk('m','MAGE','PLAYER',0,0),2), getCollateralBurstBonus(__mk('m','MAGE','PLAYER',0,0),9)]};
+      return {charge:charge&&charge.pct, chargeMax, fort:fort&&fort.pct, eagle};
     }""")
     print('   ',r)
     c.ok(r['charge']==12 and r['chargeMax']==20, '기사 기마 돌격: 이동 칸당 +4%, 최대 +20%')
     c.ok(r['fort']==15, '근접 방진 구축: 숲에서 방어 +15%')
     c.ok(r['eagle']>=2, '궁수 독수리의 눈: 산악에서 사거리 +1')
-    c.ok(abs(r['burst'][0]-0.10)<1e-9 and abs(r['burst'][1]-0.20)<1e-9, '마법사 연쇄 폭발: 인접 적당 +5%p, 최대 +20%p')
 
     print('\n=== 부관 브리핑 ===')
     b=page.evaluate("()=>{ const B=window.NATION_RULE_BRIEFS||{}; return {missing: Object.keys(NationRules.NATION_RULES).filter(id=>!B[id] || !Object.keys(B[id]).length)}; }")

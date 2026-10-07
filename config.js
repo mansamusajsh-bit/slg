@@ -489,6 +489,12 @@
           maxBonus: 0.20
         },
         {
+          id: "PASSIVE_KNIGHT_FLANK_ATTACK",
+          name: "측면 공격",
+          description: "교전에서 승리하면 대상과 같은 타일에 있던 적 공성(화기) 유닛 전원에게 공격력의 30% 피해 (전사시키지 않음).",
+          flankDamageRatio: 0.30
+        },
+        {
           id: "PASSIVE_KNIGHT_ANTIBULLET_RANK2",
           name: "방탄 마갑 (Rank 2)",
           description: "승급 2단계 해금. 화기(FIREARM) 유닛으로부터 받는 모든 원거리 피해를 40% 경감합니다.",
@@ -547,16 +553,16 @@
       ]
     },
 
-    // 5-2. 마법사 (MAGE): 광역 공성 및 2차 피해 유닛
+    // 5-2. 마법사 (MAGE): 광역 마법 화력 유닛
     MAGE: {
       id: "MAGE",
       name: "마법사 (Mage)",
-      role: "공성 파괴 및 광역 화력 유닛",
+      role: "광역 마법 화력 유닛",
       tier: "STANDARD",
       avatar: "🔮",
       hp: 100,
       maxHp: 100,
-      description: "긴 사거리의 광역 마법과 강력한 공성 유닛. 인접 타일 및 동일 타일에 중첩된 적들에게 막대한 2차 피해를 입힙니다.",
+      description: "긴 사거리에서 강력한 마법 화력을 퍼붓는 원거리 유닛.",
       acquisitionSource: "STANDARD_BARRACKS",
       baseStats: {
         hp: 100,
@@ -564,21 +570,11 @@
         attack: 94,
         defense: 18,
         mobility: 2,
-        range: { min: 2, max: 3 },
-        collateralDamage: 0.45,
-        siegeBonus: 0.60
+        range: { min: 2, max: 3 }
       },
       growthPerLevel: { hp: 0, attack: 8.8, defense: 1.5 },
       baseMaintenanceCost: 12,
-      innatePassives: [
-        {
-          id: "PASSIVE_MAGE_COLLATERAL_BURST",
-          name: "연쇄 폭발",
-          description: "목표 타일에 인접한 적 유닛 수마다 2차 피해량이 +5%씩 증폭 (최대 +20%).",
-          splashScalePerAdjacent: 0.05,
-          maxBonus: 0.20
-        }
-      ],
+      innatePassives: [],
       skillTree: [
         {
           id: "SKILL_MAGE_FIRE_BOLT",
@@ -826,6 +822,12 @@
           name: "직사 궤적",
           description: "직선 경로상에 아군이나 산악이 가로막을 경우 사격 불가.",
           requiresClearLineOfSight: true
+        },
+        {
+          id: "PASSIVE_FIREARM_SIEGE_COLLATERAL",
+          name: "공성 포격",
+          description: "공격 시 승패와 상관없이 목표 타일·인접 타일의 다른 적에게 공격력의 30% 2차 피해 (전사시키지 않음).",
+          collateralRatio: 0.30
         }
       ],
       skillTree: [

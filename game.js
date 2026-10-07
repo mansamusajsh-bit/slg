@@ -2099,9 +2099,14 @@
 
     /** 스플래시 피해: HP를 최소 1까지만 깎는다 (전사시키지 않음). 실제로 깎인 양을 돌려준다. */
     function applySplashDamage(unit, amount) {
-      const before = unit.hp;
       // 철갑 외피: 아군이 받는 2차 스플래시 피해 -30%
       if (isPlayerSideUnit(unit) && state.commander?.unlockedSkills?.Ironclad) amount *= 0.70;
+      return applyNonLethalDamage(unit, amount);
+    }
+
+    /** 전사시키지 않는 피해 (스플래시 · 기사 측면 공격): 보호막이 먼저 흡수하고 HP는 최소 1까지만 깎는다. */
+    function applyNonLethalDamage(unit, amount) {
+      const before = unit.hp;
       amount = absorbShield(unit, Math.max(0, Math.round(amount)));
       unit.hp = Math.max(Math.min(1, before), before - amount);
       if (unit.stats) unit.stats.hp = unit.hp;
@@ -2209,8 +2214,7 @@
     const MELEE_FORTIFY_DEF = 0.15;          // 근접 방진 구축: 방어 지형에서 방어 +15%
     const KNIGHT_CHARGE_PER_TILE = 4;        // 기사 기마 돌격: 이번 턴 이동한 칸당 공격 +4%
     const KNIGHT_CHARGE_MAX = 20;            //   최대 +20%
-    const MAGE_BURST_PER_ADJ = 0.05;         // 마법사 연쇄 폭발: 인접 적 1명당 스플래시 +5%p
-    const MAGE_BURST_MAX = 0.20;             //   최대 +20%p
+    const KNIGHT_FLANK_RATIO = 0.30;         // 기사 측면 공격: 승리 시 같은 칸 공성 유닛에게 공격력의 30% 피해
 
     function getUnitClassKey(unit) {
       return String((unit && (unit.classType || unit.unitClass)) || '').toUpperCase();
@@ -2224,11 +2228,47 @@
       const t = getTile(unit.x, unit.y);
       return String((t && (t.terrain || t.type)) || '').toLowerCase() === 'mountain' ? 1 : 0;
     }
-    /** 마법사 연쇄 폭발: 피격 칸에 인접한(8방향) 상대 수만큼 스플래시 비율 가산 */
-    function getCollateralBurstBonus(attacker, adjacentCount) {
-      if (getUnitClassKey(attacker) !== 'MAGE' || !(adjacentCount > 0)) return 0;
-      return Math.min(MAGE_BURST_MAX, adjacentCount * MAGE_BURST_PER_ADJ);
+    /** 공성 병과(2차 피해를 주는 병과): 화기 */
+    function isSiegeUnit(unit) {
+      return getUnitClassKey(unit) === 'FIREARM';
     }
+    function getOpposingUnits(unit) {
+      return isPlayerSideUnit(unit) ? state.enemyUnits : state.playerUnits;
+    }
+
+    /** 공성 2차 피해: 공성 유닛의 공격은 승패와 상관없이 피격 칸·인접 8칸의 다른 상대에게 번진다 (전사시키지 않음). */
+    function applySiegeCollateral(attacker, defender, center, finalAtk) {
+      if (!isSiegeUnit(attacker)) return;
+      const ratio = debugParams.collateralDamageMultiplier ?? 0.30;
+      if (!(ratio > 0)) return;
+      const victims = getOpposingUnits(attacker).filter(u =>
+        !u.isDead && u.id !== defender.id &&
+        Math.abs(u.x - center.x) <= 1 && Math.abs(u.y - center.y) <= 1
+      );
+      if (!victims.length) return;
+      const amount = Math.round(finalAtk * ratio);
+      const toPlayer = !isPlayerSideUnit(attacker);
+      victims.forEach(v => {
+        const dealt = applySplashDamage(v, amount);
+        addLog(`💥 [공성 2차 피해] ${attacker.name}의 포격이 ${toPlayer ? '아군' : '적'} ${v.name}에게 ${dealt} 피해 (${Math.round(ratio * 100)}%) (잔여 HP: ${v.hp}/${v.maxHp})`, toPlayer ? 'danger' : 'warning');
+      });
+    }
+
+    /** 기사 측면 공격: 기사가 교전에서 이기면 피격 칸에 함께 있던 상대 공성 유닛들이 피해를 입는다 (전사시키지 않음). */
+    function applyKnightFlankAttack(attacker, defender, center, finalAtk) {
+      if (getUnitClassKey(attacker) !== 'KNIGHT') return;
+      const victims = getOpposingUnits(attacker).filter(u =>
+        !u.isDead && u.id !== defender.id && isSiegeUnit(u) && u.x === center.x && u.y === center.y
+      );
+      if (!victims.length) return;
+      const amount = Math.round(finalAtk * KNIGHT_FLANK_RATIO);
+      const toPlayer = !isPlayerSideUnit(attacker);
+      victims.forEach(v => {
+        const dealt = applyNonLethalDamage(v, amount);
+        addLog(`🐎 [병과 특성: 측면 공격] ${attacker.name}이(가) 우회해 ${toPlayer ? '아군' : '적'} 공성 유닛 ${v.name}에게 ${dealt} 피해 (잔여 HP: ${v.hp}/${v.maxHp})`, toPlayer ? 'danger' : 'warning');
+      });
+    }
+
     /** 이동 기록: 기마 돌격(이동 칸 수) · 티노 부동 반격(이동하지 않은 유닛)이 읽는다. 진영 턴 시작마다 0으로. */
     function recordUnitMove(unit, tiles) {
       if (unit) unit.movedTilesThisTurn = (Number(unit.movedTilesThisTurn) || 0) + Math.max(1, Number(tiles) || 1);
@@ -2456,26 +2496,6 @@
           if (!spokeThisCombat && Math.random() < 0.35) {
             speakUnitLine(attacker, 'enemy_defeated', 'victory', lineVars);
           }
-          const baseSplashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
-          if (baseSplashRatio > 0) {
-            const adjEnemies = state.enemyUnits.filter(e =>
-              !e.isDead && e.id !== defender.id &&
-              Math.abs(e.x - defender.x) <= 1 && Math.abs(e.y - defender.y) <= 1
-            );
-            // 병과 특성: 마법사 연쇄 폭발 — 인접 적 1명당 스플래시 +5%p (최대 +20%p)
-            const burst = getCollateralBurstBonus(attacker, adjEnemies.length);
-            if (burst > 0) addLog(`🔥 [병과 특성: 연쇄 폭발] 인접 적 ${adjEnemies.length}명 — 2차 피해 +${Math.round(burst * 100)}%p`, 'warning');
-            const splashRatio = baseSplashRatio + burst;
-            const splashDamage = Math.round(finalAtk * splashRatio);
-            if (adjEnemies.length > 0) {
-              adjEnemies.forEach(adj => {
-                // 스플래시는 피해만 준다: HP 1 아래로는 깎지 않는다 (스플래시로는 아무도 죽지 않는다).
-                const dealt = applySplashDamage(adj, splashDamage);
-                addLog(`💥 [2차 스플래시 피해] 인접 적 ${adj.name}에게 ${dealt} 피해 (${(splashRatio*100).toFixed(0)}%)! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'warning');
-              });
-            }
-          }
-
           // 포섭 판정: 확률·초기 호감도는 지휘관의 포섭 방침이 정한다. 포섭하지 못하면 전리품.
           const defenderCaptured = tryCaptureEnemy(defender, defender.x, defender.y);
           if (!defenderCaptured) {
@@ -2533,24 +2553,6 @@
           // 국가 규칙: 현상금 사냥(나루) — 아군을 쓰러뜨린 적은 AP 1 회복
           if (window.NationRules) NationRules.onKill(attacker, defender);
 
-          // 인접 아군 유닛들에게 스플래시 피해
-          const baseSplashRatio = debugParams.collateralDamageMultiplier ?? 0.30;
-          if (baseSplashRatio > 0) {
-            const adjPlayers = state.playerUnits.filter(p =>
-              !p.isDead && p.id !== defender.id &&
-              Math.abs(p.x - defender.x) <= 1 && Math.abs(p.y - defender.y) <= 1
-            );
-            // 병과 특성: 마법사 연쇄 폭발 (적 마법사도 같다)
-            const splashRatio = baseSplashRatio + getCollateralBurstBonus(attacker, adjPlayers.length);
-            const splashDamage = Math.round(finalAtk * splashRatio);
-            if (adjPlayers.length > 0) {
-              adjPlayers.forEach(adj => {
-                const dealt = applySplashDamage(adj, splashDamage);
-                addLog(`💥 [적군 스플래시 피해] 인접 아군 ${adj.name}에게 ${dealt} 피해! (잔여 HP: ${adj.hp}/${adj.maxHp})`, 'danger');
-              });
-            }
-          }
-
           // 해당 타일에 아군이 모두 없으면 적군이 전진 돌파
           const remainingPlayersAtTile = state.playerUnits.filter(p => !p.isDead && p.x === defender.x && p.y === defender.y);
           // 원거리(사거리 2 이상)에서 쏜 적은 그 자리에서 쏜 것이라 전진하지 않는다
@@ -2598,6 +2600,10 @@
           if (window.NationRules) NationRules.onUnitDeath(attacker, { captured: attackerCaptured });
         }
       }
+
+      // 병과 특성: 공성 2차 피해 (승패 무관) · 기사 측면 공격 (승리 시, 퇴각한 상대 포함 / 불굴 무승부 제외)
+      applySiegeCollateral(attacker, defender, defenderPos, finalAtk);
+      if (isWin && !loserSaved) applyKnightFlankAttack(attacker, defender, defenderPos, finalAtk);
 
       // 국가 규칙: 교전 후 효과 (아라 돌파 넉백 · 실바 치고 빠지기)
       if (window.NationRules) {
