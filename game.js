@@ -140,7 +140,7 @@
         icon: '🌾',
         difficulty: 'EASY',
         stars: '★☆☆☆☆',
-        terrainDesc: '탁 트인 평야 지대로 기동력이 우수하며 ZOC 전선 형성이 빠름',
+        terrainDesc: '탁 트인 평야 지대로 기동력이 우수함',
         terrainComposition: { plain: 65, forest: 25, hill: 10 },
         enemyForce: '👺 고블린 유격대 (두목 그룩)',
         // recPower: 예전 고정 추천 전투력. 화면에는 더 이상 쓰지 않는다 (estimateNodeEnemyPower가 실제 적 기준으로 계산).
@@ -2742,31 +2742,6 @@
        -------------------------------------------------------------------------- */
     const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    function computeZocTiles() {
-      const zocSet = new Set();
-      const aliveEnemies = state.enemyUnits.filter(e => !e.isDead);
-      aliveEnemies.forEach(e => {
-        // 8방향 인접 타일들을 ZOC 통제 구역으로 판정
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dy = -1; dy <= 1; dy++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = e.x + dx;
-            const ny = e.y + dy;
-            if (isInsideBattleMap(nx, ny)) {
-              const hasEnemy = aliveEnemies.some(oe => oe.x === nx && oe.y === ny);
-              if (!hasEnemy) {
-                zocSet.add(`${nx},${ny}`);
-              }
-            }
-          }
-        }
-      });
-      return Array.from(zocSet).map(s => {
-        const [x, y] = s.split(',').map(Number);
-        return { x, y };
-      });
-    }
-
     function updateTurnUIState() {
       const banner = document.getElementById('ai-turn-banner');
       const endTurnBtn = document.getElementById('btn-end-turn');
@@ -2904,65 +2879,7 @@
       if (validMoves.length === 0) return false;
 
       // ========================================================================
-      // 우선순위 2: 마을/도시 및 길목 차단 (ZOC / 포위망 형성)
-      // 3셀 이내에 다른 적 유닛이 존재하는 경우, 상호 2셀 간격을 유지하며 길목 차단
-      // ========================================================================
-      const allyEnemies = state.enemyUnits.filter(e => !e.isDead && e.id !== enemy.id && (Math.abs(e.x - enemy.x) + Math.abs(e.y - enemy.y) <= 3));
-      if (allyEnemies.length > 0) {
-        const chokePoints = getBattleTiles().filter(t => t.isSafe || t.isCity || t.type === 'village' || t.type === 'city');
-
-        // 각 후보 타일의 ZOC 포위망 적합도 점수 계산
-        function scoreZocTile(pt) {
-          let score = 0;
-          // 1. 아군 적 유닛과 상호 2셀 간격 유지 보너스
-          allyEnemies.forEach(a => {
-            const d = Math.abs(pt.x - a.x) + Math.abs(pt.y - a.y);
-            if (d === 2) score += 60; // 2셀 간격 유지 최고 점수
-            else if (d === 1) score += 20; // 1셀(중첩/인접) 차선책
-            else if (d === 3) score += 10;
-          });
-
-          // 2. 주요 거점 및 길목(마을, 도시 입구) 차단 보너스
-          if (chokePoints.length > 0) {
-            const minKeyDist = Math.min(...chokePoints.map(c => Math.abs(pt.x - c.x) + Math.abs(pt.y - c.y)));
-            score -= minKeyDist * 5;
-          }
-
-          // 3. 플레이어 전선과의 대치 거리 (2~3셀 거리 압박)
-          if (livingPlayers.length > 0) {
-            const minPlayerDist = Math.min(...livingPlayers.map(p => Math.abs(pt.x - p.x) + Math.abs(pt.y - p.y)));
-            score -= Math.abs(minPlayerDist - 2) * 8;
-          }
-
-          return score;
-        }
-
-        const currentScore = scoreZocTile({ x: enemy.x, y: enemy.y });
-        let bestTile = null;
-        let highestScore = currentScore;
-
-        validMoves.forEach(m => {
-          const s = scoreZocTile(m);
-          if (s > highestScore) {
-            highestScore = s;
-            bestTile = m;
-          }
-        });
-
-        if (bestTile) {
-          enemy.x = bestTile.x;
-          enemy.y = bestTile.y;
-          enemy.ap -= getUnitMoveCost(enemy, getTile(bestTile.x, bestTile.y));
-          recordUnitMove(enemy, 1);
-          const targetTile = getTile(bestTile.x, bestTile.y);
-          addLog(`🛡️ [적군 ZOC 차단선 형성] ${enemy.name}이(가) 동료 적군과 2셀 간격의 ZOC 포위망을 형성하며 [${targetTile ? targetTile.name : '길목'}](${bestTile.x}, ${bestTile.y})을(를) 차단했습니다! (잔여 AP: ${enemy.ap})`, 'warning');
-          renderAll();
-          return true;
-        }
-      }
-
-      // ========================================================================
-      // 우선순위 3: 마을/도시 거점 점령 및 압박
+      // 우선순위 2: 마을/도시 거점 점령 및 압박
       // 가장 가까운 미점령 마을이나 도시(왕도/요새) 방향으로 전진 이동하여 거점 압박
       // ========================================================================
       const baseTargets = getBattleTiles().filter(t => t.isCity || t.type === 'village' || t.isSafe);
@@ -3004,7 +2921,7 @@
       }
 
       // ========================================================================
-      // 우선순위 4: 정찰 및 배회 (Scout / Roam)
+      // 우선순위 3: 정찰 및 배회 (Scout / Roam)
       // 플레이어 시작 지점(왕도 에테르니아 3, 4) 또는 생존 플레이어 방면으로 접근 탐색
       // ========================================================================
       const roamTarget = livingPlayers.length > 0 ? livingPlayers[0] : { x: 3, y: 4 };
@@ -3443,7 +3360,6 @@
       const selUnit = getExplicitSelectedUnit();
       let moveTiles = [];
       let attackTiles = [];
-      const zocTiles = computeZocTiles();
 
       // 스킬 대상 선택 중이면 이동/공격 표시 대신 스킬 대상 칸을 표시한다.
       let skillValid = [];
@@ -3494,9 +3410,6 @@
 
         const isSelected = selUnit && selUnit.x === t.x && selUnit.y === t.y;
         if (isSelected) tileDiv.classList.add('selected');
-
-        const isZoc = zocTiles.some(zt => zt.x === t.x && zt.y === t.y);
-        if (isZoc) tileDiv.classList.add('zoc-zone');
 
         // 스마트 모드: 유닛이 선택되면 이동 및 공격 가능 타일이 자동으로 활성화됨
         const canMove = moveTiles.some(mt => mt.x === t.x && mt.y === t.y);

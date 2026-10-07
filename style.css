@@ -698,39 +698,6 @@
       to { box-shadow: inset 0 0 10px #f43f5e, 0 0 8px rgba(244, 63, 94, 0.45); }
     }
 
-    /* ZOC (Zone of Control) Frontline Highlighting */
-    .tile.zoc-zone {
-      border: 1.5px dashed #ea580c !important;
-      background: rgba(234, 88, 12, 0.09) !important;
-      box-shadow: inset 0 0 6px rgba(234, 88, 12, 0.22), 0 0 5px rgba(239, 68, 68, 0.2) !important;
-      transition: all 0.2s ease;
-    }
-    .tile.zoc-zone::after {
-      content: 'ZOC';
-      position: absolute;
-      bottom: 1px;
-      right: 1px;
-      font-size: 6.5px;
-      font-weight: 900;
-      color: #ea580c;
-      background: rgba(255, 247, 237, 0.95);
-      border: 1px solid #fdba74;
-      border-radius: 2px;
-      padding: 0 2px;
-      line-height: 1;
-      pointer-events: none;
-      z-index: 3;
-      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
-    }
-    .tile.zoc-zone.attack-target {
-      border: 2px solid #f43f5e !important;
-      background: rgba(244, 63, 94, 0.25) !important;
-    }
-    .tile.zoc-zone.move-target {
-      border: 2px solid #f97316 !important;
-      background: rgba(249, 115, 22, 0.22) !important;
-    }
-
     /* Enemy Turn Indicator Banner & Disabled Button */
     .ai-turn-banner {
       position: absolute;
