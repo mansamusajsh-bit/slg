@@ -6365,3 +6365,19 @@
 .nshop-buy:disabled{opacity:.5;cursor:not-allowed;background:#334155;border-color:#475569}
 .nshop-empty{text-align:center;color:#94a3b8;font-size:13px;line-height:1.6;padding:24px 8px;grid-column:1/-1}
 .nshop-foot{margin-top:10px;font-size:11px;color:#94a3b8;text-align:center}
+
+/* 겹친 아군 중 스킬 대상 고르기 */
+.skill-ally-picker-overlay{position:fixed;inset:0;z-index:9500;background:rgba(15,23,42,.45);display:flex;align-items:center;justify-content:center;padding:16px}
+.skill-ally-picker{width:100%;max-width:340px;max-height:100%;display:flex;flex-direction:column;background:linear-gradient(180deg,#f8fbff 0%,#f3eeff 100%);border:1px solid #c4b5fd;border-radius:16px;box-shadow:0 18px 44px rgba(15,23,42,.3);overflow:hidden}
+.skill-ally-picker-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 12px;border-bottom:1px solid #ddd6fe;font-size:13px;font-weight:900;color:#5b21b6}
+.skill-ally-picker-close{width:26px;height:26px;flex-shrink:0;border:1px solid #cbd5e1;border-radius:50%;background:#fff;color:#475569;font-size:12px;font-weight:900;cursor:pointer}
+.skill-ally-picker-list{display:flex;flex-direction:column;gap:6px;padding:10px;overflow-y:auto}
+.skill-ally-picker-item{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border:1px solid #e0e7ff;border-radius:12px;background:#fff;text-align:left;cursor:pointer;font:inherit;color:#0f172a}
+.skill-ally-picker-item:hover,.skill-ally-picker-item:focus-visible{border-color:#8b5cf6;box-shadow:0 0 0 2px rgba(139,92,246,.25);outline:none}
+.skill-ally-picker-portrait{width:44px;height:44px;flex-shrink:0;border-radius:10px;background-color:#e0e7ff;background-repeat:no-repeat;display:flex;align-items:center;justify-content:center}
+.skill-ally-picker-info{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.skill-ally-picker-name{font-size:13px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.skill-ally-picker-name small{font-size:10px;font-weight:800;color:#7c3aed}
+.skill-ally-picker-stats{font-size:10px;font-weight:700;color:#64748b}
+.skill-ally-picker-hp{display:block;height:5px;border-radius:3px;background:#e2e8f0;overflow:hidden}
+.skill-ally-picker-hp i{display:block;height:100%;background:linear-gradient(90deg,#34d399,#10b981)}

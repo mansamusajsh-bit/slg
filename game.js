@@ -8814,7 +8814,56 @@
         addLog('⚠️ 지정할 수 없는 칸입니다. 보라색 칸을 선택하거나 상단의 취소를 누르세요.', 'warning');
         return;
       }
+      // 아군 1명 지정 스킬인데 그 칸에 아군이 여럿 겹쳐 있으면 누구에게 쓸지 고른다
+      const t = skill.targeting;
+      if (t.mode === 'ALLY' && t.radius === 0) {
+        const stack = state.playerUnits.filter(u => !u.isDead && u.x === x && u.y === y);
+        if (stack.length > 1) { openSkillAllyPicker(unit, skill, x, y, stack); return; }
+      }
       performSkillCast(unit, skill, x, y);
+    }
+
+    // 겹친 아군 중 스킬 대상 고르기. 닫으면 대상 선택 상태로 돌아간다 (다른 칸을 고르거나 배너에서 취소).
+    function openSkillAllyPicker(caster, skill, x, y, stack) {
+      closeSkillAllyPicker();
+      const overlay = document.createElement('div');
+      overlay.id = 'skill-ally-picker';
+      overlay.className = 'skill-ally-picker-overlay';
+      overlay.innerHTML = `
+        <div class="skill-ally-picker" role="dialog" aria-modal="true">
+          <div class="skill-ally-picker-head">
+            <span>${escapeGachaHtml(skill.icon || '✨')} ${escapeGachaHtml(skill.name)} — 대상 선택</span>
+            <button type="button" class="skill-ally-picker-close" aria-label="닫기">✕</button>
+          </div>
+          <div class="skill-ally-picker-list">
+            ${stack.map(u => {
+              const hpPct = Math.max(0, Math.min(100, Math.round((u.hp / (u.maxHp || 1)) * 100)));
+              return `
+              <button type="button" class="skill-ally-picker-item" data-target-id="${escapeGachaHtml(u.id)}">
+                ${renderPortrait(u, { className: 'skill-ally-picker-portrait', emojiSize: '22px' })}
+                <span class="skill-ally-picker-info">
+                  <span class="skill-ally-picker-name">${escapeGachaHtml(u.name)}${u.id === caster.id ? ' <small>(자신)</small>' : ''}</span>
+                  <span class="skill-ally-picker-stats">HP ${u.hp}/${u.maxHp} · 공 ${u.atk} · 방 ${u.def} · AP ${u.ap}</span>
+                  <span class="skill-ally-picker-hp"><i style="width:${hpPct}%"></i></span>
+                </span>
+              </button>`;
+            }).join('')}
+          </div>
+        </div>`;
+      overlay.onclick = (e) => { if (e.target === overlay) closeSkillAllyPicker(); };
+      overlay.querySelector('.skill-ally-picker-close').onclick = closeSkillAllyPicker;
+      overlay.querySelectorAll('[data-target-id]').forEach(btn => {
+        btn.onclick = () => {
+          closeSkillAllyPicker();
+          if (!skillTargeting) return;
+          performSkillCast(caster, skill, x, y, { targetId: btn.dataset.targetId });
+        };
+      });
+      document.body.appendChild(overlay);
+    }
+
+    function closeSkillAllyPicker() {
+      document.getElementById('skill-ally-picker')?.remove();
     }
 
     // 적에게 해로운 효과가 하나라도 있는 스킬인가 (호감도가 낮으면 거부 대상이 되는 스킬)
@@ -8847,10 +8896,10 @@
         { skill: skill.name, target: targetName || '적군' }, { hideIllust: overlayShowsUnit });
     }
 
-    function performSkillCast(unit, skill, x, y) {
+    function performSkillCast(unit, skill, x, y, opts = {}) {
       if (!SkillEngine.isValidTarget(unit, skill, x, y)) return false;
       saveHistorySnapshot();
-      const res = SkillEngine.cast(unit, skill, x, y);
+      const res = SkillEngine.cast(unit, skill, x, y, opts);
       if (!res.ok) {
         addLog(`⚠️ [${skill.name}] ${res.reason}`, 'warning');
         if (typeof window.UI?.showToast === 'function') window.UI.showToast(`${skill.name}: ${res.reason}`, 'warning');
@@ -8871,6 +8920,7 @@
     function cancelSkillTargeting(silent) {
       const had = !!skillTargeting;
       skillTargeting = null;
+      closeSkillAllyPicker();
       const banner = document.getElementById('skill-targeting-banner');
       if (banner) banner.remove();
       if (!silent && had) {

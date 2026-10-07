@@ -670,14 +670,16 @@
     return getValidTargets(caster, skill).some(p => p.x === x && p.y === y);
   }
 
-  /** (x,y)를 중심으로 스킬이 영향을 주는 유닛 */
-  function getAffectedUnits(caster, skill, x, y) {
+  /** (x,y)를 중심으로 스킬이 영향을 주는 유닛. opts.targetId: 같은 칸에 여럿일 때 플레이어가 고른 대상 */
+  function getAffectedUnits(caster, skill, x, y, opts = {}) {
     const t = skill.targeting;
     const matches = (u) => t.affects === 'ALL' || (t.affects === 'ENEMY' ? isHostileTo(caster, u) : !isHostileTo(caster, u));
     if (t.mode === 'SELF' && t.radius === 0) return [caster];
     if ((t.mode === 'ALLY' || t.mode === 'ENEMY') && t.radius === 0) {
       const wantHostile = t.mode === 'ENEMY';
       const here = allUnits().filter(u => u.x === x && u.y === y && isHostileTo(caster, u) === wantHostile);
+      const chosen = opts.targetId != null && here.find(u => u.id === opts.targetId);
+      if (chosen) return [chosen];
       // 같은 칸에 여럿이면 1명만: 시전자 자신 > HP가 낮은 쪽
       here.sort((a, b) => (b.id === caster.id) - (a.id === caster.id) || a.hp - b.hp);
       return here.slice(0, 1);
@@ -750,13 +752,13 @@
   /**
    * @returns {{ok:boolean, reason?:string, results?:Array<{unit, text, color}>}}
    */
-  function cast(caster, skill, x, y) {
+  function cast(caster, skill, x, y, opts = {}) {
     const check = canCast(caster, skill);
     if (!check.ok) return { ok: false, reason: check.reason };
     if (skill.targeting.mode === 'SELF') { x = caster.x; y = caster.y; }
     if (!isValidTarget(caster, skill, x, y)) return { ok: false, reason: '사거리 밖이거나 올바르지 않은 대상입니다.' };
 
-    const targets = getAffectedUnits(caster, skill, x, y);
+    const targets = getAffectedUnits(caster, skill, x, y, opts);
     const swapBlocked = getSwapBlockReason(caster, skill, targets);
     if (swapBlocked) return { ok: false, reason: swapBlocked };
     const results = [];
