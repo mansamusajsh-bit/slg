@@ -1172,7 +1172,17 @@
           live: {
             enemyUnits: state.enemyUnits,
             deployedUnitIds: Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [],
-            defeatedEnemyCount: window.defeatedEnemyCount || 0
+            defeatedEnemyCount: window.defeatedEnemyCount || 0,
+            // 리와인더 스냅샷도 함께 저장 — 새로고침해도 되돌릴 턴이 남도록. 병과 공통 이미지는 위와 같이 뺀다.
+            history: historyStack.map((json) => {
+              try {
+                const s = JSON.parse(json);
+                if (Array.isArray(s.playerUnits)) {
+                  s.playerUnits = s.playerUnits.map(u => (u && u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType]) ? { ...u, imageUrl: '' } : u);
+                }
+                return s;
+              } catch (e) { return null; }
+            }).filter(Boolean)
           }
         } : null;
         const payload = {
@@ -1321,7 +1331,10 @@
       state.currentSector = battle.sectorId;
       if (state.strategy) state.strategy.selectedSectorId = battle.sectorId;
       state.currentView = 'SECTOR_MAP';
-      historyStack = [];
+      historyStack = (live && Array.isArray(live.history) ? live.history : [])
+        .filter(s => s && typeof s === 'object' && Number.isFinite(Number(s.turn)) && Array.isArray(s.playerUnits) && Array.isArray(s.enemyUnits))
+        .slice(-8)
+        .map(s => JSON.stringify(s));
       if (battle.status === 'won') {
         state.isCombatActive = false;
         victoryProcessed = true;
