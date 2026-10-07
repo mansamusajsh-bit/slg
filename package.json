@@ -6,7 +6,7 @@
   "scripts": {
     "build": "node scripts/vercel-static-build.mjs",
     "build:vercel": "node scripts/vercel-static-build.mjs",
-    "test": "node tests/verify_run.cjs && node tests/verify_norm.cjs && node tests/verify_reward.cjs && node tests/verify_shares.cjs && node tests/verify_fed.cjs && node tests/verify_items.mjs && node tests/verify_server.mjs",
+    "test": "node tests/verify_build_files.cjs && node tests/verify_run.cjs && node tests/verify_norm.cjs && node tests/verify_reward.cjs && node tests/verify_shares.cjs && node tests/verify_fed.cjs && node tests/verify_items.mjs && node tests/verify_server.mjs",
     "test:e2e": "python3 tests/e2e_battle.py && python3 tests/e2e_run_nodes.py && python3 tests/e2e_enemy_pool.py && python3 tests/e2e_reward_editor.py && python3 tests/e2e_relic_gift.py && python3 tests/e2e_power.py && python3 tests/e2e_illustration.py && python3 tests/e2e_rewinder.py"
   },
   "devDependencies": {

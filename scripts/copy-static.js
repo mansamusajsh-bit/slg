@@ -15,6 +15,7 @@ const STATIC_FILES = [
   'config.js',
   'skillEngine.js',
   'nationRules.js',
+  'nationRuleBriefs.js',
   'skillEditor.js',
   'dialogueLines.js',
   'skill-system.css',

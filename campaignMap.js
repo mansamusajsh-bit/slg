@@ -188,10 +188,13 @@
       const status = regionStatus(campaign, selectedRegionId);
       if (status === 'secured') return pickLine('secured', selectedRegionId, vars, adjutant);
       if (status === 'locked') return pickLine('locked', selectedRegionId, vars, adjutant);
-      if (status === 'current') return pickLine('inProgress', selectedRegionId, vars, adjutant);
+      // 작전 중이거나 다른 작전 때문에 못 들어가는 구역도, 정찰된 구역이면 적 설명(성향·국가 규칙)을 덧붙인다.
+      // 미확인(locked) 구역은 정찰 정보가 없다는 설정이라 덧붙이지 않는다.
+      const withEnemy = (line) => { const enemy = enemyBriefing(selectedRegionId, adjutant); return enemy ? line + ' ' + enemy : line; };
+      if (status === 'current') return withEnemy(pickLine('inProgress', selectedRegionId, vars, adjutant));
       if (campaign.currentRegionId) {
         vars.current = getRegionName(campaign.currentRegionId);
-        return pickLine('busyElsewhere', selectedRegionId, vars, adjutant);
+        return withEnemy(pickLine('busyElsewhere', selectedRegionId, vars, adjutant));
       }
       let text = pickLine(r.role === 'final' ? 'final' : 'available', selectedRegionId, vars, adjutant);
       const enemy = enemyBriefing(selectedRegionId, adjutant);

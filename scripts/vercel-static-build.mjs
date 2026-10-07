@@ -16,6 +16,7 @@ const files = [
   'config.js',
   'skillEngine.js',
   'nationRules.js',
+  'nationRuleBriefs.js', // 부관 브리핑의 국가 규칙 대사 (성격별 말투)
   'skillEditor.js',
   'dialogueLines.js',
   'skill-system.css',

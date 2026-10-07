@@ -10,6 +10,7 @@ const staticFilesToCopy = [
   'config.js',
   'skillEngine.js',
   'nationRules.js',
+  'nationRuleBriefs.js',
   'skillEditor.js',
   'ui.js',
   'dbManager.js',
