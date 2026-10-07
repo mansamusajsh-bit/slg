@@ -23,10 +23,12 @@ const files = [
   'ui.js',
   'game.js',
   'shareEngine.js',
+  'shopEngine.js', // 국가 국영상점 (순수 로직)
   'fedEngine.js',
   'serverEconomy.js',
   'mailbox.js', // 우편함 (운영자 메일)
   'nationShares.js',
+  'nationShop.js', // 국가 국영상점 화면
   'fedSystem.js',
   'campaignMap.js',
   'authUI.js',

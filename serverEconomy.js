@@ -222,7 +222,7 @@
     switch (e.kind) {
       case 'tax': {
         const by = Object.entries(p.byRegion || {}).map(([id, g]) => `${(global.REGIONS && global.REGIONS[id] ? global.REGIONS[id].name.ko : id)} ${g}G`).join(', ');
-        return [`🏛️ [세금 정산] ${p.hours}시간 주기 ${p.count}회분 +${p.total}G (${by})`, 'gold', `🏛️ 세금 정산 +${p.total}G`, 'success'];
+        return [`🏛️ [세금 정산] ${p.hours}시간 주기 ${p.count}회분 +${p.total}G (${by})${p.shop ? ` · 국영상점 매출 가산 +${p.shop}G` : ''}`, 'gold', `🏛️ 세금 정산 +${p.total}G`, 'success'];
       }
       case 'share_payout': return [`💰 [지분 매각] ${(global.REGIONS && global.REGIONS[p.regionId] ? global.REGIONS[p.regionId].title.ko : p.regionId)} 지분 일부가 다른 플레이어에게 매입됨 — 대금 +${p.gold}G`, 'gold'];
       case 'loan_interest': return [`🏦 [대출 이자] ${p.name} 담보 대출 이자 -${p.amount}G (${p.done}/${p.total}회)`, 'gold'];

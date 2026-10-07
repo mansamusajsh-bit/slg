@@ -17,6 +17,7 @@
 // 세금: 서버 시각 기준 고정 주기(8h → 보유 플레이어가 늘면 4h → 1h)의 경계마다 지분율대로 지급.
 //   시간당 세수는 주기와 무관하게 같다 (주기가 짧아지면 자주, 조금씩 받는다).
 //   세수는 국가마다 다르다: (base + 위협도 × perThreat) × 국가 세율(region.taxMult). 받을 때 물가(인플레이션)가 곱해진다.
+//   국영상점(shopEngine.js) 판매 대금은 세수에 가산된다: 국가 기록의 sales[{at,gold}]가 다음 정산 때 지분율대로 나뉜다 (물가는 이미 반영됨).
 // 유물: 정산 때마다 그 국가 지분 1위가 아닌 보유자에게 확률로 유물이 나온다. 종류·등급 분포는 국가 성향(RELIC_PROFILES)이 정한다.
 // ============================================================
 
@@ -179,16 +180,37 @@
   function computePayout({ nations, regions, holderId, fromMs, toMs, hours }) {
     const count = settlementsBetween(fromMs, toMs, hours);
     const byRegion = {};
+    const shopByRegion = {};   // 국영상점 매출 가산분 (물가가 이미 반영되어 있다)
     let total = 0;
+    let shopTotal = 0;
+    const settledUntil = count > 0 ? lastSettlementAt(toMs, hours) : fromMs;
     if (count > 0) {
+      const from = Math.max(fromMs, toMs - CONFIG.maxCatchupHours * HOUR);
       (nations || []).forEach((n) => {
         const bp = holderBp(n, holderId);
         if (!bp) return;
         const gold = Math.floor((taxPerSettlement(regions[n.regionId], hours) * bp / TOTAL_BP) * count);
         if (gold > 0) { byRegion[n.regionId] = gold; total += gold; }
+        const shop = Math.floor(shopRevenue(n, from, settledUntil) * bp / TOTAL_BP);
+        if (shop > 0) { shopByRegion[n.regionId] = shop; shopTotal += shop; }
       });
     }
-    return { count, total, byRegion, settledUntil: count > 0 ? lastSettlementAt(toMs, hours) : fromMs };
+    return { count, total, byRegion, shopTotal, shopByRegion, settledUntil };
+  }
+
+  // ---- 국영상점 매출 (세수 가산) ----
+  // 국가 기록의 sales: [{ at, gold }] — 상점에서 팔린 대금 중 세수에 가산되는 금액. 정산이 지나면 쓸모가 없어 오래된 것은 버린다.
+  function shopRevenue(nation, fromMs, toMs) {
+    return ((nation && nation.sales) || []).reduce((a, s) => (s.at > fromMs && s.at <= toMs ? a + (Number(s.gold) || 0) : a), 0);
+  }
+  /** 매출 1건을 더한 새 국가 기록 (원본은 건드리지 않는다) */
+  function addShopSale(nation, gold, atMs) {
+    const next = clone(nation);
+    const keepFrom = atMs - (CONFIG.maxCatchupHours + 24) * HOUR;
+    next.sales = (next.sales || []).filter((s) => s.at > keepFrom);
+    if (gold > 0) next.sales.push({ at: atMs, gold: Math.floor(gold) });
+    next.rev = (Number(nation.rev) || 0) + 1;
+    return next;
   }
 
   // ---- 유물 보상 (지분 1위 제외) ----
@@ -335,7 +357,7 @@
     TOTAL_BP, CONFIG, DUMMY_NAMES, RELIC_PROFILES,
     createNation, splitBp, holderBp, unownedBp, listHolders,
     taxPerHour, taxPerSettlement, countRealHolders, intervalHours,
-    lastSettlementAt, nextSettlementAt, settlementsBetween, computePayout,
+    lastSettlementAt, nextSettlementAt, settlementsBetween, computePayout, shopRevenue, addShopSale,
     relicProfile, isTopHolder, relicChance, pickRelic, rollTaxRelics,
     pricePerBp, quotePurchase, applyPurchase, releaseHolder, isStale, claimPayout
   };

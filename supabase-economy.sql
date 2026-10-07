@@ -349,6 +349,19 @@ create table if not exists public.slg_item_log (
 );
 create index if not exists slg_item_log_user on public.slg_item_log (user_id, kind, "loop");
 
+-- 국가 국영상점 매출: 판매 대금 중 세수에 가산되는 금액. 정산(slg_settle_player)이 (이전 정산, 이번 정산] 동안의 매출을 지분율대로 나눠 준다.
+create table if not exists public.slg_shop_sales (
+  region_id text not null references public.slg_regions (region_id),
+  at_ms bigint not null,
+  gold bigint not null check (gold > 0)
+);
+create index if not exists slg_shop_sales_region on public.slg_shop_sales (region_id, at_ms);
+
+insert into public.slg_config (key, value) values
+  ('shop_slots', 6), ('shop_price_common', 150), ('shop_price_rare', 400), ('shop_price_epic', 1000),
+  ('shop_commander_pct', 150), ('shop_tax_pct', 100), ('shop_day_buys', 12)
+on conflict (key) do nothing;
+
 insert into public.slg_config (key, value) values
   ('rewinder_hold_max', 10), ('rewinder_loop_grants', 40), ('rewinder_price_village', 120), ('rewinder_price_shop', 150),
   ('commander_slots', 3), ('migrate_rewinder_cap', 5), ('migrate_relic_cap', 10),
@@ -395,7 +408,7 @@ declare t text;
 begin
   foreach t in array array['slg_config','slg_regions','slg_players','slg_wallet_log','slg_admins','slg_admin_emails','slg_events','slg_inbox','slg_econ',
                            'slg_motion','slg_motion_votes','slg_nations','slg_shares','slg_payouts','slg_share_rights','slg_secured','slg_mail','slg_mail_state',
-                           'slg_loans','slg_auctions','slg_audit','slg_relics','slg_encounters','slg_item_log']
+                           'slg_loans','slg_auctions','slg_audit','slg_relics','slg_encounters','slg_item_log','slg_shop_sales']
   loop
     execute format('alter table public.%I enable row level security', t);
     execute format('revoke all on public.%I from public', t);
@@ -886,7 +899,7 @@ create or replace function public.slg_settle_player(p_uid uuid, p_now bigint) re
 language plpgsql volatile set search_path = public as $$
 declare
   v_loop int; p slg_players%rowtype; o record; hours int; step bigint; from_ms bigint; cnt bigint; reg record; g numeric; total bigint := 0; k numeric;
-  by_region jsonb := '{}'; holds boolean; settled_until bigint; v_price numeric;
+  by_region jsonb := '{}'; holds boolean; settled_until bigint; v_price numeric; sg numeric; shop_total bigint := 0;
 begin
   select * into p from slg_players where user_id = p_uid;
   v_loop := p."loop";
@@ -909,21 +922,22 @@ begin
   cnt := greatest(0, (p_now / step) - (from_ms / step));
   if cnt = 0 then return; end if;
   select e.price into v_price from slg_econ e where e.id = 1;
+  settled_until := (p_now / step) * step;
   for reg in select s.region_id, s.bp from slg_shares s where s.holder = p_uid::text and s."loop" is not distinct from v_loop and s.bp > 0 order by s.region_id loop
     g := floor((slg_tax_per_settlement(reg.region_id, hours) * reg.bp / 10000) * cnt);
-    if g > 0 then
-      k := round(g * v_price);
-      if k > 0 then
-        by_region := by_region || jsonb_build_object(reg.region_id, k);
-        total := total + k::bigint;
-      end if;
+    k := case when g > 0 then round(g * v_price) else 0 end;
+    -- 국영상점 매출 가산분: 팔릴 때 이미 물가가 반영된 대금이라 물가를 다시 곱하지 않는다
+    sg := floor(coalesce((select sum(x.gold) from slg_shop_sales x where x.region_id = reg.region_id and x.at_ms > from_ms and x.at_ms <= settled_until), 0) * reg.bp / 10000.0);
+    if sg > 0 then k := k + sg; shop_total := shop_total + sg::bigint; end if;
+    if k > 0 then
+      by_region := by_region || jsonb_build_object(reg.region_id, k);
+      total := total + k::bigint;
     end if;
   end loop;
-  settled_until := (p_now / step) * step;
   update slg_players set last_settled_ms = settled_until where user_id = p_uid;
   if total > 0 then
     perform slg_credit(p_uid, total, 'tax', null, p_now);
-    perform slg_event(p_uid, 'tax', jsonb_build_object('hours', hours, 'count', cnt, 'total', total, 'byRegion', by_region,
+    perform slg_event(p_uid, 'tax', jsonb_build_object('hours', hours, 'count', cnt, 'total', total, 'shop', shop_total, 'byRegion', by_region,
       'relics', slg_tax_relics(p_uid, v_loop, array(select jsonb_object_keys(by_region)), cnt, p_now)), p_now);
   end if;
 end $$;
@@ -1643,7 +1657,7 @@ create or replace function public.slg_sync(p_name text default null, p_ack_event
 language plpgsql volatile security definer set search_path = public as $$
 declare
   uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; nations jsonb; rights jsonb; loans jsonb; auctions jsonb; inbox jsonb; events jsonb; members jsonb;
-  recent bigint;
+  recent bigint; shop_pending jsonb; shop_step bigint;
 begin
   perform slg_lock();
   now_ms := slg_now_ms();
@@ -1670,6 +1684,10 @@ begin
   ) n;
   select coalesce(jsonb_object_agg(region_id, jsonb_build_object('maxBp', max_bp, 'boughtBp', bought_bp, 'availableMs', available_ms)), '{}'::jsonb) into rights
     from slg_share_rights where user_id = uid and "loop" = p."loop";
+  -- 다음 정산 때 세수에 가산될 국영상점 매출 (마지막 정산 시각 이후 팔린 대금)
+  shop_step := slg_interval_hours() * 3600000::bigint;
+  select coalesce(jsonb_object_agg(region_id, gold), '{}'::jsonb) into shop_pending
+    from (select x.region_id, sum(x.gold) as gold from slg_shop_sales x where x.at_ms > (now_ms / shop_step) * shop_step group by x.region_id) sp;
   select coalesce(jsonb_agg(slg_loan_json(l) order by l.started_ms), '[]'::jsonb) into loans from slg_loans l where l.user_id = uid and l.status = 'active';
   select coalesce(jsonb_agg(jsonb_build_object(
       'id', a.id, 'unit', a.unit, 'value', a.value, 'status', a.status, 'reason', a.reason, 'sellerName', a.seller_name,
@@ -1686,7 +1704,7 @@ begin
   return jsonb_build_object(
     'ok', true, 'now', now_ms,
     'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'nameSet', p.name_set, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid), 'debt', p.debt),
-    'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights,
+    'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights, 'shopPending', shop_pending,
     'loans', loans, 'auctions', auctions, 'inbox', inbox, 'events', events,
     'items', slg_items_json(uid), 'mail', slg_mail_badge(uid, now_ms), 'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
 end $$;
@@ -2448,6 +2466,111 @@ begin
   return jsonb_build_object('ok', true, 'badge', slg_mail_badge(uid, now_ms));
 end $$;
 
+
+-- ============================================================================
+-- 국가 국영상점 (shopEngine.js 와 같은 규칙)
+--   * 국가마다 유물을 판다. 진열은 국가 성향(slg_relic_weight)의 가중치와 구역 고정 시드로 정해져 국가마다 다르다.
+--   * 최상급(legendary) · 개명 유물은 팔지 않는다 — 최상급은 전투 보상으로만 얻는다.
+--   * 점령한 (이번 회차) 국가의 상점만 열린다.
+--   * 가격 = 등급 기준가(지휘관 유물은 shop_commander_pct%) × 물가 (slg_scale) − 유물 상점 할인(shopDiscount).
+--   * 대금의 shop_tax_pct% 는 그 국가의 매출(slg_shop_sales)로 쌓여 다음 정산 때 지분율대로 보유자에게 세수로 가산된다.
+-- ============================================================================
+create or replace function public.slg_shop_price(p_def jsonb, p_price numeric) returns bigint
+language sql stable set search_path = public as $$
+  select slg_scale(slg_cfg('shop_price_' || coalesce(p_def ->> 'rarity', 'common'))
+                   * case when p_def ->> 'kind' = 'commander' then slg_cfg('shop_commander_pct') / 100.0 else 1 end, p_price)
+$$;
+
+-- 국가의 진열 (유물 id 목록). 가중치 비복원 추출: 키 = -ln(u) / 가중치 가 작은 순.
+create or replace function public.slg_shop_stock(p_region text) returns text[]
+language sql stable set search_path = public as $$
+  select coalesce(array_agg(q.record_id order by q.key, q.record_id), '{}') from (
+    select d.record_id, -ln(greatest(slg_rand('shop|' || p_region || '|' || d.record_id), 0.000000001)) / w.w as key
+    from slg_records d
+    join slg_regions r on r.region_id = p_region
+    cross join lateral (select slg_relic_weight(r.relic_profile, d.data ->> 'kind', coalesce(d.data ->> 'rarity', 'common')) as w) w
+    where d.collection_name = 'relics'
+      and coalesce(d.data ->> 'rarity', 'common') in ('common', 'rare', 'epic')
+      and d.data ->> 'kind' in ('gift', 'commander')
+      and w.w > 0
+    order by key, d.record_id
+    limit slg_cfg('shop_slots')::int
+  ) q
+$$;
+
+-- 이 플레이어가 실제로 내는 값 (물가 · 유물 상점 할인 반영)
+create or replace function public.slg_shop_cost(p_uid uuid, p_def jsonb, p_price numeric) returns bigint
+language plpgsql stable set search_path = public as $$
+declare cost bigint := slg_shop_price(p_def, p_price); pct numeric := least(75, greatest(0, slg_equipped_stat(p_uid, 'shopDiscount')));
+begin
+  if pct > 0 then cost := greatest(1, round(cost * (1 - pct / 100))::bigint); end if;
+  return cost;
+end $$;
+
+create or replace function public.slg_shop_list(p_region text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; econ_price numeric; items jsonb; bought int; pending bigint; shop_step bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  if not exists (select 1 from slg_regions where region_id = p_region) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  select * into p from slg_players where user_id = uid;
+  if not exists (select 1 from slg_secured where user_id = uid and region_id = p_region and "loop" = p."loop") then
+    return jsonb_build_object('ok', false, 'error', 'not_secured');
+  end if;
+  select e.price into econ_price from slg_econ e where e.id = 1;
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'id', x.id, 'name', left(coalesce(dd.d ->> 'name', x.id), 60), 'kind', dd.d ->> 'kind', 'rarity', coalesce(dd.d ->> 'rarity', 'common'),
+      'description', left(coalesce(dd.d ->> 'description', ''), 300), 'effects', coalesce(dd.d -> 'effects', '[]'::jsonb), 'imageUrl', dd.d -> 'imageUrl',
+      'price', slg_shop_cost(uid, dd.d, econ_price),
+      'owned', (dd.d ->> 'kind' = 'commander' and exists (select 1 from slg_relics r where r.user_id = uid and r.relic_id = x.id and r.kind = 'commander' and r.used_ms is null))
+    ) order by x.ord), '[]'::jsonb) into items
+    from unnest(slg_shop_stock(p_region)) with ordinality as x(id, ord)
+    cross join lateral (select slg_relic_def(x.id) as d) dd;
+  select count(*) into bought from slg_item_log l where l.user_id = uid and l.kind = 'shop_buy' and l.at_ms > now_ms - 86400000;
+  shop_step := slg_interval_hours() * 3600000::bigint;
+  select coalesce(sum(s.gold), 0) into pending from slg_shop_sales s where s.region_id = p_region and s.at_ms > (now_ms / shop_step) * shop_step;
+  return jsonb_build_object('ok', true, 'regionId', p_region, 'items', items, 'bought', bought, 'dayLimit', slg_cfg('shop_day_buys'),
+    'discountPct', least(75, greatest(0, slg_equipped_stat(uid, 'shopDiscount'))), 'taxPct', slg_cfg('shop_tax_pct'), 'pending', pending,
+    'balance', p.gold);
+end $$;
+
+create or replace function public.slg_shop_buy(p_region text, p_relic_id text) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; econ_price numeric; d jsonb; cost bigint; ok boolean; rid bigint; tax bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  perform slg_tick(uid, now_ms);
+  if p_region is null or p_relic_id is null or not exists (select 1 from slg_regions where region_id = p_region) then return jsonb_build_object('ok', false, 'error', 'bad_request'); end if;
+  select * into p from slg_players where user_id = uid;
+  if not exists (select 1 from slg_secured where user_id = uid and region_id = p_region and "loop" = p."loop") then
+    return jsonb_build_object('ok', false, 'error', 'not_secured');
+  end if;
+  if not (p_relic_id = any (slg_shop_stock(p_region))) then return jsonb_build_object('ok', false, 'error', 'not_in_stock'); end if;
+  if (select count(*) from slg_item_log l where l.user_id = uid and l.kind = 'shop_buy' and l.at_ms > now_ms - 86400000) >= slg_cfg('shop_day_buys') then
+    return jsonb_build_object('ok', false, 'error', 'daily_limit');
+  end if;
+  d := slg_relic_def(p_relic_id);
+  if d ->> 'kind' = 'commander' and exists (select 1 from slg_relics r where r.user_id = uid and r.relic_id = p_relic_id and r.kind = 'commander' and r.used_ms is null) then
+    return jsonb_build_object('ok', false, 'error', 'owned');
+  end if;
+  select e.price into econ_price from slg_econ e where e.id = 1;
+  cost := slg_shop_cost(uid, d, econ_price);
+  ok := slg_debit(uid, cost, 'spend_item', 'shop:' || p_region || ':' || p_relic_id, now_ms, null, true);
+  if not ok then return jsonb_build_object('ok', false, 'error', 'insufficient', 'cost', cost); end if;
+  rid := slg_grant_relic(uid, p_relic_id, jsonb_build_object('type', 'shop', 'regionId', p_region), now_ms);
+  if rid is null then raise exception 'grant_failed'; end if;   -- 대금도 함께 되돌아간다
+  tax := floor(cost * slg_cfg('shop_tax_pct') / 100.0)::bigint;
+  delete from slg_shop_sales where at_ms < now_ms - 100 * 3600000::bigint;
+  if tax > 0 then insert into slg_shop_sales (region_id, at_ms, gold) values (p_region, now_ms, tax); end if;
+  perform slg_item_log_add(uid, p."loop", 'shop_buy', 1, p_region || ':' || p_relic_id, jsonb_build_object('cost', cost, 'tax', tax), now_ms);
+  return jsonb_build_object('ok', true, 'cost', cost, 'tax', tax, 'relicId', p_relic_id, 'balance', (select gold from slg_players where user_id = uid), 'items', slg_items_json(uid));
+end $$;
+
 -- ============================================================================
 -- 권한: 내부 함수는 아무도 못 부르고, RPC 만 로그인한 사용자가 부른다
 -- ============================================================================
@@ -2455,7 +2578,7 @@ do $$
 declare f record; rpc text[] := array['slg_bootstrap','slg_wallet_apply','slg_admin_adjust','slg_is_admin','slg_loop_return','slg_region_secure',
   'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_loan_collateral','slg_loan_seized','slg_audit_list','slg_auction_bid','slg_sync','slg_set_name','slg_name_available',
   'slg_encounter_start','slg_encounter_claim','slg_event_roll','slg_rewinder_use','slg_rewinder_buy','slg_relic_equip','slg_relic_gift','slg_items_migrate',
-  'slg_admin_mail_send','slg_admin_mail_list','slg_admin_mail_revoke','slg_mail_list','slg_mail_read','slg_mail_claim','slg_mail_delete'];
+  'slg_shop_list','slg_shop_buy','slg_admin_mail_send','slg_admin_mail_list','slg_admin_mail_revoke','slg_mail_list','slg_mail_read','slg_mail_claim','slg_mail_delete'];
 begin
   for f in select p.oid::regprocedure as sig, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'slg\_%'

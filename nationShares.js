@@ -217,12 +217,14 @@
     const k = priceLevel();
     res.total = 0;
     Object.keys(res.byRegion).forEach((id) => { res.byRegion[id] = Math.round(res.byRegion[id] * k); res.total += res.byRegion[id]; });
+    // 국영상점 매출 가산분은 팔릴 때 이미 물가가 반영된 대금이라 물가를 다시 곱하지 않는다
+    Object.entries(res.shopByRegion || {}).forEach(([id, g]) => { res.byRegion[id] = (res.byRegion[id] || 0) + g; res.total += g; });
     ledger.lastSettledAt = res.settledUntil;
-    ledger.last = { at: res.settledUntil, total: res.total, count: res.count, hours };
+    ledger.last = { at: res.settledUntil, total: res.total, count: res.count, hours, shop: res.shopTotal || 0 };
     if (res.total > 0) {
       state.gold += res.total;
       const detail = Object.entries(res.byRegion).map(([id, g]) => `${REGIONS[id].name.ko} ${g}G`).join(', ');
-      log(`🏛️ [세금 정산] ${hours}시간 주기 ${res.count}회분 +${res.total}G (${detail})`);
+      log(`🏛️ [세금 정산] ${hours}시간 주기 ${res.count}회분 +${res.total}G (${detail})${res.shopTotal ? ` · 국영상점 매출 가산 +${res.shopTotal}G` : ''}`);
       toast(`🏛️ 세금 정산 +${res.total}G`, 'success');
     }
     awardTaxRelics(Object.keys(res.byRegion), res.count);
@@ -390,6 +392,27 @@
     return r && r.availableMs > serverNow() ? r.availableMs - serverNow() : 0;
   }
 
+  // ---- 국영상점 매출 (세수 가산) ----
+  /** 상점 대금 중 세수에 가산된 금액을 이 국가 기록에 남긴다 (로컬 모드). 서버 모드에서는 서버가 구매 때 이미 기록했다. */
+  async function recordShopSale(regionId, gold) {
+    if (serverMode() || !(gold > 0)) return false;
+    try {
+      await mutate(regionId, (base) => ({ nation: SE.addShopSale(base, gold, serverNow()), result: true }));
+      return true;
+    } catch (e) { console.warn('[NationShares] 상점 매출 기록 실패', e); return false; }
+  }
+  /** 다음 정산 때 이 국가 세수에 더해질 상점 매출 (마지막 정산 이후 팔린 대금) */
+  function shopPending(regionId) {
+    if (serverMode()) {
+      const m = global.ServerEconomy.snapshot.shopPending;
+      return Number(m && m[regionId]) || 0;
+    }
+    const n = nations[regionId];
+    if (!n) return 0;
+    const now = serverNow();
+    return SE.shopRevenue(n, SE.lastSettlementAt(now, currentInterval()), now);
+  }
+
   // ---- 화면용 요약 ----
   function view(regionId) {
     const who = me();
@@ -417,7 +440,8 @@
         holders: SE.listHolders(n),
         unowned: SE.unownedBp(n),
         mine: myId ? SE.holderBp(n, myId) : 0,
-        taxPerSettlement: Math.floor(SE.taxPerSettlement(REGIONS[regionId], hours) * priceLevel())
+        taxPerSettlement: Math.floor(SE.taxPerSettlement(REGIONS[regionId], hours) * priceLevel()),
+        shopPending: shopPending(regionId)
       } : null,
       right: regionId ? rightRemaining(regionId) : 0,
       rightWaitMs: regionId ? rightWaitMs(regionId) : 0,
@@ -427,7 +451,7 @@
   }
 
   global.NationShares = {
-    refresh, settle, buy, quote, awardTaxRelics, maxAffordableBp, view, serverNow,
+    refresh, settle, buy, quote, awardTaxRelics, maxAffordableBp, view, serverNow, recordShopSale, shopPending,
     onRegionSecured, onReturnByDeath,
     _nations: nations
   };

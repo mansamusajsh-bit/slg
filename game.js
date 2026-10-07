@@ -12889,6 +12889,8 @@
     // ========================================================================
     const itemsServerMode = () => !!(window.ServerEconomy && window.ServerEconomy.itemsActive);
     window.itemsServerMode = itemsServerMode;
+    // 국영상점(nationShop.js)이 쓴다
+    Object.assign(window, { RELIC_RARITY_META, describeRelicEffects, getOwnedRelics });
 
     let itemsMigrating = false;
     function migrateLegacyItems() {

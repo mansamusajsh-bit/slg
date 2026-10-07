@@ -320,7 +320,7 @@
       }
       body = `
         <div class="cmp-share-region">
-          <div class="cmp-share-sub"><b>${esc(sel.title.ko)}</b><span>세수 ${n.taxPerSettlement}G / 정산 (세율 ×${Number(sel.taxMult || 1).toFixed(1)})</span><span title="지분 1위가 아닌 보유자에게 정산 때 확률로 지급">유물: ${esc(NS && global.ShareEngine ? global.ShareEngine.relicProfile(sel).label : '')}</span><span>내 지분 <b class="cmp-share-mine">${fmtPct(n.mine)}</b></span></div>
+          <div class="cmp-share-sub"><b>${esc(sel.title.ko)}</b><span>세수 ${n.taxPerSettlement}G / 정산 (세율 ×${Number(sel.taxMult || 1).toFixed(1)})</span>${n.shopPending > 0 ? `<span title="국영상점 판매 대금이 다음 정산 세수에 가산됩니다">🏪 상점 매출 가산 +${n.shopPending}G</span>` : ''}<span title="지분 1위가 아닌 보유자에게 정산 때 확률로 지급">유물: ${esc(NS && global.ShareEngine ? global.ShareEngine.relicProfile(sel).label : '')}</span><span>내 지분 <b class="cmp-share-mine">${fmtPct(n.mine)}</b></span></div>
           <div class="cmp-share-bar">${bar}</div>
           <ul class="cmp-share-list">${rows}</ul>
           ${buy}
@@ -437,7 +437,20 @@
         </button>
       </footer>`;
 
-    root.querySelector('.cmp-map-wrap').appendChild(renderMapSvg(campaign));
+    const mapWrap = root.querySelector('.cmp-map-wrap');
+    mapWrap.appendChild(renderMapSvg(campaign));
+    // 지도 오른쪽 아래: 국영상점 (지도 위에 상점 아이콘). 점령한 국가의 상점만 열린다.
+    if (global.NationShop) {
+      const shopBtn = document.createElement('button');
+      shopBtn.type = 'button';
+      shopBtn.className = 'cmp-shop-btn';
+      shopBtn.dataset.cmpShop = '';
+      shopBtn.title = '국영상점 — 국가마다 파는 유물이 다릅니다';
+      shopBtn.setAttribute('aria-label', '국영상점');
+      shopBtn.innerHTML = `<span class="cmp-shop-ico"><span class="m">🗺️</span><span class="s">🏪</span></span>`;
+      shopBtn.addEventListener('click', () => global.NationShop.open(selectedRegionId));
+      mapWrap.appendChild(shopBtn);
+    }
     root.querySelectorAll('[data-region]').forEach((el) => {
       const pick = () => { selectedRegionId = el.dataset.region; campaign.lastSecured = null; lastSpokenKey = ''; render(); };
       el.addEventListener('click', pick);
