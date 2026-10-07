@@ -263,6 +263,7 @@
       if (r.inboxDone.includes(it.id)) return;          // 이미 받았다 (ack 가 아직 서버에 닿지 않았을 뿐)
       let done = false;
       if (it.kind === 'unit' && SE.onUnit) { try { done = !!SE.onUnit(it.payload || {}); } catch (e) { console.warn('[ServerEconomy] 캐릭터 전달 실패', e); } }
+      if (it.kind === 'unit_gift' && SE.onGift) { try { done = !!SE.onGift(it.payload || {}, it.id); } catch (e) { console.warn('[ServerEconomy] 선물 캐릭터 전달 실패', e); } }
       if (it.kind === 'seize' && SE.onSeize) { try { done = !!SE.onSeize(it.payload || {}); } catch (e) { console.warn('[ServerEconomy] 담보 몰수 처리 실패', e); } }
       if (done) { r.inboxDone.push(it.id); delivered = true; }
       else ackInbox.pop();                              // 못 받았으면 ack 하지 않고 다음에 다시
@@ -414,6 +415,8 @@
     onSnapshot(fn) { listeners.add(fn); return () => listeners.delete(fn); },
     set onUnit(fn) { SE.onUnit = fn; },
     set onSeize(fn) { SE.onSeize = fn; },
+    /** 운영자 메일로 받은 캐릭터 (slg_inbox 'unit_gift'). mailbox.js 가 용병 명부에 넣는다 */
+    set onGift(fn) { SE.onGift = fn; },
     _SE: SE
   };
   global.Wallet = Wallet;

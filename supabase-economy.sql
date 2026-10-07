@@ -347,12 +347,44 @@ insert into public.slg_config (key, value) values
   ('enc_min_ms', 10000), ('rewinder_day_grants', 20), ('rewinder_day_buys', 10), ('boss_per_loop', 4), ('enc_max_enemies', 12), ('claims_per_hour', 30), ('claims_per_loop', 80), ('enc_max_node_len', 48)
 on conflict (key) do nothing;
 
+-- ---------------------------------------------------------------- 운영자 메일 (재화 · 리와인더 · 유물 · 캐릭터 선물)
+-- 운영자가 보내고(slg_admin_mail_send), 플레이어가 우편함에서 직접 받는다(slg_mail_claim). 보상은 받는 순간 서버가 지급한다.
+--   target = null → 전체 메일. include_new 가 false 면 보낸 시점에 이미 가입한 플레이어만 받는다.
+create table if not exists public.slg_mail (
+  id bigserial primary key,
+  target uuid references auth.users (id) on delete cascade,
+  include_new boolean not null default false,
+  title text not null,
+  body text not null default '',
+  attach jsonb not null default '{}'::jsonb,   -- { gold, rewinders, relics:[유물 id], characters:[캐릭터 id] }
+  sender uuid,
+  created_ms bigint not null,
+  expires_ms bigint not null,
+  revoked_ms bigint
+);
+create index if not exists slg_mail_target on public.slg_mail (target, created_ms);
+
+-- 플레이어별 메일 상태 (읽음 · 받음 · 지움). 행이 없으면 아직 안 읽은 것이다.
+create table if not exists public.slg_mail_state (
+  mail_id bigint not null references public.slg_mail (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  read_ms bigint,
+  claimed_ms bigint,
+  deleted_ms bigint,
+  result jsonb,
+  primary key (mail_id, user_id)
+);
+
+insert into public.slg_config (key, value) values
+  ('mail_gold_max', 1000000), ('mail_rewinder_max', 20), ('mail_relic_max', 10), ('mail_char_max', 10), ('mail_days_max', 365)
+on conflict (key) do nothing;
+
 -- ---------------------------------------------------------------- 권한: 브라우저는 테이블을 직접 못 본다 (RPC 만)
 do $$
 declare t text;
 begin
   foreach t in array array['slg_config','slg_regions','slg_players','slg_wallet_log','slg_admins','slg_admin_emails','slg_events','slg_inbox','slg_econ',
-                           'slg_motion','slg_motion_votes','slg_nations','slg_shares','slg_payouts','slg_share_rights','slg_secured',
+                           'slg_motion','slg_motion_votes','slg_nations','slg_shares','slg_payouts','slg_share_rights','slg_secured','slg_mail','slg_mail_state',
                            'slg_loans','slg_auctions','slg_audit','slg_relics','slg_encounters','slg_item_log']
   loop
     execute format('alter table public.%I enable row level security', t);
@@ -1646,7 +1678,7 @@ begin
     'player', jsonb_build_object('id', uid, 'gold', p.gold, 'loop', p."loop", 'name', p.name, 'nameSet', p.name_set, 'createdAt', p.created_ms, 'admin', slg_admin_uid(uid), 'debt', p.debt),
     'fed', slg_fed_json(), 'members', members, 'nations', nations, 'shareHours', slg_interval_hours(), 'rights', rights,
     'loans', loans, 'auctions', auctions, 'inbox', inbox, 'events', events,
-    'items', slg_items_json(uid), 'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
+    'items', slg_items_json(uid), 'mail', slg_mail_badge(uid, now_ms), 'loanBanUntil', p.loan_ban_until_ms, 'config', jsonb_build_object('startGold', slg_cfg('start_gold'), 'stashGold', slg_cfg('stash_gold')));
 end $$;
 
 -- ============================================================================
@@ -2126,12 +2158,254 @@ begin
 end $$;
 
 -- ============================================================================
+-- 운영자 메일
+--   * 보내기 · 목록 · 회수는 운영자(slg_admin_uid)만. 받는 쪽은 자기에게 보이는 메일만 본다.
+--   * 받기(slg_mail_claim)는 메일당 한 번. 골드 · 리와인더 · 유물은 서버가 바로 지급하고,
+--     캐릭터는 클라이언트가 가진 용병 명부에 들어가야 하므로 우편(slg_inbox 'unit_gift')으로 보낸다 (받을 때까지 다시 전달된다).
+--   * 운영자 선물은 플레이어의 회차 · 하루 획득 상한에 세지 않는다 (운영자가 정한 양을 그대로 준다).
+-- ============================================================================
+
+-- 첨부 검사. 통과하면 { ok, attach }, 아니면 { ok:false, error, detail }
+create or replace function public.slg_mail_attach_clean(p jsonb) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare g bigint := 0; rw int := 0; relics jsonb := '[]'; chars jsonb := '[]'; names jsonb := '{}'; x jsonb; id text; nm text;
+begin
+  p := coalesce(p, '{}'::jsonb);
+  if jsonb_typeof(p) <> 'object' then return jsonb_build_object('ok', false, 'error', 'bad_attach'); end if;
+  if p ? 'gold' and p ->> 'gold' is not null then
+    if (p ->> 'gold') !~ '^[0-9]{1,12}$' then return jsonb_build_object('ok', false, 'error', 'bad_gold'); end if;
+    g := (p ->> 'gold')::bigint;
+    if g > slg_cfg('mail_gold_max') then return jsonb_build_object('ok', false, 'error', 'gold_too_much', 'detail', slg_cfg('mail_gold_max')); end if;
+  end if;
+  if p ? 'rewinders' and p ->> 'rewinders' is not null then
+    if (p ->> 'rewinders') !~ '^[0-9]{1,4}$' then return jsonb_build_object('ok', false, 'error', 'bad_rewinders'); end if;
+    rw := (p ->> 'rewinders')::int;
+    if rw > slg_cfg('mail_rewinder_max') then return jsonb_build_object('ok', false, 'error', 'rewinders_too_much', 'detail', slg_cfg('mail_rewinder_max')); end if;
+  end if;
+  if jsonb_typeof(p -> 'relics') = 'array' then
+    if jsonb_array_length(p -> 'relics') > slg_cfg('mail_relic_max') then return jsonb_build_object('ok', false, 'error', 'too_many_relics', 'detail', slg_cfg('mail_relic_max')); end if;
+    for x in select v from jsonb_array_elements(p -> 'relics') v loop
+      id := x #>> '{}';
+      if id is null or slg_relic_def(id) is null then return jsonb_build_object('ok', false, 'error', 'unknown_relic', 'detail', id); end if;
+      relics := relics || jsonb_build_array(id);
+      names := names || jsonb_build_object('relic:' || id, left(coalesce(slg_relic_def(id) ->> 'name', id), 60));
+    end loop;
+  end if;
+  if jsonb_typeof(p -> 'characters') = 'array' then
+    if jsonb_array_length(p -> 'characters') > slg_cfg('mail_char_max') then return jsonb_build_object('ok', false, 'error', 'too_many_characters', 'detail', slg_cfg('mail_char_max')); end if;
+    for x in select v from jsonb_array_elements(p -> 'characters') v loop
+      id := x #>> '{}';
+      if id is null or not exists (select 1 from slg_records r where r.collection_name = 'characters' and r.record_id = id) then
+        return jsonb_build_object('ok', false, 'error', 'unknown_character', 'detail', id);
+      end if;
+      chars := chars || jsonb_build_array(id);
+      select left(coalesce(r.data ->> 'name', id), 60) into nm from slg_records r where r.collection_name = 'characters' and r.record_id = id;
+      names := names || jsonb_build_object('char:' || id, nm);
+    end loop;
+  end if;
+  return jsonb_build_object('ok', true, 'attach', jsonb_build_object('gold', g, 'rewinders', rw, 'relics', relics, 'characters', chars, 'names', names));
+end $$;
+
+create or replace function public.slg_mail_has_attach(a jsonb) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce((a ->> 'gold')::bigint, 0) > 0 or coalesce((a ->> 'rewinders')::int, 0) > 0
+      or coalesce(jsonb_array_length(a -> 'relics'), 0) > 0 or coalesce(jsonb_array_length(a -> 'characters'), 0) > 0
+$$;
+
+-- 이 플레이어에게 보이는 메일인가 (회수 · 만료 · 지움은 따로 본다)
+create or replace function public.slg_mail_for(m slg_mail, p slg_players) returns boolean
+language sql stable set search_path = public as $$
+  select m.target = p.user_id or (m.target is null and (m.include_new or p.created_ms <= m.created_ms))
+$$;
+
+-- 운영자: 보내기. p_target: 'all' (또는 빈 값) = 전체, 그 밖에는 지휘관 이름 (대소문자 · 공백 무시)
+create or replace function public.slg_admin_mail_send(p_target text, p_title text, p_body text, p_attach jsonb,
+                                                     p_days int default 30, p_include_new boolean default false) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; tgt uuid; t text; title text; body text; days int; chk jsonb; mid bigint; cnt int;
+begin
+  if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
+  now_ms := slg_now_ms();
+  t := btrim(coalesce(p_target, ''));
+  if t <> '' and lower(t) not in ('all', '전체') then
+    select user_id into tgt from slg_players where name_key = slg_name_key(t) and name_set limit 1;
+    if tgt is null then return jsonb_build_object('ok', false, 'error', 'no_player', 'detail', t); end if;
+  end if;
+  title := btrim(regexp_replace(coalesce(p_title, ''), '[[:cntrl:]]', '', 'g'));
+  if char_length(title) < 1 then return jsonb_build_object('ok', false, 'error', 'no_title'); end if;
+  if char_length(title) > 60 then return jsonb_build_object('ok', false, 'error', 'title_too_long'); end if;
+  body := coalesce(p_body, '');
+  if char_length(body) > 2000 then return jsonb_build_object('ok', false, 'error', 'body_too_long'); end if;
+  days := coalesce(p_days, 30);
+  if days < 1 or days > slg_cfg('mail_days_max') then return jsonb_build_object('ok', false, 'error', 'bad_days'); end if;
+  chk := slg_mail_attach_clean(p_attach);
+  if not (chk ->> 'ok')::boolean then return chk; end if;
+  insert into slg_mail (target, include_new, title, body, attach, sender, created_ms, expires_ms)
+    values (tgt, tgt is null and coalesce(p_include_new, false), title, body, chk -> 'attach', uid, now_ms, now_ms + days::bigint * 86400000)
+    returning id into mid;
+  if tgt is null then select count(*) into cnt from slg_players; else cnt := 1; end if;
+  perform slg_audit_add(uid, 'mail_send', jsonb_build_object('mailId', mid, 'target', coalesce(t, 'all'), 'title', title, 'attach', chk -> 'attach'), now_ms);
+  return jsonb_build_object('ok', true, 'id', mid, 'recipients', cnt, 'targetName', case when tgt is null then null else (select name from slg_players where user_id = tgt) end);
+end $$;
+
+-- 운영자: 보낸 메일 목록 (받은 사람 수 포함)
+create or replace function public.slg_admin_mail_list(p_limit int default 50) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare uid uuid := slg_uid();
+begin
+  if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
+  return jsonb_build_object('ok', true, 'now', slg_now_ms(), 'mails', coalesce((
+    select jsonb_agg(jsonb_build_object(
+      'id', m.id, 'title', m.title, 'body', m.body, 'attach', m.attach, 'createdAt', m.created_ms, 'expiresAt', m.expires_ms,
+      'revokedAt', m.revoked_ms, 'includeNew', m.include_new,
+      'targetName', case when m.target is null then null else coalesce((select name from slg_players where user_id = m.target), '?') end,
+      'claimed', (select count(*) from slg_mail_state s where s.mail_id = m.id and s.claimed_ms is not null),
+      'read', (select count(*) from slg_mail_state s where s.mail_id = m.id and s.read_ms is not null)) order by m.id desc)
+    from (select * from slg_mail order by id desc limit greatest(1, least(coalesce(p_limit, 50), 200))) m), '[]'::jsonb));
+end $$;
+
+-- 운영자: 회수 (아직 안 받은 사람은 더 이상 받을 수 없다. 이미 받은 것은 그대로)
+create or replace function public.slg_admin_mail_revoke(p_id bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint;
+begin
+  if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
+  now_ms := slg_now_ms();
+  update slg_mail set revoked_ms = now_ms where id = p_id and revoked_ms is null;
+  if not found then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  perform slg_audit_add(uid, 'mail_revoke', jsonb_build_object('mailId', p_id), now_ms);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 우편함 배지: 안 읽은 메일 수 · 받지 않은 첨부가 있는 메일 수
+create or replace function public.slg_mail_badge(p_uid uuid, p_now bigint) returns jsonb
+language sql stable set search_path = public as $$
+  select jsonb_build_object(
+    'unread', count(*) filter (where s.read_ms is null),
+    'unclaimed', count(*) filter (where s.claimed_ms is null and slg_mail_has_attach(m.attach)))
+  from slg_mail m
+  join slg_players p on p.user_id = p_uid
+  left join slg_mail_state s on s.mail_id = m.id and s.user_id = p_uid
+  where m.revoked_ms is null and m.expires_ms > p_now and slg_mail_for(m, p) and s.deleted_ms is null
+$$;
+
+-- 플레이어: 우편함 (만료 · 회수 · 지운 메일은 빠진다. 받은 메일은 받은 뒤 7일까지만 보인다)
+create or replace function public.slg_mail_list() returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype;
+begin
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  return jsonb_build_object('ok', true, 'now', now_ms, 'badge', slg_mail_badge(uid, now_ms), 'mails', coalesce((
+    select jsonb_agg(jsonb_build_object(
+      'id', m.id, 'title', m.title, 'body', m.body, 'attach', m.attach, 'hasAttach', slg_mail_has_attach(m.attach),
+      'createdAt', m.created_ms, 'expiresAt', m.expires_ms, 'personal', m.target is not null,
+      'readAt', s.read_ms, 'claimedAt', s.claimed_ms, 'result', s.result) order by m.id desc)
+    from slg_mail m left join slg_mail_state s on s.mail_id = m.id and s.user_id = uid
+    where m.revoked_ms is null and m.expires_ms > now_ms and slg_mail_for(m, p) and s.deleted_ms is null
+      and (s.claimed_ms is null or s.claimed_ms > now_ms - 7 * 86400000)), '[]'::jsonb));
+end $$;
+
+-- 플레이어: 읽음 표시
+create or replace function public.slg_mail_read(p_id bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; m slg_mail%rowtype; p slg_players%rowtype;
+begin
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  select * into m from slg_mail where id = p_id;
+  if not found or not slg_mail_for(m, p) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  insert into slg_mail_state (mail_id, user_id, read_ms) values (p_id, uid, now_ms)
+    on conflict (mail_id, user_id) do update set read_ms = coalesce(slg_mail_state.read_ms, excluded.read_ms);
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- 한 통 받기 (내부). 이미 받았거나 받을 수 없으면 { ok:false, error }
+create or replace function public.slg_mail_claim_one(p_uid uuid, p_id bigint, p_now bigint) returns jsonb
+language plpgsql volatile set search_path = public as $$
+declare m slg_mail%rowtype; p slg_players%rowtype; st slg_mail_state%rowtype; a jsonb; g bigint; rw int; x jsonb; rid bigint;
+        relics jsonb := '[]'; failed jsonb := '[]'; chars jsonb := '[]'; res jsonb; bal bigint;
+begin
+  select * into m from slg_mail where id = p_id;
+  select * into p from slg_players where user_id = p_uid for update;
+  if m.id is null or not slg_mail_for(m, p) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if m.revoked_ms is not null then return jsonb_build_object('ok', false, 'error', 'revoked'); end if;
+  if m.expires_ms <= p_now then return jsonb_build_object('ok', false, 'error', 'expired'); end if;
+  select * into st from slg_mail_state where mail_id = p_id and user_id = p_uid for update;
+  if st.deleted_ms is not null then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  if st.claimed_ms is not null then return jsonb_build_object('ok', false, 'error', 'already_claimed'); end if;
+  a := m.attach;
+  g := coalesce((a ->> 'gold')::bigint, 0);
+  rw := coalesce((a ->> 'rewinders')::int, 0);
+  if g > 0 then perform slg_credit(p_uid, g, 'earn_mail', 'mail:' || p_id, p_now); end if;
+  if rw > 0 then
+    update slg_players set rewinders = rewinders + rw where user_id = p_uid;
+    perform slg_item_log_add(p_uid, p."loop", 'rewinder_mail', rw, 'mail:' || p_id, null, p_now);   -- rewinder_grant 가 아니라서 획득 상한에 세지 않는다
+  end if;
+  for x in select v from jsonb_array_elements(coalesce(a -> 'relics', '[]'::jsonb)) v loop
+    rid := slg_grant_relic(p_uid, x #>> '{}', jsonb_build_object('type', 'mail', 'mailId', p_id), p_now);
+    if rid is null then failed := failed || jsonb_build_array(x #>> '{}'); else relics := relics || jsonb_build_array(x #>> '{}'); end if;
+  end loop;
+  for x in select v from jsonb_array_elements(coalesce(a -> 'characters', '[]'::jsonb)) v loop
+    insert into slg_inbox (user_id, kind, payload, at_ms)
+      values (p_uid, 'unit_gift', jsonb_build_object('characterId', x #>> '{}', 'mailId', p_id, 'title', m.title), p_now);
+    chars := chars || jsonb_build_array(x #>> '{}');
+  end loop;
+  select gold into bal from slg_players where user_id = p_uid;
+  res := jsonb_build_object('gold', g, 'rewinders', rw, 'relics', relics, 'relicsFailed', failed, 'characters', chars);
+  insert into slg_mail_state (mail_id, user_id, read_ms, claimed_ms, result) values (p_id, p_uid, p_now, p_now, res)
+    on conflict (mail_id, user_id) do update set claimed_ms = excluded.claimed_ms, result = excluded.result,
+      read_ms = coalesce(slg_mail_state.read_ms, excluded.read_ms);
+  return jsonb_build_object('ok', true, 'id', p_id, 'result', res, 'balance', bal);
+end $$;
+
+-- 플레이어: 받기. p_id 가 null 이면 받을 수 있는 메일을 모두 받는다.
+create or replace function public.slg_mail_claim(p_id bigint default null) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; r jsonb; out jsonb := '[]'; mid bigint;
+begin
+  perform slg_lock();
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  if p_id is not null then
+    r := slg_mail_claim_one(uid, p_id, now_ms);
+    return r || jsonb_build_object('badge', slg_mail_badge(uid, now_ms));
+  end if;
+  for mid in select m.id from slg_mail m left join slg_mail_state s on s.mail_id = m.id and s.user_id = uid
+             where m.revoked_ms is null and m.expires_ms > now_ms and slg_mail_for(m, p) and s.deleted_ms is null and s.claimed_ms is null
+               and slg_mail_has_attach(m.attach) order by m.id loop
+    r := slg_mail_claim_one(uid, mid, now_ms);
+    if (r ->> 'ok')::boolean then out := out || jsonb_build_array(r); end if;
+  end loop;
+  return jsonb_build_object('ok', true, 'claimed', out, 'balance', (select gold from slg_players where user_id = uid), 'badge', slg_mail_badge(uid, now_ms));
+end $$;
+
+-- 플레이어: 지우기 (첨부가 남아 있으면 먼저 받아야 지울 수 있다)
+create or replace function public.slg_mail_delete(p_id bigint) returns jsonb
+language plpgsql volatile security definer set search_path = public as $$
+declare uid uuid := slg_uid(); now_ms bigint; m slg_mail%rowtype; p slg_players%rowtype; st slg_mail_state%rowtype;
+begin
+  now_ms := slg_now_ms();
+  p := slg_player_for(uid);
+  select * into m from slg_mail where id = p_id;
+  if not found or not slg_mail_for(m, p) then return jsonb_build_object('ok', false, 'error', 'not_found'); end if;
+  select * into st from slg_mail_state where mail_id = p_id and user_id = uid;
+  if slg_mail_has_attach(m.attach) and st.claimed_ms is null and m.revoked_ms is null and m.expires_ms > now_ms then
+    return jsonb_build_object('ok', false, 'error', 'unclaimed');
+  end if;
+  insert into slg_mail_state (mail_id, user_id, deleted_ms) values (p_id, uid, now_ms)
+    on conflict (mail_id, user_id) do update set deleted_ms = excluded.deleted_ms;
+  return jsonb_build_object('ok', true, 'badge', slg_mail_badge(uid, now_ms));
+end $$;
+
+-- ============================================================================
 -- 권한: 내부 함수는 아무도 못 부르고, RPC 만 로그인한 사용자가 부른다
 -- ============================================================================
 do $$
 declare f record; rpc text[] := array['slg_bootstrap','slg_wallet_apply','slg_admin_adjust','slg_is_admin','slg_loop_return','slg_region_secure',
   'slg_share_buy','slg_fed_propose','slg_fed_vote','slg_loan_take','slg_loan_repay','slg_loan_collateral','slg_loan_seized','slg_audit_list','slg_auction_bid','slg_sync','slg_set_name','slg_name_available',
-  'slg_encounter_start','slg_encounter_claim','slg_event_roll','slg_rewinder_use','slg_rewinder_buy','slg_relic_equip','slg_relic_gift','slg_items_migrate'];
+  'slg_encounter_start','slg_encounter_claim','slg_event_roll','slg_rewinder_use','slg_rewinder_buy','slg_relic_equip','slg_relic_gift','slg_items_migrate',
+  'slg_admin_mail_send','slg_admin_mail_list','slg_admin_mail_revoke','slg_mail_list','slg_mail_read','slg_mail_claim','slg_mail_delete'];
 begin
   for f in select p.oid::regprocedure as sig, p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
            where n.nspname = 'public' and p.proname like 'slg\_%'

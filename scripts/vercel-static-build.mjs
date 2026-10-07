@@ -25,6 +25,7 @@ const files = [
   'shareEngine.js',
   'fedEngine.js',
   'serverEconomy.js',
+  'mailbox.js', // 우편함 (운영자 메일)
   'nationShares.js',
   'fedSystem.js',
   'campaignMap.js',

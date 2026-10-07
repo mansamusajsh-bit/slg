@@ -56,3 +56,7 @@
 .slg-ed-entry-thumb { display: inline-flex; }
 .slg-ed-entry-thumb:empty { display: none; }
 .slg-ed-reward-cell { display: inline-flex; align-items: center; gap: 4px; }
+/* 운영 메일 (mailEditor.js) */
+.slg-ed-mail textarea.slg-ed-input { resize: vertical; min-height: 70px; font-family: inherit; }
+.slg-ed-mail-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.slg-ed-mail .slg-ed-chips input.slg-ed-input { flex: 1 1 140px; }

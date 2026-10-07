@@ -24,6 +24,7 @@ const STATIC_FILES = [
   'shareEngine.js',
   'fedEngine.js',
   'serverEconomy.js',
+  'mailbox.js',
   'nationShares.js',
   'fedSystem.js',
   'campaignMap.js',

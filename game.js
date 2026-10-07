@@ -9186,7 +9186,8 @@
     const DEV_DATA_EDITORS = {
       'reward-pools': { module: './editors/rewardPoolEditor.js', rootId: 'dev-reward-pool-editor-root' },
       'relics': { module: './editors/relicEditor.js', rootId: 'dev-relic-editor-root' },
-      'items': { module: './editors/itemEditor.js', rootId: 'dev-item-editor-root' }
+      'items': { module: './editors/itemEditor.js', rootId: 'dev-item-editor-root' },
+      'mail': { module: './editors/mailEditor.js', rootId: 'dev-mail-editor-root' }
     };
 
     async function mountDevDataEditor(tabName) {
