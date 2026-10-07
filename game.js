@@ -2502,7 +2502,8 @@
           // 유물 사거리로 멀리서 쏜 공격은 그 자리에서 쏜 것이라 전진하지 않는다 (이동 범위 안일 때만 점령 전진)
           const advanceRange = state.commander.unlockedSkills.RapidAdvance ? 2 : 1;
           const strikeDist = Math.abs(attacker.x - defender.x) + Math.abs(attacker.y - defender.y);
-          if (remainingEnemiesAtTile.length === 0 && strikeDist <= advanceRange) {
+          // 속박·기절된 공격자는 그 자리에서 싸울 뿐 전진하지 못한다
+          if (remainingEnemiesAtTile.length === 0 && strikeDist <= advanceRange && canUnitMove(attacker)) {
             const startX = attacker.x;
             const startY = attacker.y;
             const targetX = defender.x;
@@ -2510,7 +2511,8 @@
             const targetTile = getTile(targetX, targetY);
 
             if (state.stackMoveEnabled) {
-              const squad = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY && !u.isInactivated);
+              // 함께 전진하는 부대원 중 속박·기절된 유닛은 제자리에 남는다
+              const squad = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY && !u.isInactivated && canUnitMove(u));
               squad.forEach(m => {
                 m.x = targetX;
                 m.y = targetY;
@@ -2552,7 +2554,7 @@
           // 해당 타일에 아군이 모두 없으면 적군이 전진 돌파
           const remainingPlayersAtTile = state.playerUnits.filter(p => !p.isDead && p.x === defender.x && p.y === defender.y);
           // 원거리(사거리 2 이상)에서 쏜 적은 그 자리에서 쏜 것이라 전진하지 않는다
-          if (remainingPlayersAtTile.length === 0 && preStrikeDist <= 1) {
+          if (remainingPlayersAtTile.length === 0 && preStrikeDist <= 1 && canUnitMove(attacker)) {
             attacker.x = defender.x;
             attacker.y = defender.y;
             const targetTile = getTile(defender.x, defender.y);
@@ -2643,8 +2645,13 @@
       if (modal) modal.classList.add('active');
     }
 
+    // 속박(ROOT)·기절(STUN) 상태면 스스로 움직일 수 없다 (일반 이동 · 교전 후 전진 · 부대 동시 이동 공통)
+    function canUnitMove(unit) {
+      return !window.SkillEngine || SkillEngine.canMove(unit);
+    }
+
     function executeMove(unit, targetX, targetY) {
-      if (window.SkillEngine && !SkillEngine.canMove(unit)) {
+      if (!canUnitMove(unit)) {
         addLog(`⛓️ [이동 불가] ${unit.name}은(는) 속박/기절 상태라 이동할 수 없습니다.`, 'warning');
         return;
       }
@@ -2656,15 +2663,19 @@
       // (게릴라 II · 삼림 전문 II 승급은 산악/숲 진입 AP를 줄인다. 부대 이동은 가장 비싼 부대원 기준)
       let costAP = getUnitMoveCost(unit, targetTile);
 
-      // 출발 타일에 주둔 중인 아군 유닛 수집
-      const friendlyAtStart = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY);
+      // 출발 타일에 주둔 중인 아군 유닛 수집. 속박·기절된 부대원은 함께 움직이지 못하고 제자리에 남는다.
+      const pinnedAtStart = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY && !canUnitMove(u));
+      const friendlyAtStart = state.playerUnits.filter(u => !u.isDead && u.x === startX && u.y === startY && canUnitMove(u));
       const isStackMove = !!state.stackMoveEnabled && friendlyAtStart.length > 1;
       if (isStackMove) costAP = Math.max(...friendlyAtStart.map(m => getUnitMoveCost(m, targetTile)));
+      if (state.stackMoveEnabled && pinnedAtStart.length) {
+        addLog(`⛓️ [속박] ${pinnedAtStart.map(u => u.name).join(', ')}은(는) 움직일 수 없어 제자리에 남습니다.`, 'warning');
+      }
 
       if (isStackMove) {
         // [사용자 요구사항] 부대가 중첩되었을 때 함께이동(ON) 상태면 최소 AP 기준으로 움직임.
         // 누군가 AP가 부족하여 함께 이동할 수 없으면 팝업으로 알리고 이동 중단!
-        const insufficientUnits = friendlyAtStart.filter(u => u.isInactivated || u.ap < costAP || (window.SkillEngine && !SkillEngine.canMove(u)));
+        const insufficientUnits = friendlyAtStart.filter(u => u.isInactivated || u.ap < costAP);
 
         if (insufficientUnits.length > 0) {
           const namesStr = insufficientUnits.map(u => `${u.name}(AP ${u.ap}/${u.baseAP}${u.isInactivated ? ', 비활성' : ''})`).join(', ');
@@ -3403,7 +3414,7 @@
             if (enemiesHere.length) {
               // 국가 규칙(습지 은신)으로 보이지 않는 적은 공격 대상으로 표시하지 않는다 (적이 있는 칸이라 이동도 안 된다)
               if (enemiesHere.some(e => canTargetEnemy(selUnit, e))) attackTiles.push(t);
-            } else if (dist <= range && getUnitMoveCost(selUnit, t) <= selUnit.ap) {
+            } else if (dist <= range && getUnitMoveCost(selUnit, t) <= selUnit.ap && canUnitMove(selUnit)) {
               // 적이 없는 타일은 빈 타일 및 아군 유닛이 이미 있는 타일 모두 이동/중첩 가능! (AP가 지형 비용 이상일 때)
               moveTiles.push(t);
             }

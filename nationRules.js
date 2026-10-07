@@ -402,7 +402,9 @@
     }
     // silva: 사격을 마친 궁수·총병은 가장 가까운 아군에게서 멀어지는 빈 칸으로 1칸 물러난다
     r = ruleFor(attacker, 'SHOOT_AND_SCOOT');
-    if (r && isAlive(attacker) && ['ARCHER', 'FIREARM'].includes(classOf(attacker))) {
+    // 속박·기절된 사수는 물러나지 못한다
+    const rooted = global.SkillEngine && !global.SkillEngine.canMove(attacker);
+    if (r && isAlive(attacker) && !rooted && ['ARCHER', 'FIREARM'].includes(classOf(attacker))) {
       const foes = players();
       if (foes.length) {
         const nearest = (pt) => Math.min(...foes.map(p => manhattan(pt, p)));
