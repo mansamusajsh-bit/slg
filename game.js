@@ -10800,7 +10800,7 @@
         claimBattleReward(battle).then((res) => {
           const shown = res && res.ok === true
             ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount: totalDefeatedCount }
-            : { gold: 0, rewinderGranted: false, defeatedCount: totalDefeatedCount, failed: true };
+            : { gold: 0, rewinderGranted: false, defeatedCount: totalDefeatedCount, failed: true, network: !res || !!res.network, error: (res && res.error) || null, errorText: res && res.error ? (CLAIM_ERRORS[res.error] || String(res.error)) : null };
           battle.result = { ...shown };
           const m = document.getElementById('modal-tactical-victory');
           if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown);
