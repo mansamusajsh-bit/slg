@@ -5959,6 +5959,13 @@
         if (viewStrat) viewStrat.classList.add('active');
         if (viewSector) viewSector.classList.remove('active');
         renderStrategyView();
+      } else if (state && state.currentView === 'GACHA') {
+        // 용병 고용소에서 연 명부·스킬창이 renderAll을 불러도 고용소 화면을 유지한다
+        // (예전에는 아래 전술 분기로 떨어져 전투도 없는 빈 전술 필드가 떴다)
+        document.getElementById('view-strategy-main')?.classList.remove('active');
+        document.getElementById('view-sector-field')?.classList.remove('active');
+        document.getElementById('view-character-gacha')?.classList.add('active');
+        renderCharacterGacha();
       } else {
         const viewStrat = document.getElementById('view-strategy-main');
         const viewSector = document.getElementById('view-sector-field');
