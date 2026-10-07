@@ -45,6 +45,7 @@ with sync_playwright() as pw:
     c.ok(enter_region(page),'부관 임명 → 구역 진입')
     for sid in ['A-1','A-2','B-1']: page.evaluate(TEMPLATE_JS, sid)
     start=page.evaluate("state.run.mapState.layers[0][0]")
+    page.evaluate("()=>{ const orig=window.enterBattleWithSeed; window.enterBattleWithSeed=(t,s,o)=>{ window.__lastClassWeights=o&&o.enemyClassWeights; return orig(t,s,o); }; }")
     ok=page.evaluate("async (id)=>{ state.run.mapState.nodes.forEach(n=>{ if(n.type!=='boss') n.type='battle'; }); return await enterEncounter(id); }", start)
     c.ok(ok and page.evaluate("state.currentBattle.nationId")=='liona', '전투 진입 시 상대 국가가 currentBattle.nationId에 기록된다 (리오나)')
     page.evaluate(SETUP_JS)
@@ -232,8 +233,39 @@ with sync_playwright() as pw:
     c.ok(abs(r['burst'][0]-0.10)<1e-9 and abs(r['burst'][1]-0.20)<1e-9, '마법사 연쇄 폭발: 인접 적당 +5%p, 최대 +20%p')
 
     print('\n=== 부관 브리핑 ===')
-    b=page.evaluate("()=>{ const R=NationRules.NATION_RULES.mira; return {has: typeof CampaignMapView!=='undefined' && CampaignMapView.BRIEFING.nationRule.length>0, desc:R.description}; }")
-    c.ok(b['has'], '브리핑에 국가 규칙 줄이 있다')
+    b=page.evaluate("()=>{ const B=window.NATION_RULE_BRIEFS||{}; return {missing: Object.keys(NationRules.NATION_RULES).filter(id=>!B[id] || !Object.keys(B[id]).length)}; }")
+    c.ok(b['missing']==[], f'16개 국가 모두 부관 브리핑 문장이 있다 {b}')
+
+    print('\n=== 국가별 적 병과 구성 ===')
+    r=page.evaluate("""()=>{
+      const cls=['MELEE','ARCHER','KNIGHT','MAGE','FIREARM'];
+      const pool=[]; cls.forEach(c=>{ for(let i=0;i<3;i++) pool.push({id:c+i, name:c+i, classType:c, unitClass:c, hp:100, maxHp:100, atk:40, def:30, baseAP:2}); });
+      const tpl=MapSchema.createBlankTacticalMapTemplate('ROSTER', 10, 10);
+      tpl.spawnPoints={player:[{x:1,y:9}], enemy:[0,1,2,3,4,5].map(x=>({x:x+2,y:1}))};
+      MapSchema.applySpawnPointsToTiles(tpl.tiles, tpl.spawnPoints);
+      const gen=(nation, seed)=>{ const m=window.generateBattleMap(tpl, seed, {enemyPool:pool, enemyCount:[6,6], enemyClassWeights:NationRules.getEnemyClassWeights(nation)});
+        const n={}; m.enemies.forEach(e=>{ const c=String(e.classType).toUpperCase(); n[c]=(n[c]||0)+1; }); return {n, ids:m.enemies.map(e=>e.id).join()}; };
+      const out={}; ['liona','vaska','oria','valen','ara','torva'].forEach(k=>out[k]=gen(k,'s1').n);
+      const same=gen('liona','s1').ids===gen('liona','s1').ids;
+      // 풀에 궁수가 없으면 남은 병과로 채운다
+      const noArcher=window.generateBattleMap(tpl,'s2',{enemyPool:pool.filter(u=>u.classType!=='ARCHER'), enemyCount:[6,6], enemyClassWeights:NationRules.getEnemyClassWeights('liona')}).enemies.length;
+      const noWeights=window.generateBattleMap(tpl,'s3',{enemyPool:pool, enemyCount:[6,6]}).enemies.length;
+      return {out, same, noArcher, noWeights, all: Object.keys(REGIONS).every(id=>NationRules.getEnemyClassWeights(id))};
+    }""")
+    print('   ',r)
+    o=r['out']
+    c.ok(r['all'], '16개 국가 모두 병과 구성이 있다')
+    c.ok(o['liona'].get('ARCHER',0)>=3, '리오나: 적 6명 중 궁수가 주력 (절반 이상)')
+    c.ok(o['vaska'].get('KNIGHT',0)>=3 and o['ara'].get('KNIGHT',0)>=4, '바스카·아라: 기사가 주력')
+    c.ok(o['oria'].get('MAGE',0)>=3, '오리아: 마법사가 주력')
+    c.ok(o['valen'].get('FIREARM',0)>=4, '발렌: 총병이 주력')
+    c.ok(o['torva'].get('MELEE',0)>=1 and sum(v for k,v in o['torva'].items() if k!='MELEE')>=1, '토르바: 호위할 근접병과 호위받을 후열이 함께 나온다')
+    c.ok(r['same'], '같은 seed면 같은 편성')
+    c.ok(r['noArcher']==6 and r['noWeights']==6, '풀에 주력 병과가 없거나 구성이 없어도 인원은 그대로 채운다')
+
+    print('\n=== 실제 전투 진입 편성 (리오나) ===')
+    w=page.evaluate("window.__lastClassWeights || null")
+    c.ok(bool(w) and w.get('ARCHER')==4, f'리오나 전투 진입 시 궁수 중심 병과 구성을 전투 생성기에 넘긴다 {w}')
 
     print('\n=== 콘솔 오류 ===')
     c.ok(not errors, f'페이지 오류 없음 ({errors[:3]})')

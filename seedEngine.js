@@ -142,7 +142,8 @@
       terrainNoiseRate: options && options.terrainNoiseRate,
       chestCountRange: options && options.chestCountRange,
       enemyCountRange: options && options.enemyCountRange,
-      enemyCount: options && options.enemyCount
+      enemyCount: options && options.enemyCount,
+      enemyClassWeights: options && options.enemyClassWeights // 국가별 병과 구성 (nationRules.js)
     });
 
     // 배치된 오브젝트(보물 상자 등)를 좌표와 함께 평탄한 목록으로 뽑는다.
@@ -206,7 +207,7 @@
     const hasCustom = customSeed != null && String(customSeed).trim() !== '';
     const seed = hasCustom ? String(customSeed).trim() : SeedEngine.generateRandomSeed(String(sectorId));
 
-    const battleMap = generateBattleMap(template, seed, { enemyPool: options && options.enemyPool, enemyCount: options && options.enemyCount, sectorId });
+    const battleMap = generateBattleMap(template, seed, { enemyPool: options && options.enemyPool, enemyCount: options && options.enemyCount, enemyClassWeights: options && options.enemyClassWeights, sectorId });
     if (!battleMap) return null;
 
     // 10단계: Encounter 객체는 MapSchema.assembleEncounter() 한 곳에서만 조립한다.

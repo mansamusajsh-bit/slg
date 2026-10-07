@@ -17,6 +17,8 @@
  *     countPendingRevives()                                                       (승리 판정)
  * - 무작위는 쓰지 않는다. 같은 상황이면 항상 같은 결과다.
  * - description / weakness는 부관 브리핑에 그대로 나가므로 수치 없이 말로만 쓴다.
+ * - NATION_ROSTERS: 그 나라 적군의 병과 구성 비율. 규칙이 걸리는 병과가 실제로 전장에 나오도록
+ *   적 생성기(MapSchema.generateBattleMapWithSeed의 enemyClassWeights)가 이 비율대로 병과를 나눈다.
  */
 (function (global) {
   'use strict';
@@ -71,6 +73,32 @@
       description: '모르의 군대는 처음 쓰러진 자가 얼마 지나지 않아 다시 일어섭니다.',
       weakness: '다시 일어선 자를 끝까지 처리해야 전투가 끝납니다.' }
   };
+
+  // 국가별 적 병과 구성 (가중치). 규칙의 대상 병과가 주력이 되도록 맞췄다.
+  //   토르바는 호위할 근접병과 호위받을 비근접병이 함께 있어야 규칙이 보인다.
+  const NATION_ROSTERS = {
+    liona: { ARCHER: 4, MELEE: 2, KNIGHT: 1 },              // 변경 척후: 발 빠른 궁수
+    mira:  { ARCHER: 4, MELEE: 2, MAGE: 1 },                // 정규군 장궁대
+    vaska: { KNIGHT: 4, MELEE: 2 },                         // 갑옷 기사단
+    oria:  { MAGE: 4, ARCHER: 1, MELEE: 1 },                // 보석 군대의 마법사
+    luma:  { MELEE: 3, ARCHER: 2 },                         // 습지 기습 부족 전사
+    tino:  { MELEE: 4, ARCHER: 1 },                         // 버티는 수비대
+    rokan: { MELEE: 3, KNIGHT: 2 },                         // 공세 일변도
+    savo:  { MELEE: 2, ARCHER: 2, FIREARM: 1 },             // 강변 요새 수비대
+    torva: { MELEE: 3, ARCHER: 2, MAGE: 1 },                // 돌 성벽: 근접병이 후열을 막는다
+    ara:   { KNIGHT: 4, MELEE: 1 },                         // 기마 돌격
+    elda:  { MAGE: 2, MELEE: 2, KNIGHT: 1 },                // 신권 정예
+    naru:  { MELEE: 2, FIREARM: 2, KNIGHT: 1 },             // 용병
+    silva: { ARCHER: 3, FIREARM: 2, MELEE: 1 },             // 숲 게릴라 사수
+    valen: { FIREARM: 4, MELEE: 1 },                        // 은광 무기 총병
+    arca:  { MELEE: 3, KNIGHT: 1, ARCHER: 1, MAGE: 1, FIREARM: 1 }, // 밀집 방진 + 고른 편성
+    mor:   { MELEE: 1, KNIGHT: 1, ARCHER: 1, MAGE: 1, FIREARM: 1 }  // 정체불명
+  };
+  /** 그 나라 적군의 병과 가중치 (없으면 null = 병과 구분 없이 무작위) */
+  function getEnemyClassWeights(nationId) {
+    const w = NATION_ROSTERS[nationId];
+    return w ? Object.assign({}, w) : null;
+  }
 
   let ctx = {
     getState: () => global.state || {},
@@ -402,7 +430,7 @@
   }
 
   global.NationRules = {
-    NATION_RULES,
+    NATION_RULES, NATION_ROSTERS, getEnemyClassWeights,
     configure, getRule, getActiveNationId, getActiveRule,
     getCombatMods, getAttackRangeBonus, getMobilityBonus, getMoveCostOverride,
     isEffectImmune, adjustSkillCooldown, adjustExchangeDamage,

@@ -385,7 +385,7 @@
    *
    * @param {TacticalMapTemplate} tpl - 이미 normalizeTacticalMapTemplate()을 거친 템플릿
    * @param {string} seed
-   * @param {{randomize?:boolean, enemyPool?:Array, terrainNoiseRate?:number, chestCountRange?:[number,number], enemyCountRange?:[number,number], enemyCount?:[number,number]}} [options]
+   * @param {{randomize?:boolean, enemyPool?:Array, terrainNoiseRate?:number, chestCountRange?:[number,number], enemyCountRange?:[number,number], enemyCount?:[number,number], enemyClassWeights?:Object<string,number>}} [options]
    * @returns {{tiles:Array, spawnPoints:{player:Array,enemy:Array}, enemies:Array}}
    */
   function generateBattleMapWithSeed(tpl, seed, options = {}) {
@@ -505,10 +505,12 @@
         const enemyCount = availableSpawns.length;
         // 풀을 한 번 섞어 차례로 뽑는다: 풀이 스폰 수보다 크면 같은 캐릭터가 한 전투에 두 번 나오지 않는다.
         const shuffledPool = rng.shuffle(enemyPool);
+        // 국가별 병과 구성(options.enemyClassWeights)이 있으면 그 비율대로 병과를 나눠 뽑는다.
+        const roster = pickEnemyRosterByClass(rng, shuffledPool, enemyCount, options.enemyClassWeights);
         for (let i = 0; i < enemyCount; i++) {
           const spawnIdx = rng.rangeInt(0, availableSpawns.length - 1);
           const spawnPos = availableSpawns.splice(spawnIdx, 1)[0];
-          const base = shuffledPool[i % shuffledPool.length] || {};
+          const base = (roster ? roster[i] : shuffledPool[i % shuffledPool.length]) || {};
           enemies.push(normalizeBattleEnemy({
             ...base,
             id: `${base.id || base.type || 'enemy'}_${i + 1}`,
@@ -520,6 +522,43 @@
     }
 
     return { tiles, spawnPoints, enemies };
+  }
+
+  /**
+   * 병과 가중치대로 적 count명을 고른다. 가중치가 없거나 풀에 해당 병과가 하나도 없으면 null(= 기존 무작위).
+   *   - 풀에 없는 병과의 몫은 풀에 있는 병과끼리 나눠 갖는다.
+   *   - 인원 배분은 최대 나머지 방식(결정론적): 가중치가 가장 큰 병과가 먼저 몫을 받는다.
+   *   - 같은 병과 안에서는 섞인 풀을 차례로 쓰고, 모자라면 처음부터 다시 쓴다(같은 캐릭터가 둘 나올 수 있다).
+   * @param {SeededRandom} rng
+   * @param {Array} shuffledPool - 이미 섞은 후보 풀
+   * @param {number} count
+   * @param {Object<string,number>} [weights] - 예: { ARCHER: 4, MELEE: 2 }
+   * @returns {Array|null}
+   */
+  function pickEnemyRosterByClass(rng, shuffledPool, count, weights) {
+    if (!weights || typeof weights !== 'object' || count <= 0) return null;
+    const classOf = (u) => String((u && (u.classType || u.unitClass)) || '').toUpperCase();
+    const groups = {};
+    shuffledPool.forEach((u) => { (groups[classOf(u)] = groups[classOf(u)] || []).push(u); });
+    const classes = Object.keys(weights)
+      .map((c) => ({ c: String(c).toUpperCase(), w: Math.max(0, Number(weights[c]) || 0) }))
+      .filter((e) => e.w > 0 && groups[e.c])
+      .sort((a, b) => b.w - a.w || a.c.localeCompare(b.c));
+    const total = classes.reduce((s, e) => s + e.w, 0);
+    if (total <= 0) return null;
+    classes.forEach((e) => { e.exact = count * e.w / total; e.n = Math.floor(e.exact); });
+    let rest = count - classes.reduce((s, e) => s + e.n, 0);
+    classes.slice().sort((a, b) => (b.exact - b.n) - (a.exact - a.n) || b.w - a.w || a.c.localeCompare(b.c))
+      .forEach((e) => { if (rest > 0) { e.n++; rest--; } });
+    const slots = [];
+    classes.forEach((e) => { for (let i = 0; i < e.n; i++) slots.push(e.c); });
+    const used = {};
+    return rng.shuffle(slots).map((c) => {
+      const g = groups[c];
+      const k = used[c] || 0;
+      used[c] = k + 1;
+      return g[k % g.length];
+    });
   }
 
   // ==========================================================================

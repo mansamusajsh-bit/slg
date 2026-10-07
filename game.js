@@ -4447,6 +4447,12 @@
       return new Set(units.map(u => getCharacterId(u)).filter(Boolean));
     }
 
+    // 상대 국가의 적 병과 구성 (nationRules.js NATION_ROSTERS). 국가는 전투의 nationId와 같은 규칙으로 정한다.
+    function getNodeEnemyClassWeights(node) {
+      const nationId = (node && node.regionId) || getCurrentRegionId() || null;
+      return (window.NationRules && nationId) ? NationRules.getEnemyClassWeights(nationId) : null;
+    }
+
     function buildEnemyPool(sector, nodeType, regionId) {
       const diff = ENEMY_DIFFICULTY_SCALE[String(sector && sector.difficulty).toUpperCase()] || ENEMY_DIFFICULTY_SCALE.NORMAL;
       const typ = ENEMY_NODE_TYPE_SCALE[nodeType] || ENEMY_NODE_TYPE_SCALE.battle;
@@ -4819,6 +4825,7 @@
         type: node.type, // 'battle' | 'elite' | 'boss' — rewards 배율에 반영된다
         enemyPool,
         enemyCount: getEnemyCountRange(node), // 섹터 진행도에 따른 적 인원 (오차 1명)
+        enemyClassWeights: getNodeEnemyClassWeights(node), // 국가별 병과 구성 (nationRules.js)
         state
       });
       const seed = battle ? battle.seed : null;
@@ -12177,7 +12184,7 @@
       try {
         const template = await loadTacticalMapTemplate(templateId);
         await ensureCharacterPoolLoaded();
-        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type, node.regionId), enemyCount: getEnemyCountRange(node), sectorId: node.sectorId });
+        const map = window.generateBattleMap(template, seed, { enemyPool: buildEnemyPool(sector, node.type, node.regionId), enemyCount: getEnemyCountRange(node), enemyClassWeights: getNodeEnemyClassWeights(node), sectorId: node.sectorId });
         if (!map) throw new Error('전장 생성 실패');
         const enemies = (map.enemies || []).map(e => ({ name: e.name, avatar: e.avatar || '👤', cls: e.classType || e.unitClass, level: e.level || 1, power: calculateUnitPower(e) }));
         const rewards = MapSchema.generateEncounterRewards(seed, { enemyCount: enemies.length, type: node.type });
