@@ -3520,12 +3520,7 @@
       });
       decorateDeployPhase(mapEl);
       renderDeployBanner();
-
-      // 직접 선택한 유닛이 바뀐 순간에만 큰 얼굴 말풍선을 띄운다 (재렌더마다 다시 띄우지 않음).
-      // getSelectedUnit()은 선택이 없어도 첫 유닛을 돌려주므로 selectedUnitId로 직접 찾는다.
-      const bubbleUnit = selectedUnitId ? state.playerUnits.find(u => u.id === selectedUnitId && !u.isDead) || null : null;
-      if (bubbleUnit && bubbleUnit.id !== lastTokenBubbleUnitId) showUnitTokenBubble(bubbleUnit, 'player');
-      lastTokenBubbleUnitId = bubbleUnit ? bubbleUnit.id : null;
+      // 아군은 선택 시 캐릭터 창이 열리므로 맵 위 얼굴 말풍선은 띄우지 않는다 (적군 정찰 시에만 표시).
     }
 
     /* --------------------------------------------------------------------------
@@ -3566,9 +3561,8 @@
       return uDiv;
     }
 
-    // 선택/정찰한 유닛 위에 큰 얼굴 + 이름·HP 말풍선을 잠깐 띄운다.
+    // 정찰한 적 유닛 위에 큰 얼굴 + 이름·HP 말풍선을 잠깐 띄운다.
     // #viewport에 붙이므로 그리드가 다시 그려져도 사라지지 않는다.
-    let lastTokenBubbleUnitId = null;
     let tokenBubbleTimer = null;
 
     function showUnitTokenBubble(unit, side) {
