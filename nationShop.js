@@ -24,6 +24,7 @@
   const ERRORS = {
     not_secured: '점령한 국가의 상점만 이용할 수 있습니다.',
     not_in_stock: '이 상점에서 팔지 않는 유물입니다.',
+    sold_out: '이미 구매한 유물입니다. 진열을 모두 사면 새 유물이 들어옵니다.',
     daily_limit: '오늘 구매 한도에 도달했습니다. 시간이 지나면 다시 살 수 있습니다.',
     owned: '이미 가진 지휘관 유물입니다.',
     insufficient: '골드가 부족합니다.',
@@ -36,6 +37,7 @@
   let loading = false;
   let busy = false;
   let loadToken = 0;
+  let justBought = false;   // 방금 산 직후의 새로고침 알림은 구매 쪽에서 이미 띄웠다
 
   // ---- 점령한 국가 ----
   function securedRegionIds() {
@@ -50,17 +52,27 @@
     const rewardData = await global.ensureRewardDataLoaded();
     if (!rewardData) return { ok: false, error: 'load_failed' };
     const owned = new Set((global.getOwnedRelics ? global.getOwnedRelics() : []).filter((r) => r.kind === 'commander').map((r) => r.id));
-    const stock = SH.stockFor(REGIONS[regionId], [...rewardData.relics.values()]);
     const run = getState().run;
+    // 진열을 하나씩 다 사면 회차가 올라가 새 진열이 된다 (이미 가진 지휘관 유물은 산 것으로 친다)
+    if (!run.shopState) run.shopState = {};
+    const ss = run.shopState[regionId] || (run.shopState[regionId] = { round: 0, bought: [] });
+    const relicList = [...rewardData.relics.values()];
+    const isSold = (d) => ss.bought.includes(String(d.id)) || (d.kind === 'commander' && owned.has(String(d.id)));
+    let stock = SH.stockFor(REGIONS[regionId], relicList, SH.CONFIG.slots, ss.round);
+    let refreshed = false;
+    for (let i = 0; stock.length && stock.every(isSold) && i < 5; i++) {
+      ss.round += 1; ss.bought = []; refreshed = true;
+      stock = SH.stockFor(REGIONS[regionId], relicList, SH.CONFIG.slots, ss.round);
+    }
     const dayAgo = Date.now() - 86400000;
     const bought = (run.shopBuys || []).filter((t) => t > dayAgo).length;
     const pending = global.NationShares ? global.NationShares.shopPending(regionId) : 0;
     return {
-      ok: true, regionId, bought, dayLimit: SH.CONFIG.dayBuys, pending, taxPct: SH.CONFIG.shopTaxPct,
+      ok: true, regionId, refreshed, round: ss.round, bought, dayLimit: SH.CONFIG.dayBuys, pending, taxPct: SH.CONFIG.shopTaxPct,
       items: stock.map((d) => ({
         id: String(d.id), name: d.name, kind: d.kind, rarity: d.rarity, description: d.description || '', effects: d.effects || [], imageUrl: d.imageUrl,
         price: typeof global.scaleShopGold === 'function' ? global.scaleShopGold(SH.basePrice(d)) : SH.price(d, 1, 0),
-        owned: d.kind === 'commander' && owned.has(String(d.id))
+        sold: isSold(d)
       }))
     };
   }
@@ -82,6 +94,7 @@
     if (token !== loadToken) return;
     loading = false;
     data = res;
+    if (res && res.ok && res.refreshed && !justBought) refreshedNotice(REGIONS[shopRegionId] ? REGIONS[shopRegionId].title.ko : shopRegionId);
     render();
   }
 
@@ -90,7 +103,7 @@
     if (busy) return false;
     const st = getState();
     const item = data && data.items && data.items.find((i) => i.id === relicId);
-    if (!st || !item) return false;
+    if (!st || !item || item.sold) return false;
     busy = true;
     render();
     let done = false;
@@ -102,14 +115,14 @@
           done = true;
           log(`🏪 [국영상점] ${regionName}에서 ${item.name} 구매 (-${res.cost}G) · 세수에 +${res.tax}G 가산`);
           toast(`🏪 ${item.name} 구매 (-${res.cost}G)`, 'success');
+          if (res.refreshed) refreshedNotice(regionName);
           await global.ServerEconomy.sync('now');   // 가산 대기 매출 · 물가를 다시 읽는다
         } else {
           toast(ERRORS[res && res.error] || (res && res.network ? '서버와 통신하지 못했습니다.' : '구매하지 못했습니다.'), 'warning');
         }
       } else {
         const price = item.price;
-        if (item.owned) toast(ERRORS.owned, 'warning');
-        else if (data.dayLimit && data.bought >= data.dayLimit) toast(ERRORS.daily_limit, 'warning');
+        if (data.dayLimit && data.bought >= data.dayLimit) toast(ERRORS.daily_limit, 'warning');
         else if ((Number(st.gold) || 0) < price) toast(ERRORS.insufficient, 'warning');
         else {
           const entry = global.grantRelic ? global.grantRelic(relicId, { type: 'shop', regionId }) : null;
@@ -117,6 +130,8 @@
             toast('유물을 지급하지 못해 구매가 취소되었습니다.', 'warning');
           } else {
             st.gold -= price;   // 소비로 잡혀 물가(수요)에도 반영된다
+            const ss = st.run.shopState && st.run.shopState[regionId];
+            if (ss) ss.bought.push(relicId);
             if (!Array.isArray(st.run.shopBuys)) st.run.shopBuys = [];
             const now = Date.now();
             st.run.shopBuys = st.run.shopBuys.filter((t) => t > now - 86400000).concat(now);
@@ -136,8 +151,14 @@
     } finally {
       busy = false;
     }
-    await refresh();
+    justBought = true;
+    try { await refresh(); } finally { justBought = false; }
     return done;
+  }
+
+  function refreshedNotice(regionName) {
+    log(`🔄 [국영상점] ${regionName} 진열을 모두 사서 새 유물이 들어왔습니다.`, 'system');
+    toast('🔄 진열이 모두 팔려 새 유물이 들어왔습니다', 'success');
   }
 
   // ---- 화면 ----
@@ -146,10 +167,10 @@
   function itemCard(it, gold) {
     const meta = (global.RELIC_RARITY_META && global.RELIC_RARITY_META[it.rarity]) || { label: it.rarity, color: '#64748b' };
     const effect = typeof global.describeRelicEffects === 'function' ? global.describeRelicEffects({ kind: it.kind, rarity: it.rarity, effects: it.effects || [] }) : '';
-    const can = !it.owned && !busy && gold >= it.price;
-    const label = it.owned ? '보유 중' : gold < it.price ? `${it.price}G · 골드 부족` : `구매 ${it.price}G`;
+    const can = !it.sold && !busy && gold >= it.price;
+    const label = it.sold ? '구매 완료' : gold < it.price ? `${it.price}G · 골드 부족` : `구매 ${it.price}G`;
     return `
-      <div class="nshop-item${it.owned ? ' is-owned' : ''}" style="--rar:${meta.color}">
+      <div class="nshop-item${it.sold ? ' is-owned' : ''}" style="--rar:${meta.color}">
         <div class="nshop-item-top">
           <span class="nshop-thumb">${it.imageUrl ? `<img src="${esc(it.imageUrl)}" alt="">` : '💎'}</span>
           <span class="nshop-item-head">
@@ -196,7 +217,7 @@
         <div class="nshop-tax">판매 대금의 <b>${data.taxPct || SH.CONFIG.shopTaxPct}%</b>가 이 국가의 세수에 가산됩니다.
           다음 정산에 얹힐 매출 <b>+${pending}G</b>${mine ? ` · 내 지분 ${fmtPct(mine)} → 내 몫 <b>+${myCut}G</b>` : ' · 지분이 있으면 지분율만큼 받습니다'}</div>
         <div class="nshop-grid">${data.items.length ? data.items.map((it) => itemCard(it, gold)).join('') : '<p class="nshop-empty">지금 진열된 유물이 없습니다.</p>'}</div>
-        <div class="nshop-foot">최상급 유물은 판매하지 않습니다 — 전투로만 얻을 수 있습니다.${data.dayLimit ? ` · 오늘 구매 ${data.bought}/${data.dayLimit}` : ''}${data.discountPct ? ` · 유물 할인 ${data.discountPct}% 적용` : ''}</div>`;
+        <div class="nshop-foot">진열을 하나씩 모두 사면 새 유물로 바뀝니다 (${data.items.filter((i) => i.sold).length}/${data.items.length}) · 최상급 유물은 판매하지 않습니다 — 전투로만 얻을 수 있습니다.${data.dayLimit ? ` · 오늘 구매 ${data.bought}/${data.dayLimit}` : ''}${data.discountPct ? ` · 유물 할인 ${data.discountPct}% 적용` : ''}</div>`;
     }
     overlay.querySelector('.nshop-card').innerHTML = `
       <div class="nshop-head"><h2>🏪 국영상점</h2><button type="button" class="nshop-close" data-nshop-close aria-label="닫기">✕</button></div>

@@ -42,6 +42,15 @@
     secured: [
       '{region|은/는} 우리 깃발 아래 있습니다.'
     ],
+    // 확보한 구역인데 내 지분이 다른 플레이어에게 매입되어 줄었다 → 재점령하면 구매권을 되찾는다
+    sharesLostRegion: [
+      '{region|은/는} 우리 깃발 아래 있지만, 그사이 지분 일부가 다른 손에 넘어갔습니다. 다시 점령하면 되찾을 수 있습니다.'
+    ],
+    // 접속했을 때(선택한 구역 없음) 지분이 줄어든 구역 보고. {regions}는 구역 이름 목록
+    sharesLost: [
+      '지휘관님, 자리를 비우신 사이 {regions}의 지분 일부가 다른 손에 넘어갔습니다. 다시 점령하면 되찾을 수 있습니다.',
+      '보고드립니다. {regions}에서 우리 지분이 줄었습니다. 재점령 작전으로 구매권을 회복할 수 있습니다.'
+    ],
     inProgress: [
       '{region} 작전이 진행 중입니다. 복귀하시겠습니까?'
     ],
@@ -176,9 +185,15 @@
   function buildBriefing(campaign, adjutant) {
     if (!adjutant) return pickLine('noAdjutant', 'none', {});
     const vars = { adjutant: adjutant.name };
-    if (campaign.cleared) return pickLine('cleared', 'end', vars, adjutant);
-
     const sel = selectedRegionId ? REGIONS[selectedRegionId] : null;
+    // 지분이 다른 플레이어에게 매입되어 줄어든 확보 구역 (재점령 가능)
+    const NS = global.NationShares;
+    const lost = NS && NS.canRerun
+      ? Object.keys(campaign.regions).filter((id) => REGIONS[id] && campaign.regions[id].status === 'secured' && NS.canRerun(id))
+      : [];
+    const lostLine = () => pickLine('sharesLost', lost.join(','), { ...vars, regions: lost.map((id) => getRegionName(id)).join(', ') }, adjutant);
+    if (campaign.cleared) return !sel && lost.length ? lostLine() : pickLine('cleared', 'end', vars, adjutant);
+
     if (selectedRegionId && sel) {
       const r = sel;
       Object.assign(vars, {
@@ -186,7 +201,7 @@
         desc: (r.description.ko || '').replace(/[.。]\s*$/, '')
       });
       const status = regionStatus(campaign, selectedRegionId);
-      if (status === 'secured') return pickLine('secured', selectedRegionId, vars, adjutant);
+      if (status === 'secured') return pickLine(lost.includes(selectedRegionId) ? 'sharesLostRegion' : 'secured', selectedRegionId, vars, adjutant);
       if (status === 'locked') return pickLine('locked', selectedRegionId, vars, adjutant);
       // 작전 중이거나 다른 작전 때문에 못 들어가는 구역도, 정찰된 구역이면 적 설명(성향·국가 규칙)을 덧붙인다.
       // 미확인(locked) 구역은 정찰 정보가 없다는 설정이라 덧붙이지 않는다.
@@ -211,6 +226,7 @@
       vars.opened = last.unlocked.map((id) => getRegionName(id)).join(', ');
       return pickLine(last.unlocked.length ? 'justSecured' : 'justSecuredNone', last.regionId, vars, adjutant);
     }
+    if (lost.length) return lostLine();
     const welcome = pickLine('welcome', 'welcome', vars, adjutant);
     const aware = loopAwareLine('welcome', adjutant);
     return aware ? `${welcome} ${aware}` : welcome;

@@ -5,6 +5,7 @@
 // 국영상점은 국가마다 유물을 판다. 규칙:
 //  - 진열: 국가 성향(ShareEngine.RELIC_PROFILES)의 종류·등급 가중치로, 구역마다 고정된 시드로 뽑는다.
 //          → 국가마다 파는 유물이 다르다 (변경은 보급품 선물만, 신비는 영웅 위주 …). 같은 국가는 누구에게나 같은 진열이다.
+//  - 진열한 유물은 하나씩만 살 수 있고, 다 사면 진열이 새로 바뀐다 (플레이어별 회차). 직전 진열의 유물은 가급적 빠진다.
 //  - 최상급(legendary)·개명 유물은 팔지 않는다. 최상급은 전투 보상으로만 얻는다.
 //  - 가격: 등급 기준가(× 지휘관 유물 배수) × 물가(인플레이션, config.js scaleGold와 같은 반올림) − 유물 상점 할인(%)
 //  - 판매 대금의 shopTaxPct(%)가 그 국가의 세수에 가산된다: 다음 정산 때 지분율대로 보유자에게 나뉜다.
@@ -59,17 +60,26 @@
    * 국가의 진열. 가중치 비복원 추출 (키 = -ln(u)/가중치가 작은 순). 같은 구역·같은 유물 DB → 항상 같은 결과.
    * @param region  campaignRegions의 구역 (id, relicProfile)
    * @param relics  유물 정의 배열 [{ id, kind, rarity, ... }]
+   * @param round   진열 회차. 진열한 유물을 다 사면 회차가 올라가 진열이 새로 바뀐다 (0부터)
    */
-  function stockFor(region, relics, slots = CONFIG.slots) {
+  function rank(region, relics, round) {
     const SE = global.ShareEngine;
     const prof = SE.relicProfile(region);
     const regionId = region && region.id;
     return (relics || []).filter(isSellable).map((d) => {
       const w = (Number(prof.kind[d.kind]) || 0) * (Number(prof.rarity[d.rarity]) || 0);
-      return { d, key: w > 0 ? -Math.log(hash01(`shop|${regionId}|${d.id}`)) / w : Infinity };
+      return { d, key: w > 0 ? -Math.log(hash01(`shop|${regionId}|${round}|${d.id}`)) / w : Infinity };
     }).filter((x) => x.key < Infinity)
       .sort((a, b) => a.key - b.key || String(a.d.id).localeCompare(String(b.d.id)))
-      .slice(0, slots).map((x) => x.d);
+      .map((x) => x.d);
+  }
+  function stockFor(region, relics, slots = CONFIG.slots, round = 0) {
+    const ranked = rank(region, relics, round);
+    if (round <= 0) return ranked.slice(0, slots);
+    // 직전 회차에 진열됐던 유물은 후보가 모자랄 때만 다시 나온다
+    const prev = new Set(rank(region, relics, round - 1).slice(0, slots).map((d) => String(d.id)));
+    const fresh = ranked.filter((d) => !prev.has(String(d.id))).slice(0, slots);
+    return fresh.concat(ranked.filter((d) => prev.has(String(d.id))).slice(0, slots - fresh.length));
   }
 
   global.ShopEngine = { CONFIG, isSellable, basePrice, scaleGold, price, taxShare, stockFor };

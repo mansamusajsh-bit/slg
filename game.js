@@ -1708,9 +1708,13 @@
        -------------------------------------------------------------------------- */
     const LOG_HISTORY_MAX = 500;
     const logHistory = []; // 지난 전투 로그 (회귀 카운터 버튼으로 열람)
+    const BATTLE_LOG_MAX = 4000;
+    let battleLog = []; // 이번 전투 로그 (패배 분석용). enterEncounter()에서 비운다.
     function addLog(msg, type = 'system') {
       logHistory.push({ msg: String(msg), type });
       if (logHistory.length > LOG_HISTORY_MAX) logHistory.shift();
+      battleLog.push({ msg: String(msg), type });
+      if (battleLog.length > BATTLE_LOG_MAX) battleLog.shift();
       const wrap = document.getElementById('console-wrap');
       const div = document.createElement('div');
       div.className = `log-line log-${type}`;
@@ -3170,8 +3174,7 @@
       // 12단계: 패배도 finishEncounter()를 거친다 (노드는 완료되지 않고, 같은 노드에 다시 도전할 수 있다).
       if (Number(state.gold) <= 0) {
         addLog('💀 [패배] 유지비 정산 후 보유 골드가 0G가 되어 작전을 지속할 수 없습니다.', 'danger');
-        finishEncounter({ victory: false, reason: 'bankrupt' });
-        window.alert('패배했습니다. 유지비를 지불한 후 보유 골드가 0원이 되어 전략 화면으로 돌아갑니다.');
+        finishEncounter({ victory: false, reason: 'bankrupt' }); // 패배 분석 창이 원인을 보여 준다
         return;
       }
 
@@ -4971,7 +4974,9 @@
       // 전술 렌더러의 기준 데이터는 오직 state.currentBattle.map이다.
       // LEGACY: state.tiles / 전역 tiles 별칭은 7~8단계에서 제거되었다. 전술 코드는 getBattleTiles()로만 접근한다.
       state.currentBattle = battle;
+      battleLog = [];
       state.currentBattle.nodeId = node.id;
+      state.currentBattle.startTurn = Number(state.turn) || 1;
       // 전술 화면이 섹터 표시명을 위해 WORLD_SECTORS를 직접 보지 않도록 진입 시점에 복사해 둔다.
       state.currentBattle.sectorName = sector.name || targetSectorId;
       state.currentBattle.seed = seed;
@@ -5031,6 +5036,11 @@
           }
         });
       }
+      // 패배 분석용: 출전 시점 병력 (아군 출전 수 · 적 수)
+      state.currentBattle.startForces = {
+        allies: (state.playerUnits || []).filter(u => u.isDeployed && !u.isDead).length,
+        enemies: state.enemyUnits.length
+      };
 
       // 도전 횟수 (재도전은 새 seed)
       if (!state.run.nodeAttempts) state.run.nodeAttempts = {};
@@ -12314,6 +12324,7 @@
       if (!run || state.currentBattle) return;
       if (run.returnPending) returnByDeath();
       else if (run.emergencyRecruit) openEmergencyRecruit();
+      else if (run.survivalPending) { run.survivalPending = false; resolveRunSurvival(); }
     }
     window.resumePendingRunFlow = resumePendingRunFlow;
 
@@ -12332,19 +12343,22 @@
       el.title = `사망회귀 ${count}회 · 눌러서 지난 전투 로그 보기`;
     }
 
-    function openBattleLogHistory() {
+    // lines 를 안 주면(회귀 카운터 버튼의 클릭 이벤트 등) 최근 로그 전체를 보여 준다
+    function openBattleLogHistory(lines, title = '📜 지난 전투 로그') {
+      if (!Array.isArray(lines)) lines = logHistory;
       document.getElementById('battle-log-history')?.remove();
       const overlay = document.createElement('div');
       overlay.id = 'battle-log-history';
       overlay.className = 'log-history-overlay';
       overlay.innerHTML = `
         <div class="log-history-card">
-          <div class="log-history-head"><span>📜 지난 전투 로그 (${logHistory.length})</span><button type="button" data-close>✕</button></div>
+          <div class="log-history-head"><span></span><button type="button" data-close>✕</button></div>
           <div class="log-history-body"></div>
         </div>`;
+      overlay.querySelector('.log-history-head span').textContent = `${title} (${lines.length})`;
       const body = overlay.querySelector('.log-history-body');
-      if (!logHistory.length) body.textContent = '기록된 로그가 없습니다.';
-      logHistory.forEach(({ msg, type }) => {
+      if (!lines.length) body.textContent = '기록된 로그가 없습니다.';
+      lines.forEach(({ msg, type }) => {
         const div = document.createElement('div');
         div.className = `log-line log-${type}`;
         div.textContent = msg;
@@ -12356,6 +12370,254 @@
       overlay.querySelector('[data-close]').onclick = close;
       overlay.onclick = (e) => { if (e.target === overlay) close(); };
     }
+
+    // ========================================================================
+    // 패배 분석: 이번 전투 로그(battleLog)를 읽어 왜 졌는지 정리한다
+    // ========================================================================
+    const DEFEAT_LOG_PATTERNS = {
+      turn: /\[제 (\d+)턴 아군 작전 개시\]/,
+      combat: /^⚔️ \[전투 개시\] (.+?)\(공 [\d.]+\) VS (.+?)\(방 /,
+      odds: /^📊 \[확률 산출\].*= ([\d.]+)%/,
+      diedDefending: /^💀 \[아군 전사 \(Permadeath\)\] 적 (.+?)의 치명적인 공격에 아군 (.+?)이\(가\) 전사/,
+      diedAttacking: /^💀 \[영구 사망 \(Permadeath\)\] (.+?)이\(가\) 치명타/,
+      captured: /^⛓️ \[포로\] (.+?)이\(가\) (.+?)에게 붙잡혔/,
+      refusal: /\[명령 거부 및 방어 태세\]|\[스킬 거부!\]/,
+      upkeepStop: /\[체납 비활성화\]/,
+      rewind: /\[리와인더 가동!\]/
+    };
+
+    /**
+     * @returns {{reason:string, nodeId:string, turns:number, startForces:object|null, enemiesLeft:number,
+     *   enemiesLeftHp:number, killed:number, deaths:Array, findings:Array, stats:object, log:Array}}
+     */
+    function buildDefeatReport(battle, reason, casualties) {
+      const P = DEFEAT_LOG_PATTERNS;
+      const deployedIds = Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [];
+      const allyNames = new Set((state.playerUnits || []).filter(u => deployedIds.includes(u.id)).map(u => u.name));
+      const enemyNames = new Set((state.enemyUnits || []).map(e => e.name));
+      const enemiesLeft = (state.enemyUnits || []).filter(e => !e.isDead && !(typeof e.hp === 'number' && e.hp <= 0));
+      const log = battleLog.slice();
+
+      const stats = { allyAttacks: 0, allyOdds: [], riskyAttacks: 0, enemyAttacks: 0, enemyOdds: [], refusals: 0, upkeepStops: 0, rewinds: 0 };
+      const deathByName = new Map(); // 되감기로 같은 유닛이 여러 번 기록되면 마지막 기록이 진짜다
+      let turn = Number(battle.startTurn) || 1;
+      let pending = null; // 직전 교전 { atk, def, allyAttacker, p }
+
+      log.forEach(({ msg }) => {
+        let m;
+        if ((m = msg.match(P.turn))) { turn = Number(m[1]); return; }
+        if ((m = msg.match(P.combat))) {
+          const [, atk, def] = m;
+          // 이름이 양쪽에 다 있으면 수비자 쪽을 보고 판단한다
+          const allyAttacker = allyNames.has(atk) && !(enemyNames.has(atk) && allyNames.has(def) && !enemyNames.has(def));
+          pending = { atk, def, allyAttacker, p: null };
+          return;
+        }
+        if ((m = msg.match(P.odds)) && pending && pending.p === null) {
+          pending.p = Number(m[1]);
+          if (pending.allyAttacker) {
+            stats.allyAttacks++; stats.allyOdds.push(pending.p);
+            if (pending.p < 50) stats.riskyAttacks++;
+          } else {
+            stats.enemyAttacks++; stats.enemyOdds.push(pending.p);
+          }
+          return;
+        }
+        if ((m = msg.match(P.diedDefending))) {
+          deathByName.set(m[2], { name: m[2], turn, how: 'defend', by: m[1], p: pending && pending.p });
+          return;
+        }
+        if ((m = msg.match(P.diedAttacking)) && allyNames.has(m[1])) {
+          deathByName.set(m[1], { name: m[1], turn, how: 'attack', by: pending && pending.def, p: pending && pending.p });
+          return;
+        }
+        if ((m = msg.match(P.captured)) && allyNames.has(m[1])) {
+          const attacking = !!(pending && pending.atk === m[1]);
+          deathByName.set(m[1], { name: m[1], turn, how: attacking ? 'attack' : 'defend', by: m[2], p: pending && pending.p, captured: true });
+          return;
+        }
+        if (P.refusal.test(msg)) stats.refusals++;
+        else if (P.upkeepStop.test(msg)) stats.upkeepStops++;
+        else if (P.rewind.test(msg)) stats.rewinds++;
+      });
+
+      // 최종 사상자 기준으로 정리 (로그에 원인이 없으면 스킬 · 공성 · 국가 규칙 등 교전 외 피해)
+      const deaths = casualties.map(c => deathByName.get(c.name) || { name: c.name, turn: null, how: 'other', by: null, p: null, captured: c.captive })
+        .sort((a, b) => (a.turn ?? 9999) - (b.turn ?? 9999));
+
+      const avg = arr => arr.length ? Math.round(arr.reduce((s, v) => s + v, 0) / arr.length) : null;
+      const allyAvg = avg(stats.allyOdds);
+      const enemyAvg = avg(stats.enemyOdds);
+      const turns = Math.max(1, (Number(state.turn) || 1) - (Number(battle.startTurn) || 1) + 1);
+      const sf = battle.startForces || null;
+      const findings = []; // { weight, icon, title, detail, tip }
+
+      if (reason === 'bankrupt') {
+        findings.push({ weight: 100, icon: '💸', title: '유지비 파산',
+          detail: '턴 종료 때 출전 부대의 유지비를 내고 나니 보유 골드가 0G가 되어 작전이 중단되었습니다.',
+          tip: '출전 인원을 줄이거나 유지비가 낮은 영웅으로 편성하고, 골드를 넉넉히 확보한 뒤 출격하세요.' });
+      }
+      if (stats.upkeepStops > 0) {
+        findings.push({ weight: 60, icon: '⛔', title: `유지비 체납으로 ${stats.upkeepStops}회 작전 정지`,
+          detail: '골드가 모자라 일부 영웅이 행동하지 못한 채로 전투가 진행되었습니다.',
+          tip: '전투가 길어질수록 유지비가 쌓입니다. 짧게 끝낼 수 있는 편성으로 들어가세요.' });
+      }
+      if (sf && sf.allies > 0 && sf.enemies >= sf.allies * 1.5) {
+        findings.push({ weight: 70 + Math.min(20, Math.round((sf.enemies / sf.allies) * 5)), icon: '👥', title: `수적 열세 (아군 ${sf.allies} vs 적 ${sf.enemies})`,
+          detail: `적이 아군의 ${(sf.enemies / sf.allies).toFixed(1)}배였습니다.`,
+          tip: '출전 인원을 늘리거나, 좁은 길·방어 지형에서 적을 하나씩 상대하세요.' });
+      }
+      const recklessDeaths = deaths.filter(d => d.how === 'attack' && d.p !== null && d.p < 50);
+      if (recklessDeaths.length) {
+        findings.push({ weight: 80 + recklessDeaths.length * 5, icon: '🎲', title: `낮은 승률로 공격하다 ${recklessDeaths.length}기 손실`,
+          detail: recklessDeaths.map(d => `${d.name} (승률 ${d.p}%)`).join(', '),
+          tip: '공격 전 승률을 확인하세요. 50% 미만이면 지형·지원 버프를 얻거나 다른 유닛으로 먼저 깎아 두는 편이 안전합니다.' });
+      } else if (stats.riskyAttacks >= 2) {
+        findings.push({ weight: 40, icon: '🎲', title: `승률 50% 미만 공격 ${stats.riskyAttacks}회`,
+          detail: '사망으로 이어지지는 않았지만 무리한 교전이 많았습니다 (호감도 하락 · 체력 소모).',
+          tip: '불리한 교전은 피하고 적이 먼저 다가오게 하세요.' });
+      }
+      const unluckyDeaths = deaths.filter(d => d.how === 'attack' && d.p !== null && d.p >= 50);
+      if (unluckyDeaths.length) {
+        findings.push({ weight: 50 + unluckyDeaths.length * 5, icon: '🍀', title: `유리한 공격에서 ${unluckyDeaths.length}기 손실 (운)`,
+          detail: unluckyDeaths.map(d => `${d.name} (승률 ${d.p}%)`).join(', '),
+          tip: '승률이 높아도 실패할 수 있습니다. 핵심 영웅은 70% 이상에서만 공격시키고, 리와인더를 아껴 두세요.' });
+      }
+      const defendDeaths = deaths.filter(d => d.how === 'defend');
+      if (defendDeaths.length) {
+        const oddsList = defendDeaths.filter(d => d.p !== null).map(d => d.p);
+        const killers = {};
+        defendDeaths.forEach(d => { if (d.by) killers[d.by] = (killers[d.by] || 0) + 1; });
+        const topKiller = Object.entries(killers).sort((a, b) => b[1] - a[1])[0];
+        findings.push({ weight: 75 + defendDeaths.length * 5, icon: '🛡️', title: `적의 공격을 막지 못해 ${defendDeaths.length}기 손실`,
+          detail: `${defendDeaths.map(d => d.name).join(', ')}${oddsList.length ? ` — 적 공격 승률 평균 ${avg(oddsList)}%` : ''}${topKiller && topKiller[1] >= 2 ? ` · ${topKiller[0]}이(가) ${topKiller[1]}기 처치` : ''}`,
+          tip: '체력이 낮은 유닛은 뒤로 빼고, 숲·언덕 같은 방어 지형이나 아군과 겹친 칸에서 버티세요.' });
+      }
+      const otherDeaths = deaths.filter(d => d.how === 'other');
+      if (otherDeaths.length) {
+        findings.push({ weight: 45, icon: '✨', title: `교전 외 피해로 ${otherDeaths.length}기 손실`,
+          detail: `${otherDeaths.map(d => d.name).join(', ')} — 스킬 · 공성 2차 피해 · 국가 규칙 효과 등`,
+          tip: '적의 스킬 범위와 공성병 주변을 피해 배치하세요.' });
+      }
+      if (stats.refusals > 0) {
+        findings.push({ weight: 55, icon: '😨', title: `명령 거부 ${stats.refusals}회`,
+          detail: '호감도나 체력이 낮은 영웅이 위험한 명령을 거부하고 방어 태세로 돌아섰습니다.',
+          tip: '호감도를 올리거나 체력이 회복된 뒤에 위험한 공격을 맡기세요.' });
+      }
+      if (allyAvg !== null && enemyAvg !== null && enemyAvg - allyAvg >= 10) {
+        findings.push({ weight: 50, icon: '📉', title: '전력 차이',
+          detail: `아군 공격 평균 승률 ${allyAvg}% · 적 공격 평균 승률 ${enemyAvg}%`,
+          tip: '영웅 레벨 · 승급 · 유물로 전력을 올린 뒤 다시 도전하세요.' });
+      }
+      if (!findings.length) {
+        findings.push({ weight: 0, icon: '❔', title: '뚜렷한 원인을 찾지 못했습니다',
+          detail: log.length ? '전투 로그 전체를 열어 흐름을 확인해 보세요.' : '이번 전투 로그가 남아 있지 않습니다 (전투 도중 새로고침).',
+          tip: '' });
+      }
+      findings.sort((a, b) => b.weight - a.weight);
+
+      return {
+        reason,
+        nodeId: battle.nodeId,
+        sectorName: battle.sectorName || battle.sectorId,
+        turns,
+        startForces: sf,
+        enemiesLeft: enemiesLeft.length,
+        enemiesLeftHp: enemiesLeft.reduce((s, e) => s + (Number(e.hp) || 0), 0),
+        killed: Number(window.defeatedEnemyCount) || 0,
+        deaths,
+        findings,
+        stats: { ...stats, allyAvg, enemyAvg },
+        log
+      };
+    }
+    window.buildDefeatReport = buildDefeatReport;
+
+    function showDefeatReport(report, onClose) {
+      document.getElementById('modal-defeat-report')?.remove();
+      const mk = (tag, cls, text) => {
+        const n = document.createElement(tag);
+        if (cls) n.className = cls;
+        if (text !== undefined) n.textContent = text;
+        return n;
+      };
+      const overlay = mk('div', 'defeat-report-overlay');
+      overlay.id = 'modal-defeat-report';
+      const card = mk('div', 'defeat-report-card');
+      overlay.appendChild(card);
+
+      const reasonLabel = { wipeout: '출전 부대 전멸', bankrupt: '유지비 파산' }[report.reason] || report.reason;
+      card.appendChild(mk('div', 'defeat-report-icon', report.reason === 'bankrupt' ? '💸' : '💀'));
+      card.appendChild(mk('h2', 'defeat-report-title', `패배 — ${reasonLabel}`));
+      card.appendChild(mk('div', 'defeat-report-sub', `${report.sectorName || ''} · ${report.nodeId} · ${report.turns}턴 진행 · 노드는 완료되지 않았습니다`));
+
+      const sumRow = mk('div', 'defeat-report-summary');
+      const sf = report.startForces;
+      [
+        ['출전', sf ? `${sf.allies}기` : '-'],
+        ['아군 손실', `${report.deaths.length}기`],
+        ['적 격퇴', `${report.killed}${sf ? ` / ${sf.enemies}` : ''}기`],
+        ['남은 적', `${report.enemiesLeft}기`]
+      ].forEach(([k, v]) => {
+        const cell = mk('div', 'defeat-report-stat');
+        cell.appendChild(mk('span', null, k));
+        cell.appendChild(mk('strong', null, v));
+        sumRow.appendChild(cell);
+      });
+      card.appendChild(sumRow);
+
+      card.appendChild(mk('div', 'defeat-report-section', '🔍 패배 원인 분석'));
+      const list = mk('div', 'defeat-report-findings');
+      report.findings.forEach((f, i) => {
+        const item = mk('div', `defeat-report-finding${i === 0 ? ' is-main' : ''}`);
+        item.appendChild(mk('div', 'defeat-report-finding-title', `${f.icon} ${f.title}`));
+        if (f.detail) item.appendChild(mk('div', 'defeat-report-finding-detail', f.detail));
+        if (f.tip) item.appendChild(mk('div', 'defeat-report-finding-tip', `💡 ${f.tip}`));
+        list.appendChild(item);
+      });
+      card.appendChild(list);
+
+      if (report.deaths.length) {
+        card.appendChild(mk('div', 'defeat-report-section', '🕯️ 사상자 기록'));
+        const tl = mk('div', 'defeat-report-timeline');
+        report.deaths.forEach(d => {
+          const how = d.how === 'attack' ? `${d.by ? `${d.by}을(를) ` : ''}공격하다 ${d.captured ? '포로로 잡힘' : '전사'}`
+            : d.how === 'defend' ? `${d.by ? `${d.by}의 ` : '적의 '}공격에 ${d.captured ? '포로로 잡힘' : '전사'}`
+            : (d.captured ? '포로로 잡힘' : '교전 외 피해로 전사');
+          const row = mk('div', 'defeat-report-death');
+          row.appendChild(mk('span', 'defeat-report-death-turn', d.turn ? `${d.turn}턴` : '-'));
+          row.appendChild(mk('span', 'defeat-report-death-text', `${d.name} — ${how}${d.p !== null && d.p !== undefined ? ` (승률 ${d.p}%)` : ''}`));
+          tl.appendChild(row);
+        });
+        card.appendChild(tl);
+      }
+
+      const s = report.stats;
+      const statLine = [
+        `아군 공격 ${s.allyAttacks}회${s.allyAvg !== null ? ` (평균 승률 ${s.allyAvg}%)` : ''}`,
+        `적 공격 ${s.enemyAttacks}회${s.enemyAvg !== null ? ` (평균 승률 ${s.enemyAvg}%)` : ''}`,
+        s.rewinds ? `리와인더 ${s.rewinds}회 사용` : ''
+      ].filter(Boolean).join(' · ');
+      card.appendChild(mk('div', 'defeat-report-foot', statLine));
+
+      const btns = mk('div', 'defeat-report-buttons');
+      const btnLog = mk('button', 'defeat-report-btn is-secondary', '📜 이번 전투 로그 보기');
+      btnLog.type = 'button';
+      btnLog.onclick = () => openBattleLogHistory(report.log, '📜 이번 전투 로그');
+      const btnOk = mk('button', 'defeat-report-btn', '확인');
+      btnOk.type = 'button';
+      btnOk.onclick = () => {
+        overlay.remove();
+        if (typeof onClose === 'function') onClose();
+      };
+      btns.appendChild(btnLog);
+      btns.appendChild(btnOk);
+      card.appendChild(btns);
+
+      document.body.appendChild(overlay);
+      return overlay;
+    }
+    window.showDefeatReport = showDefeatReport;
 
     // ========================================================================
     // 회귀 보상 (설정과 맞물리는 보상 + 회귀 카드)
@@ -13475,6 +13737,8 @@
         }
       }
       RunEngine.recordEncounter(run, battle, victory, { reason, casualties: casualties.map(c => c.id), rewards });
+      // 패배 분석 (전투 데이터를 지우기 전에 이번 전투 로그와 남은 적을 읽는다). 자진 후퇴는 제외.
+      const defeatReport = (!victory && reason !== 'retreat') ? buildDefeatReport(battle, reason, casualties) : null;
 
       // 5) 전투 인스턴스 정리: 결과는 run.encounters에 요약으로 남고, 맵/적 데이터는 버린다.
       battle.status = victory ? 'won' : 'lost';
@@ -13525,11 +13789,23 @@
       state.currentView = nextView;
       [window.playerState, window.gameState].forEach(o => { if (o) o.currentView = nextView; });
       switchGameView(nextView);
+      // 패배면 분석 창을 먼저 보여 주고, 닫은 뒤에 회귀/긴급 모집 판정을 한다 (창을 닫기 전에 새로고침해도 이어서 판정)
+      if (defeatReport) run.survivalPending = true;
       saveGameState();
       // 7-1) 유물 보상 (보상 데이터를 불러온 뒤 지급하므로 비동기 — 보스는 3택1 창이 뜬다)
       if (victory && node) awardBattleRelics(battle, node);
       // 8) 2차: 생존 유닛 0이면 골드에 따라 사망회귀 / 긴급 모집 (회귀 판정은 여기와 긴급 모집 화면에서만 한다)
-      finished.survival = resolveRunSurvival();
+      if (defeatReport) {
+        finished.survival = 'pending';
+        showDefeatReport(defeatReport, () => {
+          if (!run.survivalPending) return;
+          run.survivalPending = false;
+          resolveRunSurvival();
+          saveGameState();
+        });
+      } else {
+        finished.survival = resolveRunSurvival();
+      }
       return finished;
     }
     window.finishEncounter = finishEncounter;

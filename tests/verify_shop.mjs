@@ -44,6 +44,7 @@ const SE = ctx.ShareEngine, SH = ctx.ShopEngine, R = rc.R;
   ok(kinds('liona').every((k) => k === 'gift'), '변경(frontier) 국가는 선물 유물만 판다');
   const mystic = SH.stockFor(R.elda, RELICS), frontier = SH.stockFor(R.liona, RELICS);
   ok(mystic.filter((d) => d.rarity === 'epic').length > frontier.filter((d) => d.rarity === 'epic').length, '신비(mystic) 국가는 변경 국가보다 영웅 유물이 많다');
+  ok(SH.stockFor(R.mira, RELICS, 6, 0).map((d) => d.id).join() !== SH.stockFor(R.mira, RELICS, 6, 1).map((d) => d.id).join(), '회차가 바뀌면 같은 국가도 진열이 바뀐다');
   ok(frontier.every((d) => d.rarity !== 'epic'), '변경 국가는 영웅 유물을 팔지 않는다 (성향 가중치 0)');
 
   // 가격: 등급 기준가 × 물가, 지휘관 유물은 비싸다, 유물 할인
@@ -132,9 +133,11 @@ for (const r of RELICS) await put('relics', r.id, r);
   eq(snap.shopPending.liona, r.tax, '동기화에 다음 정산 가산 매출이 담긴다');
   eq((await list('a', 'liona')).pending, r.tax, '상점 화면에도 가산 매출이 보인다');
 
-  // 같은 구성의 두 번째 구매 (선물 유물은 중복 구매 가능) → 매출 누적
-  const r2 = await buy('a', 'liona', item.id);
-  ok(r2.ok, '선물 유물은 다시 살 수 있다');
+  // 산 유물은 품절 — 같은 것을 또 살 수 없다. 다른 유물을 사서 매출을 누적한다
+  eq((await buy('a', 'liona', item.id)).error, 'sold_out', '진열한 유물은 하나씩만 살 수 있다 (품절)');
+  ok((await list('a', 'liona')).items.find((i) => i.id === item.id).sold === true, '목록에 품절 표시');
+  const r2 = await buy('a', 'liona', stock[1].id);
+  ok(r2.ok, '다른 유물은 살 수 있다');
   const total = r.tax + r2.tax;
 
   // 정산: 다음 8시간 경계가 지나면 기본 세금 + 상점 매출 × 지분율
@@ -162,21 +165,43 @@ for (const r of RELICS) await put('relics', r.id, r);
   if (cmd) {
     ok((await buy('a', 'mira', cmd.id)).ok, '지휘관 유물 구매');
     eq((await buy('a', 'mira', cmd.id)).error, 'owned', '이미 가진 지휘관 유물은 다시 살 수 없다 (대금도 빠지지 않는다)');
-    ok((await list('a', 'mira')).items.find((i) => i.id === cmd.id).owned === true, '목록에 보유 표시');
+    ok((await list('a', 'mira')).items.find((i) => i.id === cmd.id).sold === true, '목록에 품절(보유) 표시');
   } else console.log('SKIP 지휘관 유물이 이 진열에 없다');
   eq((await buy('a', 'mira', 'gift-legendary-0')).error, 'not_in_stock', '진열에 없는 유물(최상급)은 살 수 없다');
   eq((await buy('a', 'mira', 'rename-1')).error, 'not_in_stock', '개명 유물도 살 수 없다');
   eq((await buy('a', 'mira', 'nope')).error, 'not_in_stock', '없는 유물');
   await setGold('a', 1);
-  const cheap = (await list('a', 'mira')).items.find((i) => !i.owned);
+  const cheap = (await list('a', 'mira')).items.find((i) => !i.sold);
   const poor = await buy('a', 'mira', cheap.id);
   ok(poor.error === 'insufficient' && (await gold('a')) === 1, '골드가 모자라면 못 산다 (잔액 그대로)');
   await setGold('a', 1000000);
   await put('relics', 'gift-common-0', RELICS[0]);
   let bought = Number((await list('a', 'mira')).bought);
   let last;
-  for (let i = bought; i < 14; i++) { last = await buy('a', 'mira', (await list('a', 'mira')).items.find((x) => x.kind === 'gift').id); if (!last.ok) break; }
+  for (let i = bought; i < 14; i++) { last = await buy('a', 'mira', (await list('a', 'mira')).items.find((x) => !x.sold).id); if (!last.ok) break; }
   eq(last.error, 'daily_limit', '하루 구매 횟수 제한');
+}
+
+{
+  // 진열을 다 사면 새로고침
+  await s.at(TT + 30 * H);
+  await s.rpc('slg_region_secure', ['liona'], 'b');
+  await setGold('b', 1000000);
+  await s.q("delete from slg_item_log where kind = 'shop_buy'");   // 하루 구매 한도는 따로 검증했다
+  const first = await list('b', 'liona');
+  const ids1 = first.items.map((i) => i.id);
+  eq(first.round, 0, '처음 진열은 0회차');
+  let lastBuy;
+  for (const id of ids1) lastBuy = await buy('b', 'liona', id);
+  ok(lastBuy.ok && lastBuy.refreshed === true, '진열을 하나씩 다 사면 새로고침된다');
+  const second = await list('b', 'liona');
+  eq(second.round, 1, '회차가 올라간다');
+  ok(second.items.length === 6 && second.items.every((i) => !i.sold), '새 진열은 모두 구매 가능');
+  ok(second.items.map((i) => i.id).join() !== ids1.join(), '새 진열은 이전과 다르다');
+  ok(second.items.filter((i) => !ids1.includes(i.id)).length >= 2, '직전 진열에 없던 유물이 우선 들어온다 (후보가 모자라면 일부만 겹친다)');
+  ok(second.items.every((i) => i.rarity !== 'legendary'), '새 진열에도 최상급은 없다');
+  const other = await list('a', 'liona');
+  ok(other.round !== 1, '새로고침은 플레이어별이다 (다른 플레이어의 진열은 그대로)');
 }
 
 {
