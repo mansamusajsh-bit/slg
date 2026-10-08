@@ -84,6 +84,46 @@ async function uploadAsset(input, folder, filename) {
   } catch (e) { warn('asset upload failed', e); return input; }
 }
 
+// ---- 게임 세이브 올리기 큐 (saveGameStateToCloud) ----
+const SAVE_DEBOUNCE_MS = 1500;          // 연달아 불려도 이 동안 모아서 한 번에
+const SAVE_MIN_GAP_MS = 4000;           // 한 번 올린 뒤 다음 업로드까지 최소 간격
+const SAVE_RETRY_MS = [5000, 15000, 30000, 60000];
+const SAVE_WARN_BYTES = 1500000;
+const saveQueue = { latest: null, inflight: false, timer: null, lastEnd: 0, fails: 0, warned: false };
+function scheduleSave(delay) {
+  if (saveQueue.inflight || saveQueue.timer || !saveQueue.latest) return;
+  const wait = Math.max(delay, saveQueue.lastEnd + SAVE_MIN_GAP_MS - Date.now());
+  saveQueue.timer = setTimeout(() => { saveQueue.timer = null; runSave(); }, wait);
+}
+async function runSave() {
+  const job = saveQueue.latest;
+  if (!job || saveQueue.inflight) return;
+  saveQueue.latest = null;
+  saveQueue.inflight = true;
+  let ok = false;
+  try {
+    const data = { ...clean(job.payload), userId: job.uid, updatedAt: new Date().toISOString() };
+    if (!saveQueue.warned) {
+      const bytes = JSON.stringify(data).length;
+      if (bytes > SAVE_WARN_BYTES) { saveQueue.warned = true; console.warn(`[Supabase] 세이브 크기 ${(bytes / 1e6).toFixed(1)}MB — 너무 크면 저장이 느려진다`); }
+    }
+    await putRecord('gameState', job.uid, data);
+    ok = true;
+    saveQueue.fails = 0;
+  } catch (e) {
+    warn('save game state', e);
+    if (!saveQueue.latest) saveQueue.latest = job;   // 더 새 상태가 없으면 이걸 다시 올린다
+  } finally {
+    saveQueue.inflight = false;
+    saveQueue.lastEnd = Date.now();
+  }
+  scheduleSave(ok ? SAVE_DEBOUNCE_MS : SAVE_RETRY_MS[Math.min(saveQueue.fails++, SAVE_RETRY_MS.length - 1)]);
+  return ok;
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => { if (document.hidden) bridge.flushGameState(); });
+}
+
 const bridge = {
   isReady: !!client,
   // 로그인하기 전에는 null. 로그인하면 { uid(= auth.uid()), email }, "오프라인으로 시작"이면 { uid:'guest_main', offline:true }.
@@ -256,7 +296,18 @@ const bridge = {
   listSharedRecords(collection){return listRecords(collection);},
   getSharedRecord(collection,id){return getRecord(collection,id);},
   casSharedRecord(collection,id,expectedRev,value){return casRecord(collection,id,expectedRev,value);},
-  async saveGameStateToCloud(payload){try{if(this.currentUser?.offline)return false;const uid=this.currentUser?.uid||payload?.guest?.id||'guest_main';return await putRecord('gameState',uid,{...clean(payload),userId:uid,updatedAt:new Date().toISOString()});}catch(e){warn('save game state',e);return false;}},
+  // 세이브는 이동 · 스킬 · 턴마다 불린다. 부를 때마다 바로 올리면 같은 행에 큰 upsert 가 겹쳐 서로의 행 잠금을 기다리고,
+  // DB 연결이 바닥나 서버 경제 RPC 까지 시간 초과된다. → 최신 상태만 모아서, 한 번에 하나씩, 최소 간격을 두고 올린다.
+  saveGameStateToCloud(payload){
+    if(!this.currentUser||this.currentUser.offline)return Promise.resolve(false);   // 로그인 전에는 올리지 않는다 (RLS 에 막힌다)
+    const uid=this.currentUser.uid;
+    saveQueue.latest={uid,payload};
+    scheduleSave(SAVE_DEBOUNCE_MS);
+    return Promise.resolve(true);
+  },
+  /** 대기 중인 세이브를 지금 올린다 (탭을 떠날 때) */
+  _saveQueue: saveQueue,   // 디버그용 (콘솔에서 저장 대기 상태 확인)
+  flushGameState(){ if(saveQueue.latest&&!saveQueue.inflight){ clearTimeout(saveQueue.timer); saveQueue.timer=null; return runSave(); } return Promise.resolve(); },
   async loadGameStateFromCloud(uid){try{if(this.currentUser?.offline)return null;return await getRecord('gameState',uid||this.currentUser?.uid||'guest_main');}catch(e){warn('load game state',e);return null;}},
   subscribeGameState(uid,cb){return subscribeOne('gameState',uid||this.currentUser?.uid||'guest_main',cb);}
 };

@@ -1137,6 +1137,18 @@
     let cloudLoadPending = false;
 
     // 게임 상태를 Supabase에 안전하게 영구 저장 (Zero LocalStorage)
+    // 세이브에서 스킬 아이콘의 data: URI 를 뺀다. 캐릭터 원본에서 복사된 트리라 유닛마다 · 되감기 스냅샷마다 같은 그림이
+    // 반복되어 세이브가 수 MB 가 된다. 불러오기 · 되감기 · 캐릭터 DB 갱신 때 syncAllUnitSkillsFromRecords 가 원본에서 다시 채운다.
+    function stripInlineSkillIcons(u) {
+      if (!u || typeof u !== 'object') return u;
+      const isData = (v) => typeof v === 'string' && v.startsWith('data:');
+      const node = (n) => (n && typeof n === 'object' && isData(n.imageUrl)) ? { ...n, imageUrl: '' } : n;
+      let out = u;
+      if (Array.isArray(u.skillTree) && u.skillTree.some(n => n && isData(n.imageUrl))) out = { ...out, skillTree: u.skillTree.map(node) };
+      if (u.customSkill && isData(u.customSkill.imageUrl)) out = { ...out, customSkill: node(u.customSkill) };
+      return out;
+    }
+
     function saveGameState(silent = false) {
       try {
         if (!state) return;
@@ -1154,10 +1166,10 @@
         // 병과 공통 이미지는 Supabase game_configs/unit_images에 영구 저장되므로 페이로드 경량화
         const sanitizedPlayerUnits = state.playerUnits.map(u => {
           const isClassImg = u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType];
-          return {
+          return stripInlineSkillIcons({
             ...u,
             imageUrl: isClassImg ? '' : u.imageUrl
-          };
+          });
         });
 
         // v3 저장 구조 (2차: 사망회귀).
@@ -1178,8 +1190,9 @@
               try {
                 const s = JSON.parse(json);
                 if (Array.isArray(s.playerUnits)) {
-                  s.playerUnits = s.playerUnits.map(u => (u && u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType]) ? { ...u, imageUrl: '' } : u);
+                  s.playerUnits = s.playerUnits.map(u => stripInlineSkillIcons((u && u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType]) ? { ...u, imageUrl: '' } : u));
                 }
+                if (Array.isArray(s.reserveUnits)) s.reserveUnits = s.reserveUnits.map(stripInlineSkillIcons);
                 return s;
               } catch (e) { return null; }
             }).filter(Boolean)
@@ -1210,7 +1223,7 @@
           run: state.run ? {
             ...state.run,
             party: sanitizedPlayerUnits,
-            reserve: Array.isArray(state.reserveUnits) ? state.reserveUnits : [],
+            reserve: Array.isArray(state.reserveUnits) ? state.reserveUnits.map(stripInlineSkillIcons) : [],
             gold: state.gold,
             commander: state.commander,
             inventory: Array.isArray(state.inventory) ? state.inventory : [],
