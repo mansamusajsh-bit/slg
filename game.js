@@ -991,7 +991,44 @@
     // LEGACY: 전역 tiles / state.tiles / 기본 8x10 맵은 7~8단계에서 제거되었다.
     let state = createInitialState();
     normalizeAllUnitsHP(state);
-    let historyStack = []; // 리와인더용 실행 취소 스택
+    let historyStack = []; // 리와인더용 실행 취소 스택 (턴 시작 상태. 유닛은 전투 중 바뀌는 값만 — splitUnitForHistory)
+    // 되감기 스냅샷에서 뺀 무거운 값(일러스트 · 스킬트리 등, 전투 중에는 바뀌지 않는다). `${진영}:${id}` → 값.
+    // 되감을 때 지금 유닛에서 다시 채우고, 그 사이 사라진 유닛(전사해 빠진 적 등)만 여기서 채운다.
+    let historyStatics = {};
+    const HISTORY_HEAVY_KEYS = new Set(['skillTree', 'customSkill']);
+    const HISTORY_LONG_STRING = 300;
+    function splitUnitForHistory(u) {
+      const light = {}, heavy = {};
+      Object.keys(u || {}).forEach((k) => {
+        const v = u[k];
+        if (HISTORY_HEAVY_KEYS.has(k) || (typeof v === 'string' && v.length > HISTORY_LONG_STRING)) heavy[k] = v; else light[k] = v;
+      });
+      return { light, heavy };
+    }
+    function compactUnitsForHistory(units, side) {
+      return (Array.isArray(units) ? units : []).map((u) => {
+        if (!u || typeof u !== 'object') return u;
+        const { light, heavy } = splitUnitForHistory(u);
+        if (Object.keys(heavy).length) historyStatics[`${side}:${u.id}`] = heavy;
+        return light;
+      });
+    }
+    function restoreUnitsFromHistory(units, side, currentUnits) {
+      const cur = new Map((Array.isArray(currentUnits) ? currentUnits : []).filter(u => u && u.id != null).map(u => [String(u.id), u]));
+      return (Array.isArray(units) ? units : []).map((u) => {
+        if (!u || typeof u !== 'object') return u;
+        const now = cur.get(String(u.id));
+        const heavy = now ? splitUnitForHistory(now).heavy : (historyStatics[`${side}:${u.id}`] || {});
+        return { ...heavy, ...u };   // 예전 세이브의 스냅샷(전체 유닛)은 그대로 덮인다
+      });
+    }
+    // 세이브에는 지금 전장에 없는 유닛의 무거운 값만 남긴다 (있는 유닛은 불러온 뒤 그 유닛에서 다시 채운다)
+    function historyStaticsForSave() {
+      const present = new Set([...(state.playerUnits || []).map(u => `player:${u && u.id}`), ...(state.enemyUnits || []).map(u => `enemy:${u && u.id}`)]);
+      const out = {};
+      Object.keys(historyStatics).forEach((k) => { if (!present.has(k)) out[k] = historyStatics[k]; });
+      return out;
+    }
     let selectedUnitId = 'u1';
     const SQUAD_PANEL_PEEK_MS = 1000; // 중첩 부대 사이드 패널 자동 닫힘 시간
     const squadPanel = { open: false, pinned: false, timer: null };
@@ -1185,17 +1222,9 @@
             enemyUnits: state.enemyUnits,
             deployedUnitIds: Array.isArray(state.currentDeployedUnitIds) ? state.currentDeployedUnitIds : [],
             defeatedEnemyCount: window.defeatedEnemyCount || 0,
-            // 리와인더 스냅샷도 함께 저장 — 새로고침해도 되돌릴 턴이 남도록. 병과 공통 이미지는 위와 같이 뺀다.
-            history: historyStack.map((json) => {
-              try {
-                const s = JSON.parse(json);
-                if (Array.isArray(s.playerUnits)) {
-                  s.playerUnits = s.playerUnits.map(u => stripInlineSkillIcons((u && u.imageUrl && customClassImages[u.classType] && u.imageUrl === customClassImages[u.classType]) ? { ...u, imageUrl: '' } : u));
-                }
-                if (Array.isArray(s.reserveUnits)) s.reserveUnits = s.reserveUnits.map(stripInlineSkillIcons);
-                return s;
-              } catch (e) { return null; }
-            }).filter(Boolean)
+            // 리와인더 스냅샷도 함께 저장 — 새로고침해도 되돌릴 턴이 남도록. 스냅샷에는 위치 · HP 등 전투 중 바뀌는 값만 있다.
+            history: historyStack.map((json) => { try { return JSON.parse(json); } catch (e) { return null; } }).filter(Boolean),
+            historyStatics: historyStaticsForSave()
           }
         } : null;
         const payload = {
@@ -1344,6 +1373,7 @@
       state.currentSector = battle.sectorId;
       if (state.strategy) state.strategy.selectedSectorId = battle.sectorId;
       state.currentView = 'SECTOR_MAP';
+      historyStatics = (live && live.historyStatics && typeof live.historyStatics === 'object') ? live.historyStatics : {};
       historyStack = (live && Array.isArray(live.history) ? live.history : [])
         .filter(s => s && typeof s === 'object' && Number.isFinite(Number(s.turn)) && Array.isArray(s.playerUnits) && Array.isArray(s.enemyUnits))
         .slice(-8)
@@ -1498,7 +1528,7 @@
 
     // 게스트 데이터 영구 초기화 및 새 게임 시작
     function resetGuestData() {
-      historyStack = [];
+      historyStack = []; historyStatics = {};
       const newGuestId = generateGuestId();
       state = createInitialState(newGuestId);
       normalizeAllUnitsHP(state);
@@ -1600,8 +1630,8 @@
         rewinders: state.rewinders,
         stackMoveEnabled: state.stackMoveEnabled,
         commander: state.commander,
-        playerUnits: state.playerUnits,
-        enemyUnits: state.enemyUnits,
+        playerUnits: compactUnitsForHistory(state.playerUnits, 'player'),
+        enemyUnits: compactUnitsForHistory(state.enemyUnits, 'enemy'),
         nationState: (state.currentBattle && state.currentBattle.nationState) || null
       });
       historyStack.push(snapshot);
@@ -1661,8 +1691,8 @@
       state.rewinders = currentRewinders;
       state.stackMoveEnabled = prev.stackMoveEnabled !== undefined ? prev.stackMoveEnabled : true;
       state.commander = prev.commander;
-      state.playerUnits = prev.playerUnits;
-      state.enemyUnits = prev.enemyUnits;
+      state.playerUnits = restoreUnitsFromHistory(prev.playerUnits, 'player', state.playerUnits);
+      state.enemyUnits = restoreUnitsFromHistory(prev.enemyUnits, 'enemy', state.enemyUnits);
       syncAllUnitSkillsFromRecords(); // 되감기 스냅샷의 스킬 사본도 원본에 맞춘다
       if (state.currentBattle) state.currentBattle.nationState = prev.nationState || {}; // 국가 규칙 (모르 부활 대기 등)
       cancelSkillTargeting(true);
@@ -4950,7 +4980,7 @@
       state.currentBattle.nationState = {};
       state.selectedNodeId = node.id;
       registerBattleOnServer(state.currentBattle); // 서버 권위 아이템: 전투 시작 시각을 서버가 기록한다 (승리 보상 수령의 기준)
-      historyStack = []; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
+      historyStack = []; historyStatics = {}; // 이전 전투의 되감기 스냅샷이 이번 전투로 새어 들어오지 않게 한다.
       state.selectedSectorId = targetSectorId;
       state.currentSector = targetSectorId;
       if (state.strategy) state.strategy.selectedSectorId = targetSectorId;
@@ -12245,7 +12275,7 @@
         }
         normalizeAllUnitsHP(state);
         selectedUnitId = (state.playerUnits[0] && state.playerUnits[0].id) || 'u1';
-        historyStack = [];
+        historyStack = []; historyStatics = {};
         ensureNodeSelection();
         const card = LOOP_REWARD_CARDS[reward.type];
         if (reward.type === 'command') {
@@ -13457,7 +13487,7 @@
       };
       state.currentBattle = null;
       state.enemyUnits = [];
-      historyStack = [];
+      historyStack = []; historyStatics = {};
       state.selectedNodeId = null;
       ensureNodeSelection();
 

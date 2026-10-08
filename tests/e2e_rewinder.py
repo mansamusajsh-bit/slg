@@ -88,6 +88,27 @@ with sync_playwright() as pw:
     page.evaluate("executeRewind()")
     r = page.evaluate(POS_JS, uid)
     c.ok(r['turn'] == 1 and r['rew'] == 2, '기록 없음 → 리와인더 소모 없음')
+    print('\n=== 스냅샷에는 전투 중 바뀌는 값만, 일러스트 · 스킬트리는 되감을 때 다시 채운다 ===')
+    HEAVY_JS = """
+    (uid) => {
+      const big = 'data:image/png;base64,' + 'A'.repeat(5000);
+      const u = state.playerUnits.find(x => x.id === uid);
+      u.imageUrl = big; u.skillTree = [{ id: 'n1', imageUrl: big }];
+      const e = state.enemyUnits[0]; e.imageUrl = big;
+      return e.id;
+    }"""
+    eid = page.evaluate(HEAVY_JS, uid)
+    page.evaluate(MOVE_JS, uid)
+    snap = page.evaluate("historyStack[historyStack.length - 1]")
+    hits = [w for w in ('base64', '"skillTree"') if w in snap]
+    c.ok(len(snap) < 5000 and not hits, f'스냅샷에 일러스트 · 스킬트리가 없다 ({len(snap)}자) {hits}')
+    # 적이 전장에서 빠져도(전사) 되감으면 일러스트까지 돌아온다
+    page.evaluate("(eid) => { state.enemyUnits = state.enemyUnits.filter(e => e.id !== eid); state.playerUnits.find(u => u.isDeployed && !u.isDead).hp = 1; }", eid)
+    page.evaluate("executeRewind()")
+    r = page.evaluate("""([uid, eid]) => { const u = state.playerUnits.find(x => x.id === uid); const e = state.enemyUnits.find(x => x.id === eid);
+      return { hp: u.hp, img: (u.imageUrl || '').length, tree: Array.isArray(u.skillTree) && u.skillTree.length, enemy: !!e, eimg: e ? (e.imageUrl || '').length : 0 }; }""", [uid, eid])
+    c.ok(r['hp'] > 1 and r['img'] > 5000 and r['tree'] == 1, f'되감기 → HP 복원, 일러스트 · 스킬트리 유지 {r}')
+    c.ok(r['enemy'] and r['eimg'] > 5000, '전장에서 빠졌던 적도 일러스트와 함께 돌아온다')
     c.ok(errors == [], '콘솔/페이지 오류 없음 ' + str(errors[:3]))
     browser.close()
 srv.shutdown()
