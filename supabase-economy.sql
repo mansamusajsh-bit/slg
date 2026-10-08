@@ -2046,10 +2046,21 @@ language sql stable set search_path = public as $$
 $$;
 
 -- ---------------------------------------------------------------- 전투 · 이벤트
--- 전투를 시작했다고 알린다. 서버는 시각만 기록한다 (같은 전투를 다시 알려도 그대로). 같은 노드의 이전 진행 중 전투는 무효가 된다.
+-- 전투(맵)가 만들어질 때 알린다. 적 수가 정해지는 이 시점에 승리 보상(골드 · 리와인더 · 유물)을 서버가 미리 굴려 확정해 두고 돌려준다.
+--   승리하면 slg_encounter_claim 이 확정해 둔 그대로 지급한다 (클라이언트는 승리 창에 바로 보여 줄 수 있다).
+--   같은 노드를 다시 시작해도(후퇴 후 재도전) 리와인더 · 유물은 처음 굴린 결과를 그대로 쓴다 — 재시작으로 다시 굴리지 못한다.
+--   같은 전투를 다시 알려도 그대로. 같은 노드의 이전 진행 중 전투는 무효가 된다.
+create or replace function public.slg_enc_reward_json(e slg_encounters) returns jsonb
+language sql stable set search_path = public as $$
+  select jsonb_build_object('gold', e.gold_reward, 'rewinders', e.rewinder_reward,
+                            'relics', case when e.type = 'boss' then '[]'::jsonb else coalesce(e.result -> 'planned', '[]'::jsonb) end,
+                            'options', case when e.type = 'boss' then coalesce(e.result -> 'planned', '[]'::jsonb) else '[]'::jsonb end)
+$$;
+
 create or replace function public.slg_encounter_start(p_ref text, p_node_id text, p_sector text, p_type text, p_enemies int) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
-declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; e slg_encounters%rowtype;
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; e slg_encounters%rowtype; prev slg_encounters%rowtype;
+        n_enemies int; gold bigint; rwd int; ids jsonb := '[]'; owned text[]; r jsonb;
 begin
   if p_ref is null or p_ref !~ '^[A-Za-z0-9_.-]{1,40}$' or p_node_id is null or p_node_id !~ '^[A-Za-z0-9_.-]{1,48}$'
      or p_sector is null or p_sector !~ '^[A-Za-z0-9_.-]{1,32}$' or p_type is null or p_type not in ('battle', 'elite', 'boss') then
@@ -2059,7 +2070,7 @@ begin
   now_ms := slg_now_ms();
   p := slg_player_for(uid);
   select * into e from slg_encounters where user_id = uid and "loop" = p."loop" and ref = p_ref;
-  if found then return jsonb_build_object('ok', true, 'status', e.status, 'dup', true); end if;
+  if found then return jsonb_build_object('ok', true, 'status', e.status, 'dup', true, 'reward', slg_enc_reward_json(e)); end if;
   if (select count(*) from slg_encounters x where x.user_id = uid and x.type <> 'event' and x.started_ms > now_ms - 3600000) >= slg_cfg('enc_starts_per_hour') then
     perform slg_anomaly(uid, 'anom_enc_starts', jsonb_build_object('perHour', slg_cfg('enc_starts_per_hour')), now_ms);
     return jsonb_build_object('ok', false, 'error', 'rate_limited');
@@ -2074,9 +2085,24 @@ begin
     return jsonb_build_object('ok', false, 'error', 'boss_done');
   end if;
   update slg_encounters set status = 'void' where user_id = uid and status = 'active';   -- 동시에 진행 중인 전투는 하나뿐
-  insert into slg_encounters (user_id, "loop", ref, node_id, sector_id, region_id, type, enemies, started_ms)
-    values (uid, p."loop", p_ref, p_node_id, p_sector, slg_enc_region(p_node_id, p_sector), p_type, least(greatest(coalesce(p_enemies, 1), 1), slg_cfg('enc_max_enemies')::int), now_ms);
-  return jsonb_build_object('ok', true, 'status', 'active');
+  -- 승리 보상을 지금 확정한다. 골드는 적 수로 정해지고, 리와인더 · 유물은 같은 노드의 이전 시도가 있으면 그 결과를 쓴다.
+  n_enemies := least(greatest(coalesce(p_enemies, 1), 1), slg_cfg('enc_max_enemies')::int);
+  gold := round(n_enemies * 100 * case p_type when 'boss' then 10 when 'elite' then 1.5 else 1 end)::bigint;
+  select * into prev from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.node_id = p_node_id and x.type = p_type and x.result ? 'planned'
+    order by x.started_ms desc limit 1;
+  if found then
+    rwd := prev.rewinder_reward; ids := prev.result -> 'planned';
+  else
+    rwd := case when p_type = 'boss' or random() < 0.5 then 1 else 0 end;
+    select coalesce(array_agg(r2.relic_id), '{}') into owned from slg_relics r2 where r2.user_id = uid and r2.kind = 'commander' and r2.used_ms is null;
+    for r in select x from jsonb_array_elements(slg_pool_roll(p_sector || '-' || case p_type when 'boss' then 'boss-relic' when 'elite' then 'elite' else 'battle' end, owned)) x loop
+      if r ->> 'type' = 'relic' and slg_relic_def(r ->> 'id') is not null then ids := ids || to_jsonb(r ->> 'id'); end if;
+    end loop;
+  end if;
+  insert into slg_encounters (user_id, "loop", ref, node_id, sector_id, region_id, type, enemies, started_ms, gold_reward, rewinder_reward, result)
+    values (uid, p."loop", p_ref, p_node_id, p_sector, slg_enc_region(p_node_id, p_sector), p_type, n_enemies, now_ms, gold, rwd, jsonb_build_object('planned', ids))
+    returning * into e;
+  return jsonb_build_object('ok', true, 'status', 'active', 'reward', slg_enc_reward_json(e));
 end $$;
 
 -- 승리 보상을 받는다. 골드(서버가 정한 기준액) · 리와인더 · 유물을 서버가 굴린다.
@@ -2111,17 +2137,26 @@ begin
     if now_ms - e.started_ms < slg_cfg('enc_fast_ms_per_enemy') * e.enemies then
       perform slg_anomaly(uid, 'anom_fast_clear', jsonb_build_object('ref', e.ref, 'nodeId', e.node_id, 'type', e.type, 'enemies', e.enemies, 'ms', now_ms - e.started_ms), now_ms);
     end if;
-    mult := case e.type when 'boss' then 10 when 'elite' then 1.5 else 1 end;
-    gold := round(e.enemies * 100 * mult)::bigint;
-    if e.type = 'boss' or random() < 0.5 then rwd := 1; end if;
+    if e.result ? 'planned' then
+      -- 전투 시작 때 확정해 둔 보상을 그대로 준다 (그 사이 정의가 지워진 유물만 빠진다)
+      gold := e.gold_reward; rwd := e.rewinder_reward;
+      for r in select x from jsonb_array_elements(e.result -> 'planned') x loop
+        if slg_relic_def(r #>> '{}') is not null then ids := ids || r; end if;
+      end loop;
+    else
+      -- 예전 서버에서 시작한 전투: 수령할 때 굴린다
+      mult := case e.type when 'boss' then 10 when 'elite' then 1.5 else 1 end;
+      gold := round(e.enemies * 100 * mult)::bigint;
+      if e.type = 'boss' or random() < 0.5 then rwd := 1; end if;
+      suffix := case e.type when 'boss' then 'boss-relic' when 'elite' then 'elite' else 'battle' end;
+      pool_id := e.sector_id || '-' || suffix;
+      select coalesce(array_agg(r2.relic_id), '{}') into owned from slg_relics r2 where r2.user_id = uid and r2.kind = 'commander' and r2.used_ms is null;
+      rolled := slg_pool_roll(pool_id, owned);
+      for r in select x from jsonb_array_elements(rolled) x loop
+        if r ->> 'type' = 'relic' and slg_relic_def(r ->> 'id') is not null then ids := ids || to_jsonb(r ->> 'id'); end if;
+      end loop;
+    end if;
     rwd := slg_grant_rewinders(uid, rwd, 'battle', e.ref, now_ms);
-    suffix := case e.type when 'boss' then 'boss-relic' when 'elite' then 'elite' else 'battle' end;
-    pool_id := e.sector_id || '-' || suffix;
-    select coalesce(array_agg(r2.relic_id), '{}') into owned from slg_relics r2 where r2.user_id = uid and r2.kind = 'commander' and r2.used_ms is null;
-    rolled := slg_pool_roll(pool_id, owned);
-    for r in select x from jsonb_array_elements(rolled) x loop
-      if r ->> 'type' = 'relic' and slg_relic_def(r ->> 'id') is not null then ids := ids || to_jsonb(r ->> 'id'); end if;
-    end loop;
     if e.type = 'boss' and jsonb_array_length(ids) > 0 then
       update slg_encounters set status = 'awaiting', gold_reward = gold, rewinder_reward = rwd, claimed_ms = now_ms,
         result = jsonb_build_object('options', ids) where user_id = e.user_id and "loop" = e."loop" and ref = e.ref;

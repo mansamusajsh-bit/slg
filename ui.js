@@ -828,21 +828,25 @@
     const rewinderGranted = !!rewardData?.rewinderGranted;
     // 서버 모드: 서버가 보상을 확정하기 전(pending)이나 수령에 실패했을 때(failed)는 0골드를 보여 주지 않는다
     const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const rewardPending = !!rewardData?.pending;
-    const rewardFailed = !!rewardData?.failed;
+    // planned: 전투 시작 때 서버가 확정해 둔 보상 — 지급이 끝나기 전에도(또는 연결이 끊겨 나중에 지급되어도) 금액을 그대로 보여 준다
+    const rewardPlanned = !!rewardData?.planned;
+    const rewardPending = !!rewardData?.pending && !rewardPlanned;
+    const rewardFailed = !!rewardData?.failed && !(rewardPlanned && rewardData.network);
+    const plannedNote = rewardPlanned && (rewardData.pending || rewardData.failed)
+      ? ` <span style="font-size: 11px; color: #94a3b8;">${rewardData.failed ? '(서버 연결 후 지급)' : '(지급 중)'}</span>` : '';
     const goldHtml = rewardPending
       ? `<span style="font-size: 12px; color: #cbd5e1;">⏳ 서버에서 보상 확정 중…</span>`
       : rewardFailed
         ? (rewardData.network
           ? `<span style="font-size: 12px; color: #fbbf24;">⚠️ 서버 연결 후 지급 예정</span>`
           : `<span style="font-size: 12px; color: #f87171;">⚠️ 지급 안 됨${rewardData.errorText ? ` — ${esc(rewardData.errorText)}` : ''}</span>`)
-        : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>`;
+        : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>${plannedNote}`;
     const rewinderHtml = rewardPending
       ? `<span class="victory-rewinder-none">서버에서 확정 중…</span>`
       : rewinderGranted
         ? `<span class="victory-rewinder-highlight">
                   <span>✨</span> Rewinder Item Obtained (+1)
-                </span>`
+                </span>${plannedNote}`
         : `<span class="victory-rewinder-none">
                   Rewinder Item: None (50% Chance)
                 </span>`;

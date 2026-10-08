@@ -10956,14 +10956,21 @@
         defeatedCount: totalDefeatedCount
       };
       const serverRewards = !!battle && serverRewardsExpected();
-      if (serverRewards) { rewardData.gold = 0; rewardData.rewinderGranted = false; rewardData.pending = true; }   // 서버가 정한 값이 올 때까지 표시를 비워 둔다
+      if (serverRewards) {
+        // 전투 시작 때 서버가 확정해 둔 보상이 있으면 바로 보여 준다. 없을 때만(예전 전투 · 시작 기록 실패) 서버 값을 기다린다.
+        const planned = plannedVictoryReward(battle, totalDefeatedCount);
+        if (planned) Object.assign(rewardData, planned, { pending: true });
+        else { rewardData.gold = 0; rewardData.rewinderGranted = false; rewardData.pending = true; }
+      }
       if (battle) {
         battle.status = 'won';
         battle.result = { ...rewardData };
       }
 
       if (serverRewards) {
-        addLog(`✨ [전투 승리] 적군 ${totalDefeatedCount}기 격퇴 — 보상은 서버가 확정합니다…`, 'gold');
+        addLog(rewardData.planned
+          ? `✨ [전투 승리] 적군 ${totalDefeatedCount}기 격퇴 — 확정 보상 +${rewardData.gold}G${rewardData.rewinderGranted ? ' · ⏳ 리와인더 +1' : ''} 지급 중`
+          : `✨ [전투 승리] 적군 ${totalDefeatedCount}기 격퇴 — 보상은 서버가 확정합니다…`, 'gold');
         // 서버에서 보상을 수령하고, 서버가 정한 값으로 승리 창을 다시 그린다
         claimBattleReward(battle); // 결과는 applyClaimResult 가 승리 창에 다시 그린다
       } else {
@@ -13219,7 +13226,22 @@
       if (!itemsServerMode() || !battle) return;
       const i = battleInfo(battle);
       window.ServerEconomy.call('slg_encounter_start', { p_ref: i.ref, p_node_id: i.nodeId, p_sector: i.sectorId, p_type: i.type, p_enemies: i.enemies })
-        .then((res) => { if (res && res.ok === false && res.error !== 'bad_request') console.warn('[전투] 서버 시작 기록 거절:', res.error); });
+        .then((res) => {
+          if (res && res.ok === false && res.error !== 'bad_request') console.warn('[전투] 서버 시작 기록 거절:', res.error);
+          rememberPlannedReward(battle, res);
+        });
+    }
+    // 서버가 전투 시작 때 확정한 승리 보상을 전투에 붙여 둔다 (세이브에 같이 남는다). 승리 창이 이 값을 바로 보여 준다.
+    function rememberPlannedReward(battle, res) {
+      if (!battle || !res || res.ok === false || !res.reward) return;
+      battle.serverReward = { gold: Number(res.reward.gold) || 0, rewinders: Number(res.reward.rewinders) || 0,
+        relics: Array.isArray(res.reward.relics) ? res.reward.relics : [], options: Array.isArray(res.reward.options) ? res.reward.options : [] };
+    }
+    // 확정 보상을 승리 창 표시값으로 (아직 없으면 null)
+    function plannedVictoryReward(battle, defeatedCount) {
+      const r = battle && battle.serverReward;
+      if (!r) return null;
+      return { gold: scaleIncomeWithRelics(r.gold), rewinderGranted: r.rewinders > 0, defeatedCount, planned: true };
     }
     async function serverClaimBattle(info) {
       const SE = window.ServerEconomy;
@@ -13228,6 +13250,8 @@
       if (res && res.error === 'no_encounter') {
         // 시작 기록이 없다 (예전 세이브에서 이어한 전투 등) — 지금 시작으로 기록하고 최소 전투 시간을 기다린 뒤 수령한다
         const st = await SE.call('slg_encounter_start', { p_ref: info.ref, p_node_id: info.nodeId, p_sector: info.sectorId, p_type: info.type, p_enemies: info.enemies });
+        const cur = state && state.currentBattle;
+        if (cur && String(cur.id) === String(info.ref)) rememberPlannedReward(cur, st);
         if (st && st.ok !== false) res = await SE.call('slg_encounter_claim', args);
       }
       for (let i = 0; i < 3 && res && res.error === 'too_fast'; i++) {
@@ -13242,10 +13266,14 @@
       const battle = state && state.currentBattle;
       if (!battle || String(battle.id) !== String(info.ref)) return;
       const defeatedCount = (battle.result && battle.result.defeatedCount) || 0;
+      const planned = plannedVictoryReward(battle, defeatedCount);
+      const network = !res || !!res.network;
       const shown = res && res.ok === true
         ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount }
-        : { gold: 0, rewinderGranted: false, defeatedCount, failed: true, network: !res || !!res.network, error: (res && res.error) || null,
-            errorText: res && res.error && !res.network ? (CLAIM_ERRORS[res.error] || String(res.error)) : null };
+        : (planned && network)
+          ? { ...planned, failed: true, network: true }   // 확정된 보상은 연결되면 그대로 지급된다
+          : { gold: 0, rewinderGranted: false, defeatedCount, failed: true, network, error: (res && res.error) || null,
+              errorText: res && res.error && !network ? (CLAIM_ERRORS[res.error] || String(res.error)) : null };
       battle.result = shown;
       const m = document.getElementById('modal-tactical-victory');
       if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown, { silent: true });

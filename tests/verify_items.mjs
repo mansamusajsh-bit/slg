@@ -336,6 +336,28 @@ await put('rewardPools', 'loop-b', { id: 'loop-b', rolls: 1, entries: [{ type: '
   eq((await s.rpc('slg_set_name', ['회귀후이름2', true], 'loop')).error, 'no_relic', '회귀로 개명 유물이 사라졌으므로 개명할 수 없다');
 }
 
+// ------------------------------------------------------------ 승리 보상은 전투 시작(맵 생성) 때 확정된다
+{
+  await boot('pr', 450);
+  const st = await start('pr', 'pr-1', 'N-pr-1', 'A-1', 'battle', 4);
+  ok(st.ok && st.reward && st.reward.gold === 400 && [0, 1].includes(st.reward.rewinders), '시작 응답에 확정 보상이 실린다 (적 4 × 100G)');
+  eq(st.reward.relics, ['g1'], '시작 때 유물도 미리 굴려 둔다');
+  eq((await start('pr', 'pr-1', 'N-pr-1', 'A-1', 'battle', 4)).reward, st.reward, '같은 전투를 다시 알려도 같은 보상');
+  // 후퇴 후 같은 노드 재도전: 리와인더 · 유물은 처음 굴린 그대로, 골드는 새 맵의 적 수로
+  const again = await start('pr', 'pr-1b', 'N-pr-1', 'A-1', 'battle', 6);
+  ok(again.reward.gold === 600 && again.reward.rewinders === st.reward.rewinders && JSON.stringify(again.reward.relics) === JSON.stringify(st.reward.relics), '재시작으로 리와인더 · 유물을 다시 굴리지 못한다');
+  await tick(30000);
+  const rwBefore = await rw('pr');
+  const c = await claim('pr', 'pr-1b');
+  ok(c.ok && c.gold === 600 && c.rewinders === again.reward.rewinders && (await rw('pr')) === rwBefore + again.reward.rewinders, '승리하면 확정해 둔 골드 · 리와인더를 그대로 준다');
+  ok((await owned('pr')).some((r) => r.relicId === 'g1' || r.id === 'g1'), '확정해 둔 유물을 준다');
+  const bs = await start('pr', 'pr-boss', 'N-pr-boss', 'A-1', 'boss', 1);
+  ok(bs.reward.options.length === 3 && bs.reward.relics.length === 0 && bs.reward.gold === 1000 && bs.reward.rewinders === 1, '보스: 후보 3개를 시작 때 확정');
+  await tick(30000);
+  const bc = await claim('pr', 'pr-boss');
+  eq(bc.options, bs.reward.options, '보스 수령 후보는 시작 때 확정한 그대로');
+}
+
 // ------------------------------------------------------------ 세금 유물: 지분 1위가 아닐 때만, 서버가 굴린다
 {
   await boot('tax', 450); await sync('tax');
