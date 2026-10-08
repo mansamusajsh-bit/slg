@@ -158,6 +158,8 @@ Encounter               ── state.currentBattle = { id:"enc-00001", nodeId, s
 4. SQL Editor 에서 `supabase-economy.sql` 전체를 실행한다. (`slg_records` 의 접근 정책도 같이 바뀐다 — 아래 참고)
 5. 게임에 접속해 계정을 만든다. 서버가 없거나 설치하지 않았으면 게임은 예전처럼 이 탭 안에서만 도는 로컬 모드로 동작한다 (경고 토스트가 뜬다).
 
+이후 `supabase-economy.sql` 을 고쳐 main 에 push 하면 GitHub Actions(`.github/workflows/supabase-sql.yml`)가 운영 DB 에 자동으로 실행한다. 저장소 비밀값 `SUPABASE_DB_URL` 에 Supabase 접속 주소(**Connect → Direct → Session pooler**)가 있어야 한다. 실행 결과는 GitHub 의 Actions 탭에서 보고, 같은 탭에서 수동 실행(Run workflow)도 할 수 있다.
+
 운영 중 조정:
 
 ```sql

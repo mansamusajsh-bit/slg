@@ -1,0 +1,33 @@
+# main 에 supabase-economy.sql 변경이 push 되면 Supabase(운영 DB)에 그대로 실행한다.
+#  - 이 파일은 여러 번 실행해도 데이터를 지우지 않으므로 매번 통째로 실행한다.
+#  - 한 트랜잭션으로 실행한다: 중간에 오류가 나면 아무것도 바뀌지 않는다.
+#  - 접속 주소는 저장소 비밀값 SUPABASE_DB_URL (Supabase Connect → Direct → Session pooler).
+#  - Actions 탭에서 수동 실행(Run workflow)도 할 수 있다.
+name: Supabase SQL
+
+on:
+  push:
+    branches: [main]
+    paths: [supabase-economy.sql]
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-sql
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: supabase-economy.sql 실행
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$SUPABASE_DB_URL" ]; then
+            echo "::error::저장소 비밀값 SUPABASE_DB_URL 이 없습니다 (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+          psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 --single-transaction -q -f supabase-economy.sql
