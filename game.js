@@ -13200,7 +13200,10 @@
     window.onServerTaxRelics = onServerTaxRelics;
 
     // ---- 전투 보상: 서버에 전투 시작을 알리고, 승리하면 서버에서 수령한다 ----
-    const claimMemo = new Map();   // ref → Promise (같은 전투를 한 번만 수령한다)
+    // `${회차}:${ref}` → Promise (같은 전투를 한 번만 수령한다). 전투 id(enc-00001…)는 회차마다 1부터 다시 세므로
+    // ref 만으로 기억하면 사망회귀 뒤 같은 페이지에서 새 회차의 전투가 지난 회차의 결과를 받아 서버에 수령을 보내지 않는다.
+    const claimMemo = new Map();
+    const claimKey = (info) => `${info.loop}:${info.ref}`;
     const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
     const battleInfo = (battle) => ({
       ref: String(battle.id), nodeId: String(battle.nodeId), sectorId: String(battle.sectorId),
@@ -13253,7 +13256,7 @@
         if (!res || res.network) {
           // 연결 문제: 다음 동기화 때 다시 수령한다 (세이브에 남는다)
           if (queued < 0) run.pendingClaims.push(info);
-          claimMemo.delete(info.ref);
+          claimMemo.delete(claimKey(info));
           addLog('⚠️ [보상] 서버와 통신하지 못했습니다. 연결되면 보상이 지급됩니다.', 'warning');
         } else {
           if (queued >= 0) run.pendingClaims.splice(queued, 1);
@@ -13282,15 +13285,23 @@
     function claimBattleReward(battle, info) {
       info = info || battleInfo(battle);
       // 수령을 시작하기 전에 대기 목록에 올려 둔다 → 응답 전에 새로고침해도 서버가 연결되면 다시 받는다
-      const run = state && state.run;
-      if (run) {
-        if (!Array.isArray(run.pendingClaims)) run.pendingClaims = [];
-        if (!run.pendingClaims.some(c => c.ref === info.ref && c.loop === info.loop)) run.pendingClaims.push(info);
+      const key = claimKey(info);
+      if (!claimMemo.has(key)) {
+        // 이미 수령한(또는 수령 중인) 전투를 다시 부를 때는 올리지 않는다 — 결과 처리(applyClaimResult)가 다시 돌지 않아 목록에 영영 남는다
+        const run = state && state.run;
+        if (run) {
+          if (!Array.isArray(run.pendingClaims)) run.pendingClaims = [];
+          if (!run.pendingClaims.some(c => c.ref === info.ref && c.loop === info.loop)) run.pendingClaims.push(info);
+        }
+        claimMemo.set(key, serverClaimBattle(info).then((res) => { applyClaimResult(info, res); return res; }).catch((e) => {
+          // 처리 중 예외가 나도 승리 창이 '확정 중'에 멈추지 않게 한다. 대기 목록에 남아 있으니 다음 동기화 때 다시 받는다.
+          console.warn('[보상] 전투 보상 수령 처리 실패', e);
+          claimMemo.delete(key);
+          try { showClaimOnVictory(info, { ok: false, network: true, error: String((e && e.message) || e) }); } catch (_) { /* 표시 실패는 무시 */ }
+          return null;
+        }));
       }
-      if (!claimMemo.has(info.ref)) {
-        claimMemo.set(info.ref, serverClaimBattle(info).then((res) => { applyClaimResult(info, res); return res; }));
-      }
-      return claimMemo.get(info.ref);
+      return claimMemo.get(key);
     }
     window.claimBattleReward = claimBattleReward;
     function retryPendingClaims() {
@@ -13299,7 +13310,7 @@
       const cur = Number(state.player && state.player.loopCount) || 0;
       run.pendingClaims.filter(c => c.loop !== cur).forEach(c => { run.pendingClaims.splice(run.pendingClaims.indexOf(c), 1); });   // 지난 회차의 보상은 소멸
       run.pendingClaims.slice().forEach(info => {
-        if (claimMemo.has(info.ref)) return;
+        if (claimMemo.has(claimKey(info))) return;
         setTimeout(() => claimBattleReward(null, info), 0);
       });
     }

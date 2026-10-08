@@ -166,6 +166,11 @@ with sync_playwright() as pw:
     c.ok(page.evaluate("state.gold") == g0 + page.evaluate("scaleIncomeWithRelics(500)"), f"골드는 서버가 정한 기준액(500) 기준으로만 받는다: {page.evaluate('state.gold')}")
     page.evaluate(f"() => claimBattleReward({battle})"); page.wait_for_timeout(300)
     c.ok(page.evaluate("window.__calls.filter(x => x[0] === 'slg_encounter_claim')").__len__() == 1, '같은 전투를 다시 수령하려 해도 서버에 한 번만 간다')
+    # 전투 id 는 회차마다 1부터 다시 센다 → 사망회귀 뒤 같은 페이지에서 같은 id 의 새 전투도 서버에 수령을 보내야 한다
+    page.evaluate("() => { state.player.loopCount = (state.player.loopCount || 0) + 1; window.__srv.claimed = {}; }")
+    page.evaluate(f"() => claimBattleReward({battle})"); page.wait_for_timeout(500)
+    c.ok(page.evaluate("window.__calls.filter(x => x[0] === 'slg_encounter_claim')").__len__() == 2, '다음 회차의 같은 id 전투는 지난 회차 결과를 쓰지 않고 서버에 다시 수령한다')
+    page.evaluate("() => { state.player.loopCount -= 1; }")
     page.evaluate("() => { window.__srv.claimed = {}; }")
     g1 = page.evaluate("state.gold")
     page.evaluate("() => { state.run.paidRefs = state.run.paidRefs || []; }")
