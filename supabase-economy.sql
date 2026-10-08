@@ -377,6 +377,10 @@ insert into public.slg_config (key, value) values
   ('loot_per_enemy_base', 800), ('loot_extra_enemies', 2), ('loot_window_ms', 21600000), ('enc_starts_per_hour', 60), ('sells_per_hour', 10),
   ('enc_fast_ms_per_enemy', 3000), ('save_max_level', 60), ('save_unlock_slack', 2), ('anomaly_dedupe_ms', 3600000)
 on conflict (key) do nothing;
+-- 세이브 검사(slg_check_save) 스위치. 0 이면 저장 때 아무것도 하지 않는다.
+--   기본은 꺼 둔다: 세이브는 몇 초마다 저장되므로, 저장마다 도는 검사가 무거우면 DB 전체(RPC · 로그인)가 느려진다.
+--   켜려면: update slg_config set value = 1 where key = 'save_check';
+insert into public.slg_config (key, value) values ('save_check', 0) on conflict (key) do nothing;
 
 -- ---------------------------------------------------------------- 운영자 메일 (재화 · 리와인더 · 유물 · 캐릭터 선물)
 -- 운영자가 보내고(slg_admin_mail_send), 플레이어가 우편함에서 직접 받는다(slg_mail_claim). 보상은 받는 순간 서버가 지급한다.
@@ -2676,6 +2680,7 @@ declare
   uid uuid; now_ms bigint; u jsonb; rec jsonb; tree jsonb; own_tree jsonb; ids text[]; starts text[]; learned text[]; bad text[]; diff text[];
   spent int; pts int; lvl int; allowed int; cid text; sp_relic boolean;
 begin
+  if coalesce(slg_cfg('save_check'), 0) = 0 then return new; end if;   -- 꺼져 있으면 저장에 비용을 더하지 않는다
   if new.record_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or jsonb_typeof(new.data -> 'run') <> 'object' then return new; end if;
   uid := new.record_id::uuid;
   now_ms := slg_now_ms();

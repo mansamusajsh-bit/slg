@@ -759,6 +759,7 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   for (let i = 0; i < 62; i++) last = await s.rpc('slg_encounter_start', ['spam-' + i, 'N-spam-' + i, 'A-1', 'battle', 1], 'x2');
   ok(last.ok === false && last.error === 'rate_limited' && (await anoms('x2', 'anom_enc_starts')).length === 1, '시간당 전투 시작 상한을 넘으면 거절되고 기록된다');
   // 4) 세이브 검사: 원본에 없는 스킬 · 바뀐 스킬 수치 · 레벨 대비 과다 해금 · 레벨 상한
+  await s.q("update slg_config set value = 1 where key = 'save_check'");   // 운영 기본값은 꺼짐
   const tree = [{ id: 'n1', startsLearned: true, power: 10 }, { id: 'n2', power: 20 }, { id: 'n3', power: 30 }, { id: 'n4', power: 40 }];
   await putRec('characters', 'chk1', { id: 'chk1', name: '검사', initialSkillPoints: 1, skillTree: tree });
   await boot('x3', 0);
