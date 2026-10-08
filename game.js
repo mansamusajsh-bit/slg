@@ -1751,6 +1751,8 @@
       const { width, height } = getBattleSize();
       return x >= 0 && x < width && y >= 0 && y < height;
     }
+    // 미편성 영웅은 enterEncounter 가 전장 밖(-1,-1)에 둔다. 적 AI · 유지비 · 반격 대상에서 빼야 한다.
+    function isOffBattlefield(u) { return !!u && (u.x < 0 || u.y < 0); }
 
     function getTile(x, y) {
       return getBattleTiles().find(t => t.x === x && t.y === y);
@@ -2879,7 +2881,7 @@
       }
 
       // 은신한 아군은 노리지 않고, 도발당했다면 도발한 유닛만 노린다.
-      let livingPlayers = state.playerUnits.filter(p => !p.isDead && (!SE || SE.isTargetableByAI(p)));
+      let livingPlayers = state.playerUnits.filter(p => !p.isDead && !isOffBattlefield(p) && (!SE || SE.isTargetableByAI(p)));
       const forced = SE ? SE.getForcedTarget(enemy) : null;
       if (forced && forced.owner !== 'ENEMY') livingPlayers = [forced];
       const enemyCanMove = !SE || SE.canMove(enemy);
@@ -3125,6 +3127,7 @@
       let safeUnits = 0;
 
       livingUnits.forEach(unit => {
+        if (isOffBattlefield(unit)) return; // 미편성(전장 밖) 영웅은 출전하지 않았으므로 유지비를 받지 않는다
         const tile = getTile(unit.x, unit.y);
         // 마을(1x1) 및 도시(2x2)는 유지비 0G 완전 면제
         if (tile && tile.isSafe) {
@@ -11273,7 +11276,7 @@
 
         if (isCounterAttack) {
           // 분노 반격: 인접 또는 현재 활성 유닛에게 기습 반격 피해
-          const livingPlayers = state.playerUnits.filter(u => !u.isDead);
+          const livingPlayers = state.playerUnits.filter(u => !u.isDead && !isOffBattlefield(u));
           const adjPlayer = livingPlayers.find(p => Math.abs(p.x - targetUnit.x) <= 1 && Math.abs(p.y - targetUnit.y) <= 1) || state.selectedUnit || livingPlayers[0];
 
           let counterDamage = 0;

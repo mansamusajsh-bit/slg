@@ -128,13 +128,15 @@
   function configure(options) { ctx = Object.assign({}, ctx, options || {}); }
 
   function sideOf(unit) { return unit && unit.owner === 'ENEMY' ? 'ENEMY' : 'PLAYER'; }
+  // 미편성 영웅은 전장 밖(-1,-1)에 있다. 스킬 대상 · 지속 효과 · 오라에서 빼야 한다.
+  function isOffBoard(u) { return u.x < 0 || u.y < 0; }
   function allUnits() {
     const s = ctx.getState();
-    return [...(s.playerUnits || []), ...(s.enemyUnits || [])].filter(u => u && !u.isDead);
+    return [...(s.playerUnits || []), ...(s.enemyUnits || [])].filter(u => u && !u.isDead && !isOffBoard(u));
   }
   function unitsOfSide(side) {
     const s = ctx.getState();
-    return ((side === 'ENEMY' ? s.enemyUnits : s.playerUnits) || []).filter(u => u && !u.isDead);
+    return ((side === 'ENEMY' ? s.enemyUnits : s.playerUnits) || []).filter(u => u && !u.isDead && !isOffBoard(u));
   }
   function isHostileTo(a, b) { return sideOf(a) !== sideOf(b); }
 
