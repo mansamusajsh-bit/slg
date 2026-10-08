@@ -313,6 +313,8 @@
           </div>`;
       } else if (v.rightWaitMs > 0) {
         buy = `<p class="cmp-share-note">📜 점령한 구역의 구매권이 곧 열립니다 (<b data-share-wait data-at="${v.now + v.rightWaitMs}">${fmtCountdown(v.rightWaitMs)}</b>).</p>`;
+      } else if (regionStatus(campaign, sel.id) === 'secured' && v.rerun) {
+        buy = '<p class="cmp-share-note">🔁 내 지분이 다른 플레이어에게 매입되었습니다. 이 구역을 다시 점령하면 잃은 만큼 다시 살 수 있습니다.</p>';
       } else if (regionStatus(campaign, sel.id) === 'secured') {
         buy = '<p class="cmp-share-note">📜 이번 회차 구매권을 모두 썼습니다.</p>';
       } else {
@@ -387,6 +389,13 @@
       actionEnabled = true;
       summaryDest = `[${cur.title.ko}] 작전 진행 중`;
       summaryCost = `위협도 ${threatStars(cur.threat)} · 전략맵으로 복귀`;
+    } else if (sel && selStatus === 'secured' && global.NationShares?.canRerun?.(sel.id)) {
+      // 내 지분이 다른 플레이어에게 매입되어 줄었다 → 다시 점령해서 구매권을 되찾는다
+      summaryDest = `[${sel.title.ko}] 지분 감소 — 재점령 가능`;
+      summaryCost = `위협도 ${threatStars(sel.threat)} · 잃은 지분만큼 구매권 회복`;
+      actionIcon = adjutant ? '🔁' : '🎖️';
+      actionLabel = adjutant ? '재점령 (지분 회복)' : '부관 임명';
+      actionEnabled = true;
     } else if (campaign.cleared) {
       actionIcon = '🏆';
       actionLabel = '대륙 평정 완료';

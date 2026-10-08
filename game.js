@@ -11891,7 +11891,9 @@
       const current = getCurrentRegionId(run);
       if (current === regionId) { goToStrategyMap(); return true; }
       if (current) return warn(`⚠️ ${REGIONS[current].title.ko} 작전이 진행 중입니다. 먼저 구역을 확보하세요.`);
-      if (campaign.regions[regionId].status !== 'available') return warn('🔒 아직 진입할 수 없는 구역입니다.');
+      // 확보한 구역도 내 지분이 다른 플레이어에게 매입되어 줄었으면 다시 점령(런)해서 구매권을 되찾을 수 있다
+      const rerun = campaign.regions[regionId].status === 'secured' && !!window.NationShares?.canRerun?.(regionId);
+      if (campaign.regions[regionId].status !== 'available' && !rerun) return warn('🔒 아직 진입할 수 없는 구역입니다.');
       if (!getAdjutantUnit(run)) return warn('🎖️ 먼저 부관을 임명하세요.');
 
       await ensureWorldSectorsLoaded();
@@ -11905,7 +11907,7 @@
       campaign.lastSecured = null;
       state.selectedNodeId = null;
       ensureNodeSelection();
-      addLog(`🗺️ [작전지도] ${region.title.ko} 진입 — 위협도 ${region.threat}, 노드 ${mapState.nodes.length}개`, 'gold');
+      addLog(`🗺️ [작전지도] ${region.title.ko} ${rerun ? '재점령 작전 (지분 회복)' : '진입'} — 위협도 ${region.threat}, 노드 ${mapState.nodes.length}개`, 'gold');
       saveGameState(true);
       goToStrategyMap();
       return true;

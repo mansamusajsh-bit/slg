@@ -275,7 +275,11 @@
     }
     const run = runState();
     const prev = run.shareRights[regionId];
-    run.shareRights[regionId] = { maxBp: SE.CONFIG.purchaseRightBp, boughtBp: prev ? prev.boughtBp : 0, grantedAt: serverNow() };
+    // 재점령: 사용량을 지금 보유량으로 내린다 → 다른 플레이어에게 넘어간 만큼 다시 살 수 있다
+    const who = me();
+    const held = who && nations[regionId] ? SE.holderBp(nations[regionId], who.id) : 0;
+    const boughtBp = prev ? Math.min(prev.boughtBp, Math.max(held, 0)) : 0;
+    run.shareRights[regionId] = { maxBp: SE.CONFIG.purchaseRightBp, boughtBp, grantedAt: serverNow() };
     log(`📜 [지분 구매권] ${regionTitle(regionId)} 점령 — 지분을 최대 ${SE.CONFIG.purchaseRightBp / 100}%까지 살 수 있습니다. (작전지도에서 구매)`);
   }
 
@@ -307,6 +311,25 @@
     }
     const r = state.run && state.run.shareRights && state.run.shareRights[regionId];
     return r ? Math.max(0, r.maxBp - r.boughtBp) : 0;
+  }
+
+  /**
+   * 재점령(런 다시 돌기) 가능 여부: 이번 회차에 이 국가에서 산 지분이 다른 플레이어에게 매입되어 줄었으면 true.
+   * 재점령하면 구매권 사용량이 지금 보유량으로 내려가 잃은 만큼 다시 살 수 있다.
+   */
+  function canRerun(regionId) {
+    const who = me();
+    const n = nations[regionId];
+    if (!who || !n) return false;
+    let bought = 0;
+    if (serverMode()) {
+      const r = global.ServerEconomy.snapshot.rights && global.ServerEconomy.snapshot.rights[regionId];
+      bought = r ? Number(r.boughtBp) || 0 : 0;
+    } else {
+      const r = state.run && state.run.shareRights && state.run.shareRights[regionId];
+      bought = r ? Number(r.boughtBp) || 0 : 0;
+    }
+    return bought > 0 && SE.holderBp(n, who.id) < bought;
   }
 
   /** 지금 캐시 기준 견적 (화면 표시용). wantBp는 구매권 남은 양으로 잘린다. */
@@ -444,6 +467,7 @@
         shopPending: shopPending(regionId)
       } : null,
       right: regionId ? rightRemaining(regionId) : 0,
+      rerun: regionId ? canRerun(regionId) : false,
       rightWaitMs: regionId ? rightWaitMs(regionId) : 0,
       server: serverMode(),
       busy
@@ -451,7 +475,7 @@
   }
 
   global.NationShares = {
-    refresh, settle, buy, quote, awardTaxRelics, maxAffordableBp, view, serverNow, recordShopSale, shopPending,
+    refresh, settle, buy, quote, awardTaxRelics, maxAffordableBp, view, serverNow, recordShopSale, shopPending, canRerun,
     onRegionSecured, onReturnByDeath,
     _nations: nations
   };

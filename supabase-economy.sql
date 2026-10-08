@@ -1449,7 +1449,7 @@ end $$;
 -- ---------------------------------------------------------------- 구역 점령 · 지분 구매
 create or replace function public.slg_region_secure(p_region text) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
-declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; r slg_regions%rowtype; avail bigint;
+declare uid uuid := slg_uid(); now_ms bigint; p slg_players%rowtype; r slg_regions%rowtype; avail bigint; held int; bought int;
 begin
   perform slg_lock();
   now_ms := slg_now_ms();
@@ -1457,7 +1457,15 @@ begin
   select * into r from slg_regions where region_id = p_region;
   if not found then return jsonb_build_object('ok', false, 'error', '알 수 없는 구역입니다.'); end if;
   if exists (select 1 from slg_secured where user_id = uid and region_id = p_region and "loop" = p."loop") then
-    return jsonb_build_object('ok', true, 'dup', true);
+    -- 재점령: 이번 회차에 산 지분이 다른 플레이어에게 매입되어 줄었으면 구매권 사용량을 지금 보유량으로 내린다
+    select coalesce(sum(bp), 0) into held from slg_shares where region_id = p_region and holder = uid::text and "loop" = p."loop";
+    select bought_bp into bought from slg_share_rights where user_id = uid and region_id = p_region and "loop" = p."loop";
+    if bought is null or held >= bought then return jsonb_build_object('ok', true, 'dup', true); end if;
+    avail := greatest(now_ms, p.last_secure_ms + (case when p.last_secure_ms = 0 then 0 else slg_cfg('secure_min_interval_ms') end)::bigint);
+    update slg_players set last_secure_ms = avail where user_id = uid;
+    update slg_secured set at_ms = now_ms where user_id = uid and region_id = p_region;
+    update slg_share_rights set bought_bp = held, available_ms = avail where user_id = uid and region_id = p_region;
+    return jsonb_build_object('ok', true, 'rerun', true, 'restoredBp', bought - held, 'availableMs', avail);
   end if;
   if not r.is_start and not exists (
       select 1 from slg_secured s join slg_regions sr on sr.region_id = s.region_id

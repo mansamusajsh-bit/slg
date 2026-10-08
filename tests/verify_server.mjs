@@ -293,6 +293,15 @@ const buy = (w, r, bp) => s.rpc('slg_share_buy', [r, bp], w);
   const after = (await sync('a')).nations.liona;
   const aBp2 = after.holders[await uid('a')] ? after.holders[await uid('a')].bp : 0;
   ok(aBp2 < aBp || free >= 5000, '무주 지분이 모자라면 기존 보유자에게서 비율대로 사 온다');
+  // 재점령: 지분이 줄었으면 같은 회차에도 다시 점령해서 잃은 만큼 구매권을 되찾는다
+  if (aBp2 < aBp) {
+    const boughtA = (await sync('a')).rights.liona.boughtBp;
+    const rr = await secure('a', 'liona');
+    ok(rr.ok && rr.rerun && rr.restoredBp === boughtA - aBp2, `지분이 줄면 재점령으로 구매권 회복 (+${rr.restoredBp}bp)`);
+    ok((await sync('a')).rights.liona.boughtBp === aBp2, '재점령 후 구매권 사용량 = 지금 보유량');
+    const rr2 = await secure('a', 'liona');
+    ok(rr2.ok && rr2.dup, '줄어든 게 없으면 재점령은 중복으로 무시');
+  }
   // 세금 정산: 8시간 뒤
   await s.at(TT + 9 * H);
   const g0 = await gold('a');
