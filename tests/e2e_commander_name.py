@@ -32,7 +32,7 @@ def type_name(page, text, wait=0):
     if wait: page.wait_for_timeout(wait)
 
 with sync_playwright() as pw:
-    browser, page, errors = new_page(pw)
+    browser, page, errors = new_page(pw, skip_intro=False)
     page.set_viewport_size({'width': 360, 'height': 800})
     page.goto(f'http://127.0.0.1:{PORT}/index.html'); page.wait_for_timeout(1200)
 

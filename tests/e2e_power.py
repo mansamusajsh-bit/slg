@@ -53,11 +53,18 @@ with sync_playwright() as pw:
     c.ok('320' not in txt, '고정 recPower(320)가 표시되지 않음')
 
     print('\n=== 적 인원: 섹터 진행도에 따라 증가, 오차 1명 ===')
+    # 적 인원 상한 = 통솔력 - 1. 진행도 규칙만 보려면 상한이 걸리지 않을 만큼 통솔력을 올려 둔다 (지휘관 레벨).
+    lv0=page.evaluate("state.commander.level")
+    page.evaluate("()=>{ state.commander.level = 99; }")
     ranges=page.evaluate("""()=>RunEngine.sortSectorIds(WORLD_SECTORS).map(sid=>[sid, getEnemyCountRange({sectorId:sid,type:'battle'}), getEnemyCountRange({sectorId:sid,type:'elite'})])""")
     print('   ', ranges)
     c.ok(all(r[1][1]-r[1][0]==1 for r in ranges), '모든 섹터에서 인원 오차 1명')
     c.ok(all(ranges[i+1][1][0]==ranges[i][1][0]+1 for i in range(len(ranges)-1)), '다음 섹터마다 1명씩 증가')
     c.ok(all(r[2][0]==r[1][0]+1 for r in ranges), '정예는 +1명')
+    page.evaluate("(lv)=>{ state.commander.level = lv; }", lv0)
+    capped=page.evaluate("""()=>{ const cap=getLeadership()-1; return RunEngine.sortSectorIds(WORLD_SECTORS).every(sid=>getEnemyCountRange({sectorId:sid,type:'elite'})[1]<=cap); }""")
+    c.ok(capped, '적 인원은 통솔력 - 1 을 넘지 않는다')
+    c.ok(page.evaluate("JSON.stringify(getEnemyCountRange({sectorId:'B-2',type:'boss'}))")=='[1,2]', '보스전은 항상 1~2명')
     gen=page.evaluate("""async ()=>{
       const out=[];
       for (const sid of RunEngine.sortSectorIds(WORLD_SECTORS)) {

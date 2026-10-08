@@ -13237,9 +13237,8 @@
       const defeatedCount = (battle.result && battle.result.defeatedCount) || 0;
       const shown = res && res.ok === true
         ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount }
-        : (!res || res.network)
-          ? { gold: 0, rewinderGranted: false, defeatedCount, pending: true, deferred: true }
-          : { gold: 0, rewinderGranted: false, defeatedCount, failed: true };
+        : { gold: 0, rewinderGranted: false, defeatedCount, failed: true, network: !res || !!res.network, error: (res && res.error) || null,
+            errorText: res && res.error && !res.network ? (CLAIM_ERRORS[res.error] || String(res.error)) : null };
       battle.result = shown;
       const m = document.getElementById('modal-tactical-victory');
       if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown, { silent: true });

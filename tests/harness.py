@@ -31,7 +31,25 @@ window.alert = function(){};
 window.confirm = function(){ return true; };
 """
 
-def new_page(pw):
+# 진입 연출 건너뛰기: 스플래시(splash.js, 약 3초 동안 화면을 덮는다)를 숨기고,
+# 처음 로그인하면 뜨는 지휘관 이름 창(취소 불가)에는 테스트용 이름을 넣어 닫는다.
+# 이 둘을 직접 검사하는 테스트는 new_page(pw, skip_intro=False)로 끈다.
+SKIP_INTRO = r"""
+(() => {
+  new MutationObserver(() => {
+    const splash = document.getElementById('game-splash');
+    if (splash) splash.remove();
+    const input = document.getElementById('cmd-name-input');
+    const ok = document.getElementById('cmd-name-ok');
+    if (!input || !ok || document.getElementById('cmd-name-cancel') || input.dataset.autoNamed) return;
+    input.dataset.autoNamed = '1';
+    input.value = '테스트지휘관';
+    setTimeout(() => ok.click(), 0);
+  }).observe(document, { childList: true, subtree: true });
+})();
+"""
+
+def new_page(pw, skip_intro=True):
     browser=pw.chromium.launch(args=['--no-sandbox'])
     ctx=browser.new_context(viewport={'width':430,'height':900})
     ctx.route('**/*', lambda route: route.continue_() if route.request.url.startswith('http://127.0.0.1') else route.abort())
@@ -40,6 +58,7 @@ def new_page(pw):
     page.on('pageerror', lambda e: errors.append('PAGEERROR: '+str(e)))
     page.on('console', lambda m: errors.append('CONSOLE.'+m.type+': '+m.text) if m.type=='error' and 'ERR_FAILED' not in m.text and 'Failed to load resource' not in m.text else None)
     page.add_init_script(STUBS)
+    if skip_intro: page.add_init_script(SKIP_INTRO)
     return browser,page,errors
 
 class Check:

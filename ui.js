@@ -826,9 +826,26 @@
       ? rewardData.gold
       : (defeatedCount * 100);
     const rewinderGranted = !!rewardData?.rewinderGranted;
-    // 서버 수령 상태: pending(확인 중) · deferred(서버 연결 대기 — 연결되면 지급) · failed(지급 거절)
-    const rewardPending = !!rewardData?.pending, rewardDeferred = !!rewardData?.deferred, rewardFailed = !!rewardData?.failed;
-    const waitText = rewardDeferred ? '서버 연결 대기 — 연결되면 지급' : '서버 확인 중…';
+    // 서버 모드: 서버가 보상을 확정하기 전(pending)이나 수령에 실패했을 때(failed)는 0골드를 보여 주지 않는다
+    const esc = (t) => String(t).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const rewardPending = !!rewardData?.pending;
+    const rewardFailed = !!rewardData?.failed;
+    const goldHtml = rewardPending
+      ? `<span style="font-size: 12px; color: #cbd5e1;">⏳ 서버에서 보상 확정 중…</span>`
+      : rewardFailed
+        ? (rewardData.network
+          ? `<span style="font-size: 12px; color: #fbbf24;">⚠️ 서버 연결 후 지급 예정</span>`
+          : `<span style="font-size: 12px; color: #f87171;">⚠️ 지급 안 됨${rewardData.errorText ? ` — ${esc(rewardData.errorText)}` : ''}</span>`)
+        : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>`;
+    const rewinderHtml = rewardPending
+      ? `<span class="victory-rewinder-none">서버에서 확정 중…</span>`
+      : rewinderGranted
+        ? `<span class="victory-rewinder-highlight">
+                  <span>✨</span> Rewinder Item Obtained (+1)
+                </span>`
+        : `<span class="victory-rewinder-none">
+                  Rewinder Item: None (50% Chance)
+                </span>`;
 
     const curGold = global.playerState?.gold ?? (state?.gold ?? 0);
     const curRewinders = global.playerState?.rewinders ?? (state?.rewinders ?? 0);
@@ -874,7 +891,7 @@
               <span>💰</span> 확정 골드 전리품
             </span>
             <span class="victory-reward-val victory-gold-text">
-              ${rewardPending ? waitText : rewardFailed ? '지급되지 않음' : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>`}
+              ${goldHtml}
             </span>
           </div>
 
@@ -883,14 +900,7 @@
             <span class="victory-reward-label">
               <span>⏳</span> 시간 회귀의 모래시계
             </span>
-            ${rewardPending ? `<span class="victory-rewinder-none">${waitText}</span>` : rewinderGranted
-              ? `<span class="victory-rewinder-highlight">
-                  <span>✨</span> Rewinder Item Obtained (+1)
-                </span>`
-              : `<span class="victory-rewinder-none">
-                  Rewinder Item: None (50% Chance)
-                </span>`
-            }
+            ${rewinderHtml}
           </div>
         </div>
 

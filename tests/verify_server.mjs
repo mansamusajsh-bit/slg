@@ -269,7 +269,8 @@ const buy = (w, r, bp) => s.rpc('slg_share_buy', [r, bp], w);
   await setGold('a', 5000);
   r = await buy('a', 'liona', 1000);
   const nation = (await sync('a')).nations.liona;
-  ok(r.ok && r.bp === 1000 && r.cost === 144 && r.balance === 4856, '무주 지분 10% = 144G (위협도1: 8시간 세수 300 × 리오나 세율 0.8 × 0.0001 × 6 × 1000bp)');
+  const lionaCost = Math.ceil(1000 * 300 * rc0.liona.taxMult / 10000 * 6);   // 국가별 세수 배율 반영 (liona 0.8 → 144G)
+  ok(r.ok && r.bp === 1000 && r.cost === lionaCost && r.balance === 5000 - lionaCost, `무주 지분 10% = ${lionaCost}G (위협도1: 8시간 세수 300 × 세율 ${rc0.liona.taxMult} × 0.0001 × 6 × 1000bp)`);
   ok(nation.holders[await uid('a')].bp === 1000 && nation.holders[await uid('a')].loop === 0, '지분이 기록된다');
   const r2 = await buy('a', 'liona', 99999);
   ok(r2.ok && r2.bp <= 4000, '구매권은 최대 50%까지 (이미 10% 샀으니 최대 40%)');

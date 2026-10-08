@@ -50,8 +50,10 @@ with sync_playwright() as pw:
     c.ok(all(e.get('customSkill') and e['customSkill']['name'].startswith('패시브') for e in e1),'아군과 같은 customSkill 구조를 가진다')
     # 난이도 배율: A-1=EASY → 0.8배, 레벨 1
     src={c_['id']:c_ for c_ in page.evaluate("window.__characters")}
-    ok_scale=all(e['atk']==round(src[e['sourceCharacterId']]['stats']['atk']*0.8) and e['maxHp']==80 and e['level']==1 for e in e1)
-    c.ok(ok_scale,'EASY 섹터 배율 x0.8, 레벨 1 (예: HP 100→80)')
+    # 국가 특색(getRegionEnemyProfile: 스탯 배율 · 레벨 보정)이 섹터 배율 위에 곱해진다 (liona)
+    prof=page.evaluate("getRegionEnemyProfile('liona')")
+    ok_scale=all(e['atk']==round(src[e['sourceCharacterId']]['stats']['atk']*0.8*prof['atk']) and e['maxHp']==round(100*0.8*prof['hp']) and e['level']==1+prof['level'] for e in e1)
+    c.ok(ok_scale,f"EASY 섹터 배율 x0.8 × 국가 HP x{prof['hp']:.2f}, 레벨 {1+prof['level']} (HP 100→{e1[0]['maxHp']})")
     c.ok(page.evaluate("state.currentBattle.rewards[0].amount")==len(e1)*100,f'rewards 골드 = 적 수 x 100 ({len(e1)*100})')
     leave(page)
 
@@ -110,8 +112,9 @@ with sync_playwright() as pw:
     boss=page.evaluate("""()=>{ for(let i=0;i<10;i++){ const av=RunEngine.getAvailableNodes(state.run); const h=av.find(n=>n.type==='boss'); if(h) return h.id; RunEngine.completeNode(state.run,av[0].id);} }""")
     page.evaluate("(id)=>{selectNode(id);}",boss); enter(page,'B-2-1')
     eb=page.evaluate("state.enemyUnits")
-    # B-2=NIGHTMARE(레벨6, x1.6) + boss(레벨+2, x1.5) → 레벨 8, HP 100*2.4=240
-    c.ok(all(e['level']==8 and e['maxHp']==240 for e in eb),f'보스 노드(NIGHTMARE): 레벨 8, HP x2.4 (100→{eb[0]["maxHp"]})')
+    # B-2=NIGHTMARE(레벨4, x1.3) + boss(레벨+3, x1.25) + 국가 특색 → 레벨 7+α, HP 100×1.625×국가 HP 배율
+    boss_lv=4+3+prof['level']; boss_hp=round(100*1.3*1.25*prof['hp'])
+    c.ok(all(e['level']==boss_lv and e['maxHp']==boss_hp for e in eb),f'보스 노드(NIGHTMARE): 레벨 {boss_lv}, HP x{1.3*1.25*prof["hp"]:.2f} (100→{eb[0]["maxHp"]})')
     c.ok(page.evaluate("state.currentBattle.rewards.some(r=>r.type==='rewinder')"),'보스 보상에 리와인더 포함')
     page.evaluate("()=>{ state.gold=5000; }")
     page.evaluate("executeEndTurn && executeEndTurn()"); page.wait_for_timeout(2500)
