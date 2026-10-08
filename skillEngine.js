@@ -543,25 +543,27 @@
     return getUnitSkills(unit).filter(s => s.type === 'PASSIVE');
   }
 
-  /** 전투 확률 공식에 들어갈 보정치 (% 단위). */
-  function getCombatModifiers(unit) {
-    const out = { atk: 0, def: 0, mark: 0 };
-    if (!unit) return out;
-    out.atk += statusSum(unit, 'BUFF_ATK') - statusSum(unit, 'DEBUFF_ATK');
-    out.def += statusSum(unit, 'BUFF_DEF') - statusSum(unit, 'DEBUFF_DEF');
-    out.mark += statusSum(unit, 'MARK');
-    // 자기 패시브 + 주변 아군의 오라 패시브
+  /** unit에게 닿는 패시브 효과 값의 합: 자기 패시브 + 주변 아군의 오라 패시브 (radius 이내) */
+  function passiveAuraSum(unit, type) {
+    let sum = 0;
     unitsOfSide(sideOf(unit)).forEach(owner => {
       passiveEffectsOf(owner).forEach(p => {
         const r = p.targeting.radius;
         const applies = owner.id === unit.id ? true : (r > 0 && dist(owner, unit) <= r);
         if (!applies) return;
-        p.effects.forEach(e => {
-          if (e.type === 'BUFF_ATK') out.atk += e.value;
-          if (e.type === 'BUFF_DEF') out.def += e.value;
-        });
+        p.effects.forEach(e => { if (e.type === type) sum += e.value; });
       });
     });
+    return sum;
+  }
+
+  /** 전투 확률 공식에 들어갈 보정치 (% 단위). */
+  function getCombatModifiers(unit) {
+    const out = { atk: 0, def: 0, mark: 0 };
+    if (!unit) return out;
+    out.atk += statusSum(unit, 'BUFF_ATK') - statusSum(unit, 'DEBUFF_ATK') + passiveAuraSum(unit, 'BUFF_ATK');
+    out.def += statusSum(unit, 'BUFF_DEF') - statusSum(unit, 'DEBUFF_DEF') + passiveAuraSum(unit, 'BUFF_DEF');
+    out.mark += statusSum(unit, 'MARK');
     return out;
   }
 
@@ -901,7 +903,7 @@
       ensureUnitSkillState(u);
       Object.keys(u.skillCooldowns).forEach(id => { if (u.skillCooldowns[id] > 0) u.skillCooldowns[id] -= 1; });
 
-      const regen = statusSum(u, 'REGEN') + passiveEffectsOf(u).reduce((a, p) => a + p.effects.filter(e => e.type === 'REGEN').reduce((b, e) => b + e.value, 0), 0);
+      const regen = statusSum(u, 'REGEN') + passiveAuraSum(u, 'REGEN');
       if (regen > 0 && u.hp < u.maxHp) {
         const healed = applyHeal(u, regen);
         if (healed > 0) ctx.log(`🌿 ${u.name} 지속 회복 +${healed} (HP ${u.hp}/${u.maxHp})`, 'success');
