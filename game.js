@@ -1959,7 +1959,8 @@
     /* --------------------------------------------------------------------------
        Combat Odds & Civ4 Formula
        -------------------------------------------------------------------------- */
-    function getCombatOdds(attacker, defender) {
+    // opts.noPromo = { atk, def }: 해당 쪽 병과 승급을 뺀 승률 (승률 창 '병과 승급 영향' 비교용)
+    function getCombatOdds(attacker, defender, opts = {}) {
       if (!attacker || !defender) return null;
       const skills = state.commander.unlockedSkills;
       const isPlayerAttacker = (attacker.owner === 'PLAYER' || !attacker.owner);
@@ -1973,8 +1974,9 @@
       // 1. 공격력 산출 (Effective Strength = Base Strength * (HP / 100))
       let atkBonus = 1.0;
       // 병과 승급 효과 (전투 단계 · 도시 공격 · 지형 방어). 옛 combatRank 저장 형식도 getCombatRank가 읽는다.
-      const atkPromo = getPromotionEffectSummary(attacker);
-      const defPromo = getPromotionEffectSummary(defender);
+      const noPromo = opts.noPromo || {};
+      const atkPromo = noPromo.atk ? getEmptyPromotionSummary() : getPromotionEffectSummary(attacker);
+      const defPromo = noPromo.def ? getEmptyPromotionSummary() : getPromotionEffectSummary(defender);
       const tileFlags = getPromotionTileFlags(targetTile);
       atkBonus += atkPromo.atkPercent;
       addFactor('atk', '병과 승급', atkPromo.atkPercent * 100);
@@ -3805,7 +3807,51 @@
             [{ side: 'def', label: `유효 방어력 (HP ${hpPct(defender)}% 반영)`, pct: null }, ...by('def')])}
         </div>
         ${by('win').length ? `<div class="odds-fx-sec">${by('win').map(row).join('')}</div>` : ''}
+        ${renderOddsPromotionImpact(odds, attacker, defender)}
         <div class="odds-fx-result">최종 승률 <b>${odds.winPercent}%</b></div>`;
+    }
+
+    // 승률 창: 병과 승급이 승률을 얼마나 바꿨는지 (양쪽 승급을 빼고 다시 계산해 비교) + 승률 밖에서 작용하는 승급 효과
+    function renderOddsPromotionImpact(odds, attacker, defender) {
+      const atkIds = getUnitPromotionIds(attacker);
+      const defIds = getUnitPromotionIds(defender);
+      if (!atkIds.length && !defIds.length) return '';
+      const pctOf = o => (o ? Math.round(o.P * 1000) / 10 : 0);
+      const now = pctOf(odds);
+      const noBoth = pctOf(getCombatOdds(attacker, defender, { noPromo: { atk: true, def: true } }));
+      const noAtk = pctOf(getCombatOdds(attacker, defender, { noPromo: { atk: true } }));
+      const noDef = pctOf(getCombatOdds(attacker, defender, { noPromo: { def: true } }));
+      const delta = v => {
+        const d = Math.round(v * 10) / 10;
+        return d ? `<b class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}%p</b>` : '<b>±0%p</b>';
+      };
+      const data = window.PROMOTION_DATA || {};
+      const names = ids => ids.map(id => String(data[id]?.name || id).replace(/\s*\([^)]*\)\s*$/, '')).join(' · ');
+      const esc = escapeGachaHtml;
+      const rows = [];
+      // 전투 승급은 공격할 때만, 도시·지형 승급은 그 칸에서 방어할 때만 승률에 들어간다
+      const sideRow = (icon, unit, ids, d) => `<div class="odds-fx-row"><span>${icon} ${esc(unit.name)} 승급<small class="odds-fx-sub">${esc(names(ids))}${Math.round(d * 10) ? '' : ' — 이 교전 승률에는 효과 없음'}</small></span>${delta(d)}</div>`;
+      if (atkIds.length) rows.push(sideRow('⚔️', attacker, atkIds, now - noAtk));
+      if (defIds.length) rows.push(sideRow('🛡️', defender, defIds, now - noDef));
+
+      // 승률(P)에는 안 들어가지만 교전 결과에 작용하는 승급 효과
+      const extras = [];
+      const note = (unit, summary, isDefender) => {
+        const parts = [];
+        if (summary.firstStrikes) parts.push(`선제 타격 ${summary.firstStrikes}회 (받는 피해 -${Math.min(20, summary.firstStrikes * 5)}%)`);
+        if (isDefender && summary.counterBonus) parts.push(`반격 피해 +${Math.round(summary.counterBonus * 100)}%`);
+        if (summary.retreatChance) parts.push(`패배 시 퇴각 ${Math.round(summary.retreatChance * 100)}%`);
+        if (parts.length) extras.push(`<div class="odds-fx-row odds-fx-note"><span>${isDefender ? '🛡️' : '⚔️'} ${esc(unit.name)}: ${esc(parts.join(' · '))}</span></div>`);
+      };
+      note(attacker, getPromotionEffectSummary(attacker), false);
+      note(defender, getPromotionEffectSummary(defender), true);
+
+      return `
+        <div class="odds-fx-sec odds-fx-promo">
+          <div class="odds-fx-head"><span>🎖️ 병과 승급 영향</span><b>${noBoth.toFixed(1)}% → ${now.toFixed(1)}% (${delta(now - noBoth)})</b></div>
+          ${rows.join('')}
+          ${extras.length ? `<div class="odds-fx-row none"><span>승률 외 효과 (피해량 · 생존)</span></div>${extras.join('')}` : ''}
+        </div>`;
     }
 
     function renderBattleOddsView(attacker, inRangeEnemies) {
@@ -8741,10 +8787,78 @@
 
       // 스킬 목록 (고유 스킬 + 스킬트리에서 습득한 스킬) 및 현재 상태이상
       renderFullshotSkillList(unit);
+      renderFullshotPromotionBox(unit);
       renderFullshotGiftBox(unit);
       // 용병 명부에서 미리 보는 미편입 캐릭터는 스킬트리를 열 수 없다
       const treeActionBtn = document.querySelector('#unit-fullshot-overlay .fullshot-btn-action.skill');
       if (treeActionBtn) treeActionBtn.style.display = unit.isPreview ? 'none' : '';
+    }
+
+    // 캐릭터 창: 습득한 병과 승급을 문명4처럼 아이콘 줄로 보여 준다. 아이콘을 누르거나 올리면 아래에 효과가 뜬다.
+    function renderFullshotPromotionBox(unit) {
+      const box = document.getElementById('fullshot-promo-box');
+      if (!box) return;
+      const esc = escapeGachaHtml;
+      const data = window.PROMOTION_DATA || {};
+      const categoryOrder = [...new Set(Object.values(data).map(p => p.category))];
+      const promos = getUnitPromotionIds(unit)
+        .filter((id, i, arr) => arr.indexOf(id) === i)
+        .map(id => data[id] || { id, name: id, icon: '🎖️', category: '', level: 0, effects: {} })
+        .sort((a, b) => (categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category)) || ((a.level || 0) - (b.level || 0)));
+      const isPlayer = unit.owner !== 'ENEMY' && !unit.isPreview;
+      const affordable = isPlayer ? getAffordablePromotions(unit).length : 0;
+      if (!promos.length && !isPlayer) { box.innerHTML = ''; box.hidden = true; return; }
+
+      // '전투 II (Combat II)' → 표시 이름 '전투 II', 아이콘 숫자 'II'
+      const shortName = (p) => String(p.name || p.id).replace(/\s*\([^)]*\)\s*$/, '');
+      const numeral = (p) => (/\b(IV|I{1,3})\)?\s*$/.exec(String(p.name || '')) || [])[1] || '';
+      const describe = (p) => `${shortName(p)} — ${p.effects?.description || '효과 정보 없음'}`;
+      // 같은 계열(전투 I·II·III…)은 한 묶음으로 겹쳐 쌓는다. 지형처럼 한 분류에 계열이 둘이면 아이콘으로 나눈다.
+      const groups = [];
+      promos.forEach(p => {
+        const key = `${p.category}|${p.icon}`;
+        let g = groups.find(x => x.key === key);
+        if (!g) groups.push(g = { key, list: [] });
+        g.list.push(p);
+      });
+      // 묶음 설명: 가장 높은 단계 효과가 적용된다 (단계 효과는 누적 표기)
+      const describeGroup = (g) => {
+        const top = g.list[g.list.length - 1];
+        const steps = g.list.map(numeral).filter(Boolean);
+        const label = steps.length > 1 ? `${shortName(g.list[0]).replace(/\s*(IV|I{1,3})$/, '')} ${steps.join('·')}` : shortName(top);
+        return `${label} — ${top.effects?.description || '효과 정보 없음'}`;
+      };
+
+      const stacks = groups.map((g, gi) => `
+        <button type="button" class="fs-promo-stack" data-promo-group="${gi}" title="${esc(describeGroup(g))}" aria-label="${esc(describeGroup(g))}">
+          ${g.list.map(p => `
+            <span class="fs-promo-tile">
+              <span class="fs-promo-ico">${esc(p.icon || '🎖️')}</span>
+              ${numeral(p) ? `<span class="fs-promo-num">${numeral(p)}</span>` : ''}
+            </span>`).join('')}
+        </button>`).join('');
+
+      box.hidden = false;
+      box.innerHTML = `
+        <div class="fs-skill-head">
+          <span>🎖️ 병과 승급 ${promos.length}개${isPlayer ? ` · <span style="color:#d97706;">XP ${Number(unit.xp) || 0}</span>` : ''}</span>
+          ${isPlayer ? `<button class="btn-cheat ${affordable ? 'gold' : 'purple'}" style="font-size: 8.5px; padding: 2px 6px;" data-promo-open="1">${affordable ? `⭐ 승급 가능 ${affordable}` : '승급 창'}</button>` : ''}
+        </div>
+        ${stacks ? `<div class="fs-promo-row">${stacks}</div><div class="fs-promo-detail">${esc(describeGroup(groups[0]))}</div>`
+          : '<div style="font-size:10px;color:#94a3b8;padding:2px 0;">아직 습득한 승급이 없습니다. 전투로 XP를 모아 승급하세요.</div>'}`;
+
+      const detail = box.querySelector('.fs-promo-detail');
+      box.querySelectorAll('[data-promo-group]').forEach(t => {
+        const show = () => {
+          box.querySelectorAll('.fs-promo-stack.active').forEach(x => x.classList.remove('active'));
+          t.classList.add('active');
+          if (detail) detail.textContent = describeGroup(groups[Number(t.dataset.promoGroup)]);
+        };
+        t.onclick = show;
+        t.onmouseenter = show;
+      });
+      const openBtn = box.querySelector('[data-promo-open]');
+      if (openBtn) openBtn.onclick = () => window.UI?.renderPromotionMenu?.(unit);
     }
 
     // 캐릭터 창: 받은 선물 유물 + 선물하기 버튼
@@ -10164,6 +10278,8 @@
       );
 
       renderAll();
+      // 전략 화면에서는 renderAll이 캐릭터 창을 갱신하지 않으므로, 열려 있으면 승급 아이콘 줄을 직접 갱신한다
+      if (document.getElementById('unit-fullshot-overlay')?.classList.contains('active')) updateFullShotOverlay();
 
       return true;
     }
@@ -10202,6 +10318,11 @@
       'movementHillBonus', 'movementForestBonus',
       'healSelfPercent', 'healAdjacentPercent', 'healRange'
     ];
+    function getEmptyPromotionSummary() {
+      const summary = { atkPercent: 0 };
+      PROMOTION_EFFECT_KEYS.forEach((k) => { summary[k] = 0; });
+      return summary;
+    }
     function getPromotionEffectSummary(unit) {
       const summary = { atkPercent: getCombatRank(unit) * 0.10 };
       PROMOTION_EFFECT_KEYS.forEach((k) => { summary[k] = 0; });
