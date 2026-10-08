@@ -802,9 +802,9 @@
    * @param {boolean} [rewardData.rewinderGranted] - Whether Rewinder item was obtained (50% chance)
    * @param {number} [rewardData.defeatedCount] - Total number of enemies defeated in battle
    */
-  function showVictoryModal(rewardData) {
-    // 1. Play triumphant fanfare sound effects
-    playVictoryFanfareSFX();
+  function showVictoryModal(rewardData, opts) {
+    // 1. Play triumphant fanfare sound effects (서버 수령 결과로 다시 그릴 때는 생략)
+    if (!(opts && opts.silent)) playVictoryFanfareSFX();
 
     // 2. Locate or dynamically construct victory modal backdrop
     let modal = document.getElementById('modal-tactical-victory');
@@ -826,6 +826,9 @@
       ? rewardData.gold
       : (defeatedCount * 100);
     const rewinderGranted = !!rewardData?.rewinderGranted;
+    // 서버 수령 상태: pending(확인 중) · deferred(서버 연결 대기 — 연결되면 지급) · failed(지급 거절)
+    const rewardPending = !!rewardData?.pending, rewardDeferred = !!rewardData?.deferred, rewardFailed = !!rewardData?.failed;
+    const waitText = rewardDeferred ? '서버 연결 대기 — 연결되면 지급' : '서버 확인 중…';
 
     const curGold = global.playerState?.gold ?? (state?.gold ?? 0);
     const curRewinders = global.playerState?.rewinders ?? (state?.rewinders ?? 0);
@@ -871,7 +874,7 @@
               <span>💰</span> 확정 골드 전리품
             </span>
             <span class="victory-reward-val victory-gold-text">
-              +${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>
+              ${rewardPending ? waitText : rewardFailed ? '지급되지 않음' : `+${gold} Gold <span class="victory-gold-badge">${defeatedCount} × 100G</span>`}
             </span>
           </div>
 
@@ -880,7 +883,7 @@
             <span class="victory-reward-label">
               <span>⏳</span> 시간 회귀의 모래시계
             </span>
-            ${rewinderGranted 
+            ${rewardPending ? `<span class="victory-rewinder-none">${waitText}</span>` : rewinderGranted
               ? `<span class="victory-rewinder-highlight">
                   <span>✨</span> Rewinder Item Obtained (+1)
                 </span>`

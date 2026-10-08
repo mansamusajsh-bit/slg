@@ -1444,6 +1444,7 @@
         // 구버전 기본 3인(u1~u3)·포섭 유닛("포섭된 X") 정리 — 캐릭터 DB가 아직 없으면 연결은 동기화 때 마저 한다
         migrateStarterUnits();
         migrateCapturedUnits();
+        syncAllUnitSkillsFromRecords(); // 캐릭터 DB가 이미 있으면 바로, 없으면 동기화 때 맞춘다
         // 보스 유물 3택1을 고르다 나갔으면 다시 띄운다
         if (state.run && state.run.pendingRelicChoice) setTimeout(() => openRelicChoiceModal(), 0);
 
@@ -1641,6 +1642,7 @@
       state.commander = prev.commander;
       state.playerUnits = prev.playerUnits;
       state.enemyUnits = prev.enemyUnits;
+      syncAllUnitSkillsFromRecords(); // 되감기 스냅샷의 스킬 사본도 원본에 맞춘다
       if (state.currentBattle) state.currentBattle.nationState = prev.nationState || {}; // 국가 규칙 (모르 부활 대기 등)
       cancelSkillTargeting(true);
 
@@ -2181,6 +2183,11 @@
     }
 
     /** 물가가 반영된 수입에 유물 골드 획득(%)까지 얹는다. 골드를 버는 곳은 모두 이 함수를 쓴다. */
+    // 지금 전투의 보상 ref ('회차:전투id'). 전리품은 서버가 시작을 기록한 전투에서만 받는다.
+    function currentBattleRef() {
+      return state.currentBattle && state.currentBattle.id != null ? `${Number(state.player && state.player.loopCount) || 0}:${state.currentBattle.id}` : null;
+    }
+
     function scaleIncomeWithRelics(base) {
       return applyRelicGoldGain(scaleIncome(base));
     }
@@ -2500,7 +2507,7 @@
           const defenderCaptured = tryCaptureEnemy(defender, defender.x, defender.y);
           if (!defenderCaptured) {
             const lootGold = scaleIncomeWithRelics(Math.round((35 + defender.level * 10) * getCaptureDoctrine().lootMult));
-            Wallet.earn('earn_loot', lootGold);
+            Wallet.earn('earn_loot', lootGold, currentBattleRef());
             addLog(`🏆 [적 격퇴 완료] ${defender.name} 처치 성공! 전리품 +${lootGold}G 획득`, 'gold');
           }
           // 국가 규칙: 불사(모르) — 포섭되지 않고 쓰러진 첫 적은 다음 적 턴에 부활
@@ -2591,7 +2598,7 @@
           // 적군 공격자가 아군 수비자의 반격에 격퇴됨
           addLog(`🛡️ [반격 섬멸 성공!] 아군 ${defender.name}이(가) 적 ${attacker.name}의 돌격을 완벽히 저지하고 역공으로 적을 섬멸했습니다!`, 'success');
           const lootGold = scaleIncomeWithRelics(Math.round((35 + attacker.level * 10) * getCaptureDoctrine().lootMult));
-          Wallet.earn('earn_loot', lootGold);
+          Wallet.earn('earn_loot', lootGold, currentBattleRef());
           addLog(`🏆 [적 격퇴 전리품] +${lootGold}G 국고 획득!`, 'gold');
           grantCommanderExp(20, '반격 섬멸');
 
@@ -3247,7 +3254,7 @@
       const refund = scaleGold(Math.round(baseGold * levelMult + affBonus)); // 매각가도 물가를 따라간다
 
       unit.isDead = true;
-      Wallet.earn('earn_sell', refund);
+      Wallet.earn('earn_sell', refund, `${Number(state.player && state.player.loopCount) || 0}:sell:${unit.id}`); // 서버는 유닛마다 한 번만 받는다
 
       addLog(`🏛️ [도시 유닛 매각] ${unit.name} 명예 퇴역 완료 -> +${refund}G 국고 환급!`, 'gold');
       closeAllModals();
@@ -7128,7 +7135,9 @@
         if (state) {
           const starters = migrateStarterUnits();
           const captured = migrateCapturedUnits();
-          if (starters || captured) renderAll();
+          const skills = syncAllUnitSkillsFromRecords();
+          if (starters || captured || skills) renderAll();
+          if (skills) saveGameState(true);
         }
       } catch (e) {
         console.warn("Global characters sync error:", e);
@@ -7683,6 +7692,42 @@
       if (!u.portraitFocus && record.portraitFocus) { u.portraitFocus = JSON.parse(JSON.stringify(record.portraitFocus)); changed = true; }
       if (!u.dialogues && record.dialogues) { u.dialogues = JSON.parse(JSON.stringify(record.dialogues)); changed = true; }
       if (!u.dialogueTone && record.dialogueTone) { u.dialogueTone = record.dialogueTone; changed = true; }
+      return changed;
+    }
+
+    // 스킬 정의(스킬트리 · 고유 스킬)는 캐릭터 원본 레코드가 기준이다. 세이브에 든 사본은 원본으로 덮어쓴다
+    // — 에디터에서 고친 스킬이 모든 플레이어에게 반영되고, 세이브의 스킬 수치를 고쳐도 원본으로 돌아간다.
+    // 유닛 것으로 남기는 건 진행 상황(익힌 스킬 · 해금권)뿐이다. 원본에서 빠진 스킬을 해금권으로 익혔었다면 돌려준다.
+    // 트리가 비어 있는 레코드(병과 기본 트리를 쓰는 캐릭터)는 노드 id가 유닛마다 달라 건드리지 않는다.
+    function syncUnitSkillsFromRecord(u) {
+      if (!u || !u.sourceCharacterId) return false;
+      const record = getStoredCustomCharacters().find(c => c && String(c.id) === String(u.sourceCharacterId));
+      if (!record) return false;
+      let changed = false;
+      const tree = Array.isArray(record.skillTree) ? record.skillTree : [];
+      if ((tree.length || record.skillTreeCustomized) && JSON.stringify(u.skillTree || []) !== JSON.stringify(tree)) {
+        const oldTree = Array.isArray(u.skillTree) ? u.skillTree : [];
+        const ids = new Set(tree.map(n => n && n.id));
+        const learned = Array.isArray(u.learnedSkills) ? u.learnedSkills : oldTree.filter(n => n && n.startsLearned).map(n => n.id);
+        const refund = learned.filter(id => !ids.has(id) && !oldTree.some(n => n && n.id === id && n.startsLearned)).length;
+        const next = learned.filter(id => ids.has(id));
+        tree.forEach(n => { if (n && n.startsLearned && !next.includes(n.id)) next.push(n.id); });
+        u.skillTree = JSON.parse(JSON.stringify(tree));
+        u.skillTreeCustomized = !!record.skillTreeCustomized;
+        u.learnedSkills = next;
+        if (refund) u.skillPoints = (Number(u.skillPoints) || 0) + refund;
+        changed = true;
+      }
+      if (record.customSkill && JSON.stringify(u.customSkill || null) !== JSON.stringify(record.customSkill)) {
+        u.customSkill = JSON.parse(JSON.stringify(record.customSkill));
+        changed = true;
+      }
+      return changed;
+    }
+
+    function syncAllUnitSkillsFromRecords() {
+      let changed = false;
+      [...(state.playerUnits || []), ...(state.reserveUnits || [])].forEach(u => { if (syncUnitSkillsFromRecord(u)) changed = true; });
       return changed;
     }
 
@@ -10787,7 +10832,7 @@
         rewinderGranted: rewinderGranted,
         defeatedCount: totalDefeatedCount
       };
-      const serverRewards = !!battle && itemsServerMode();
+      const serverRewards = !!battle && serverRewardsExpected();
       if (serverRewards) { rewardData.gold = 0; rewardData.rewinderGranted = false; rewardData.pending = true; }   // 서버가 정한 값이 올 때까지 표시를 비워 둔다
       if (battle) {
         battle.status = 'won';
@@ -10797,14 +10842,7 @@
       if (serverRewards) {
         addLog(`✨ [전투 승리] 적군 ${totalDefeatedCount}기 격퇴 — 보상은 서버가 확정합니다…`, 'gold');
         // 서버에서 보상을 수령하고, 서버가 정한 값으로 승리 창을 다시 그린다
-        claimBattleReward(battle).then((res) => {
-          const shown = res && res.ok === true
-            ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount: totalDefeatedCount }
-            : { gold: 0, rewinderGranted: false, defeatedCount: totalDefeatedCount, failed: true };
-          battle.result = { ...shown };
-          const m = document.getElementById('modal-tactical-victory');
-          if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown);
-        });
+        claimBattleReward(battle); // 결과는 applyClaimResult 가 승리 창에 다시 그린다
       } else {
         addLog(`✨ [전투 승리 전리품] 적군 ${totalDefeatedCount}기 격퇴 보상: +${goldEarned}G${rewinderGranted ? ' · ⏳ 시공간 리와인더 +1개' : ''} (전략맵 복귀 시 지급)`, 'gold');
       }
@@ -12983,6 +13021,13 @@
     // ========================================================================
     const itemsServerMode = () => !!(window.ServerEconomy && window.ServerEconomy.itemsActive);
     window.itemsServerMode = itemsServerMode;
+    // 전투 보상을 서버에서 받아야 하는 계정인가. 새로고침 직후처럼 서버 경제가 아직 연결 중이어도 true —
+    // 이때 클라이언트가 보상을 직접 주면 서버가 거절해 골드가 사라지므로, 수령을 미뤄 두고 연결되면 받는다.
+    function serverRewardsExpected() {
+      if (itemsServerMode()) return true;
+      const SE = window.ServerEconomy, user = window.SupabaseBridge && window.SupabaseBridge.currentUser;
+      return !!(SE && user && !user.offline && SE.status !== 'unavailable' && SE.status !== 'offline');
+    }
     // 국영상점(nationShop.js)이 쓴다
     Object.assign(window, { RELIC_RARITY_META, describeRelicEffects, getOwnedRelics });
 
@@ -13064,9 +13109,24 @@
       return res;
     }
     const CLAIM_ERRORS = { rate_limited: '수령 횟수 상한에 걸렸습니다', node_done: '이미 보상을 받은 노드입니다', boss_done: '이 구역의 보스 보상은 이미 받았습니다', void: '무효가 된 전투입니다', no_encounter: '서버에 전투 기록이 없습니다', too_fast: '전투 시간이 너무 짧습니다' };
+    // 수령 결과를 아직 열려 있는 승리 창과 전투 기록(battle.result — 새로고침 후 승리 창이 다시 쓴다)에 반영한다
+    function showClaimOnVictory(info, res) {
+      const battle = state && state.currentBattle;
+      if (!battle || String(battle.id) !== String(info.ref)) return;
+      const defeatedCount = (battle.result && battle.result.defeatedCount) || 0;
+      const shown = res && res.ok === true
+        ? { gold: scaleIncomeWithRelics(Number(res.gold) || 0), rewinderGranted: Number(res.rewinders) > 0, defeatedCount }
+        : (!res || res.network)
+          ? { gold: 0, rewinderGranted: false, defeatedCount, pending: true, deferred: true }
+          : { gold: 0, rewinderGranted: false, defeatedCount, failed: true };
+      battle.result = shown;
+      const m = document.getElementById('modal-tactical-victory');
+      if (m && m.style.display !== 'none' && window.UI && typeof window.UI.showVictoryModal === 'function') window.UI.showVictoryModal(shown, { silent: true });
+    }
     function applyClaimResult(info, res) {
       const run = state && state.run;
       if (!run) return;
+      showClaimOnVictory(info, res);
       if (!Array.isArray(run.pendingClaims)) run.pendingClaims = [];
       const queued = run.pendingClaims.findIndex(c => c.ref === info.ref && c.loop === info.loop);
       if (!res || res.ok !== true) {
@@ -13079,6 +13139,7 @@
           if (queued >= 0) run.pendingClaims.splice(queued, 1);
           addLog(`⚠️ [보상] 서버가 전투 보상을 지급하지 않았습니다 — ${CLAIM_ERRORS[res.error] || res.error}`, 'warning');
         }
+        saveGameState(true);
         return;
       }
       if (queued >= 0) run.pendingClaims.splice(queued, 1);
@@ -13100,6 +13161,12 @@
     /** 이 전투의 승리 보상을 서버에서 한 번만 수령한다 (같은 전투로 여러 번 불러도 같은 Promise). */
     function claimBattleReward(battle, info) {
       info = info || battleInfo(battle);
+      // 수령을 시작하기 전에 대기 목록에 올려 둔다 → 응답 전에 새로고침해도 서버가 연결되면 다시 받는다
+      const run = state && state.run;
+      if (run) {
+        if (!Array.isArray(run.pendingClaims)) run.pendingClaims = [];
+        if (!run.pendingClaims.some(c => c.ref === info.ref && c.loop === info.loop)) run.pendingClaims.push(info);
+      }
       if (!claimMemo.has(info.ref)) {
         claimMemo.set(info.ref, serverClaimBattle(info).then((res) => { applyClaimResult(info, res); return res; }));
       }
@@ -13173,7 +13240,7 @@
       const rewards = victory ? (battle.rewards || []).map(r => ({ ...r })) : [];
       // 골드는 전투 하나당 한 번만 청구한다 (서버가 같은 전투 id 로 두 번 받지 못하게 막는다)
       const goldReward = rewards.filter(r => r.type === 'gold').reduce((sum, r) => sum + scaleIncomeWithRelics(Number(r.amount) || 0), 0);
-      if (victory && itemsServerMode()) {
+      if (victory && serverRewardsExpected()) {
         // 서버 권위: 골드 · 리와인더 · 유물은 서버가 수령(slg_encounter_claim)에서 정한 값만 받는다 (승리 순간에 이미 수령했으면 그 결과를 쓴다)
         claimBattleReward(battle);
       } else {

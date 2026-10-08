@@ -368,6 +368,16 @@ insert into public.slg_config (key, value) values
   ('enc_min_ms', 10000), ('rewinder_day_grants', 20), ('rewinder_day_buys', 10), ('enc_max_enemies', 12), ('claims_per_hour', 30), ('enc_max_node_len', 48)
 on conflict (key) do nothing;
 
+-- 수입 검증 · 이상 징후
+--   전리품(earn_loot)은 서버가 시작을 기록한 전투(ref = '회차:전투id')에서만, 적 수 기준 상한(적 1명당 loot_per_enemy_base, 부활 등 여유 loot_extra_enemies명) 이내로 받는다.
+--   전투 시작은 시간당 enc_starts_per_hour 번까지 (가짜 전투를 마구 만들어 전리품을 받는 것을 막는다).
+--   매각(earn_sell)은 유닛마다 한 번, 시간당 sells_per_hour 번까지.
+--   이상 징후(anom_*)는 막지 않고 slg_audit 에 기록만 한다. 같은 내용은 anomaly_dedupe_ms 동안 한 번만.
+insert into public.slg_config (key, value) values
+  ('loot_per_enemy_base', 800), ('loot_extra_enemies', 2), ('loot_window_ms', 21600000), ('enc_starts_per_hour', 60), ('sells_per_hour', 10),
+  ('enc_fast_ms_per_enemy', 3000), ('save_max_level', 60), ('save_unlock_slack', 2), ('anomaly_dedupe_ms', 3600000)
+on conflict (key) do nothing;
+
 -- ---------------------------------------------------------------- 운영자 메일 (재화 · 리와인더 · 유물 · 캐릭터 선물)
 -- 운영자가 보내고(slg_admin_mail_send), 플레이어가 우편함에서 직접 받는다(slg_mail_claim). 보상은 받는 순간 서버가 지급한다.
 --   target = null → 전체 메일. include_new 가 false 면 보낸 시점에 이미 가입한 플레이어만 받는다.
@@ -1227,18 +1237,69 @@ end $$;
 --   지출: spend(소비로 센다) · adjust · forfeit            — 잔액이 모자라면 거절
 --   수입: earn_loot · earn_reward · earn_event · earn_sell · earn_stash · earn_rewind — 건당 상한 · 1회 청구 · 시간당 상한
 -- 같은 id 를 다시 보내면 무시한다 (재전송 안전).
--- 전투 보상 골드(earn_reward)는 서버가 "수령"을 기록한 전투(ref = '회차:전투id')에서만, 서버가 정한 기준액 이내(유물 골드 보너스 최대 +100%)로 받는다.
+-- 전투 보상 골드(earn_reward)는 서버가 "수령"을 기록한 전투(ref = '회차:전투id')에서만, 서버가 정한 기준액 × 장착 유물의 골드 보너스 이내로 받는다.
+-- 전리품(earn_loot)은 서버가 시작을 기록한 전투에서만, 이벤트 골드(earn_event)는 서버가 굴린 이벤트(slg_event_roll)의 금액 이내로만 받는다.
+
+-- 이상 징후: 막지 않고 감사 기록(slg_audit, kind 'anom_*')에만 남긴다. 같은 사람 · 같은 종류 · 같은 내용은 anomaly_dedupe_ms 동안 한 번만.
+create or replace function public.slg_anomaly(p_uid uuid, p_kind text, p_detail jsonb, p_now bigint) returns void
+language plpgsql volatile set search_path = public as $$
+begin
+  if p_uid is null then return; end if;
+  if exists (select 1 from slg_audit a where a.user_id = p_uid and a.kind = p_kind and a.detail = coalesce(p_detail, '{}'::jsonb)
+             and a.at_ms > p_now - slg_cfg('anomaly_dedupe_ms')) then return; end if;
+  perform slg_audit_add(p_uid, p_kind, p_detail, p_now);
+end $$;
+
+-- 장착한 지휘관 유물의 골드 획득 배율 (클라이언트 applyRelicGoldGain 과 같은 -50% ~ +100%).
+-- 유물을 뺀 직후 도착한 청구도 받도록 1 아래로는 내리지 않는다.
+create or replace function public.slg_gold_gain(p_uid uuid) returns numeric
+language plpgsql stable set search_path = public as $$
+begin
+  return greatest(1, 1 + least(100, greatest(-50, slg_equipped_stat(p_uid, 'goldGain'))) / 100.0);
+end $$;
+
+-- '회차:식별자' ref 에서 식별자를 꺼낸다. 형식이 틀렸거나 이번 회차가 아니면 null.
+create or replace function public.slg_ref_id(p_ref text, p_loop int) returns text
+language plpgsql immutable set search_path = public as $$
+begin
+  if p_ref is null or p_ref !~ '^(0|[1-9][0-9]{0,8}):.+$' then return null; end if;
+  if split_part(p_ref, ':', 1)::int <> p_loop then return null; end if;
+  return substr(p_ref, length(split_part(p_ref, ':', 1)) + 2);
+end $$;
+
 create or replace function public.slg_reward_ok(p_uid uuid, p_loop int, p_ref text, p_amt bigint, p_price numeric, p_tol numeric) returns boolean
 language plpgsql stable set search_path = public as $$
-declare e slg_encounters%rowtype; v_loop int;
+declare e slg_encounters%rowtype;
 begin
-  if p_ref is null or p_ref !~ '^(0|[1-9][0-9]{0,8}):.+$' then return false; end if;
-  v_loop := split_part(p_ref, ':', 1)::int;
-  if v_loop <> p_loop then return false; end if;
-  select * into e from slg_encounters x where x.user_id = p_uid and x."loop" = v_loop and x.ref = substr(p_ref, length(split_part(p_ref, ':', 1)) + 2)
+  select * into e from slg_encounters x where x.user_id = p_uid and x."loop" = p_loop and x.ref = slg_ref_id(p_ref, p_loop)
     and x.type <> 'event' and x.status in ('awaiting', 'claimed');
   if not found then return false; end if;
-  return p_amt <= slg_scale_income(e.gold_reward, p_price) * 2 * p_tol;
+  return p_amt <= slg_scale_income(e.gold_reward, p_price) * slg_gold_gain(p_uid) * p_tol;
+end $$;
+
+-- 이벤트 골드: 서버가 굴린 이벤트 결과(ref 'ev:노드id')의 금액까지만
+create or replace function public.slg_event_ok(p_uid uuid, p_loop int, p_ref text, p_amt bigint, p_price numeric, p_tol numeric) returns boolean
+language plpgsql stable set search_path = public as $$
+declare e slg_encounters%rowtype;
+begin
+  select * into e from slg_encounters x where x.user_id = p_uid and x."loop" = p_loop and x.ref = 'ev:' || slg_ref_id(p_ref, p_loop) and x.type = 'event';
+  if not found then return false; end if;
+  return p_amt <= slg_scale_income(coalesce((e.result ->> 'gold')::numeric, 0), p_price) * slg_gold_gain(p_uid) * p_tol;
+end $$;
+
+-- 전리품: 서버가 시작을 기록한 전투에서, 시작 후 loot_window_ms 안에, 전투 하나당 누적 상한까지. 문제가 있으면 거절 사유를 돌려준다.
+create or replace function public.slg_loot_check(p_uid uuid, p_loop int, p_ref text, p_amt bigint, p_price numeric, p_tol numeric, p_now bigint) returns text
+language plpgsql stable set search_path = public as $$
+declare e slg_encounters%rowtype; got bigint;
+begin
+  select * into e from slg_encounters x where x.user_id = p_uid and x."loop" = p_loop and x.ref = slg_ref_id(p_ref, p_loop) and x.type <> 'event';
+  if not found then return 'no_encounter'; end if;
+  if e.started_ms < p_now - slg_cfg('loot_window_ms') then return 'expired'; end if;
+  select coalesce(sum(w.delta), 0) into got from slg_wallet_log w where w.user_id = p_uid and w.kind = 'earn_loot' and w.ref = p_ref;
+  if got + p_amt > slg_scale_income(slg_cfg('loot_per_enemy_base') * (e.enemies + slg_cfg('loot_extra_enemies')), p_price) * slg_gold_gain(p_uid) * p_tol then
+    return 'over_cap';
+  end if;
+  return null;
 end $$;
 
 create or replace function public.slg_wallet_apply(p_txs jsonb) returns jsonb
@@ -1273,18 +1334,25 @@ begin
     elsif v_kind in ('earn_loot', 'earn_reward', 'earn_event', 'earn_sell') then
       cap := case v_kind when 'earn_loot' then slg_cfg('loot_max_base') when 'earn_reward' then slg_cfg('reward_max_base')
                          when 'earn_event' then slg_cfg('event_max_base') else slg_cfg('sell_max_base') end;
-      if v_kind in ('earn_reward', 'earn_event') and v_ref is null then
+      if v_ref is null then
         reason := 'ref_required';
       elsif v_amt > slg_scale_income(cap, econ_price) * tol then
         reason := 'over_cap';
       elsif v_kind = 'earn_reward' and not slg_reward_ok(uid, p."loop", v_ref, v_amt, econ_price, tol) then
         reason := 'no_encounter';
+      elsif v_kind = 'earn_event' and not slg_event_ok(uid, p."loop", v_ref, v_amt, econ_price, tol) then
+        reason := 'no_encounter';
+      elsif v_kind = 'earn_loot' and slg_loot_check(uid, p."loop", v_ref, v_amt, econ_price, tol, now_ms) is not null then
+        reason := slg_loot_check(uid, p."loop", v_ref, v_amt, econ_price, tol, now_ms);
+      elsif v_kind = 'earn_sell'
+            and (select count(*) from slg_wallet_log w where w.user_id = uid and w.kind = 'earn_sell' and w.at_ms > now_ms - 3600000) >= slg_cfg('sells_per_hour') then
+        reason := 'rate_limited';
       else
         select coalesce(sum(w.delta), 0) into earned from slg_wallet_log w
           where w.user_id = uid and w.kind in ('earn_loot', 'earn_reward', 'earn_event', 'earn_sell') and w.at_ms > now_ms - 3600000;
         if earned + v_amt > slg_scale_income(slg_cfg('earn_cap_per_hour_base'), econ_price) * tol then
           reason := 'rate_limited';
-        elsif v_kind in ('earn_reward', 'earn_event')
+        elsif v_kind in ('earn_reward', 'earn_event', 'earn_sell')
               and exists (select 1 from slg_wallet_log w where w.user_id = uid and w.kind = v_kind and w.ref = v_ref) then
           reason := 'already_claimed';
         else
@@ -1308,6 +1376,10 @@ begin
       else perform slg_credit(uid, v_amt, v_kind, v_ref, now_ms, v_tx); ok := true; end if;
     else
       reason := 'unknown_kind';
+    end if;
+    -- 잔액 부족 외의 거절은 정상 클라이언트에서는 거의 나오지 않는다 → 이상 징후로 남긴다
+    if not ok and reason is not null and reason not in ('insufficient', 'bad_tx') then
+      perform slg_anomaly(uid, 'anom_wallet', jsonb_build_object('kind', v_kind, 'reason', reason, 'ref', v_ref), now_ms);
     end if;
     results := results || case when ok then jsonb_build_object('id', v_tx, 'ok', true)
                                else jsonb_build_object('id', v_tx, 'ok', false, 'reason', reason) end;
@@ -1579,15 +1651,17 @@ begin
   if not slg_admin_uid(uid) then raise exception 'forbidden' using errcode = '42501'; end if;
   select coalesce(jsonb_agg(jsonb_build_object('id', a.id, 'userId', a.user_id, 'name', p.name, 'kind', a.kind, 'detail', a.detail, 'atMs', a.at_ms) order by a.id desc), '[]'::jsonb)
     into rows from (select * from slg_audit order by id desc limit least(greatest(coalesce(p_limit, 100), 1), 500)) a left join slg_players p on p.user_id = a.user_id;
-  select coalesce(jsonb_agg(jsonb_build_object('userId', s.user_id, 'name', s.name, 'mismatch', s.m, 'noConfirm', s.n, 'subsAliveInSave', s.x) order by s.m + s.n + s.x desc), '[]'::jsonb)
+  select coalesce(jsonb_agg(jsonb_build_object('userId', s.user_id, 'name', s.name, 'mismatch', s.m, 'noConfirm', s.n, 'subsAliveInSave', s.x, 'anomalies', s.an) order by s.m + s.n + s.x + s.an desc), '[]'::jsonb)
     into sus from (
       select a.user_id, max(p.name) as name,
              count(*) filter (where a.kind = 'seize_mismatch') as m,
              count(*) filter (where a.kind = 'seize_no_confirm') as n,
-             count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') as x
+             count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') as x,
+             count(*) filter (where a.kind like 'anom\_%') as an
       from slg_audit a left join slg_players p on p.user_id = a.user_id group by a.user_id
       having count(*) filter (where a.kind in ('seize_mismatch', 'seize_no_confirm')) > 0
-          or count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') > 0) s;
+          or count(*) filter (where a.kind = 'collateral_substitute' and a.detail ->> 'oldAliveInSave' = 'true') > 0
+          or count(*) filter (where a.kind like 'anom\_%') > 0) s;
   return jsonb_build_object('ok', true, 'suspects', sus, 'rows', rows);
 end $$;
 
@@ -1974,6 +2048,10 @@ begin
   p := slg_player_for(uid);
   select * into e from slg_encounters where user_id = uid and "loop" = p."loop" and ref = p_ref;
   if found then return jsonb_build_object('ok', true, 'status', e.status, 'dup', true); end if;
+  if (select count(*) from slg_encounters x where x.user_id = uid and x.type <> 'event' and x.started_ms > now_ms - 3600000) >= slg_cfg('enc_starts_per_hour') then
+    perform slg_anomaly(uid, 'anom_enc_starts', jsonb_build_object('perHour', slg_cfg('enc_starts_per_hour')), now_ms);
+    return jsonb_build_object('ok', false, 'error', 'rate_limited');
+  end if;
   if exists (select 1 from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.node_id = p_node_id and x.status in ('awaiting', 'claimed')) then
     return jsonb_build_object('ok', false, 'error', 'node_done');
   end if;
@@ -2014,7 +2092,12 @@ begin
     end if;
     if (select count(*) from slg_encounters x where x.user_id = uid and x.claimed_ms > now_ms - 3600000) >= slg_cfg('claims_per_hour')
        or (select count(*) from slg_encounters x where x.user_id = uid and x."loop" = p."loop" and x.claimed_ms is not null) >= slg_run_claim_cap() then
+      perform slg_anomaly(uid, 'anom_claim_rate', jsonb_build_object('loop', p."loop"), now_ms);
       return jsonb_build_object('ok', false, 'error', 'rate_limited');
+    end if;
+    -- 적 수에 비해 너무 빨리 끝난 전투 (최소 시간 enc_min_ms 는 넘겼지만 적 1명당 enc_fast_ms_per_enemy 보다 빠르다)
+    if now_ms - e.started_ms < slg_cfg('enc_fast_ms_per_enemy') * e.enemies then
+      perform slg_anomaly(uid, 'anom_fast_clear', jsonb_build_object('ref', e.ref, 'nodeId', e.node_id, 'type', e.type, 'enemies', e.enemies, 'ms', now_ms - e.started_ms), now_ms);
     end if;
     mult := case e.type when 'boss' then 10 when 'elite' then 1.5 else 1 end;
     gold := round(e.enemies * 100 * mult)::bigint;
@@ -2572,6 +2655,78 @@ begin
 end $$;
 
 -- ============================================================================
+-- 세이브 검사 (막지 않고 이상 징후로 기록만): 세이브가 저장될 때마다 유닛을 캐릭터 원본과 대조한다.
+--   anom_save_skill   : 익힌 스킬이 원본 스킬트리에 없거나, 스킬 내용(그림 제외)이 원본과 다르다 — 원본 트리가 있는 캐릭터만
+--                       (클라이언트는 불러올 때 스킬을 원본으로 맞추므로, 정상 세이브에서는 원본을 막 고친 직후가 아니면 나오지 않는다)
+--   anom_save_unlocks : 해금권으로 익힌 스킬 + 남은 해금권 > 초기 해금권 + (레벨 - 1) + save_unlock_slack
+--                       해금권을 주는 유물(spGain)을 가진 계정은 정상적으로 넘을 수 있어 검사하지 않는다
+--   anom_save_level   : 레벨이 save_max_level 을 넘는다
+-- ============================================================================
+create or replace function public.slg_check_save() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid; now_ms bigint; u jsonb; rec jsonb; tree jsonb; own_tree jsonb; ids text[]; starts text[]; learned text[]; bad text[]; diff text[];
+  spent int; pts int; lvl int; allowed int; cid text; sp_relic boolean;
+begin
+  if new.record_id !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' or jsonb_typeof(new.data -> 'run') <> 'object' then return new; end if;
+  uid := new.record_id::uuid;
+  now_ms := slg_now_ms();
+  sp_relic := exists (select 1 from slg_relics r, jsonb_array_elements(r.snapshot -> 'effects') f where r.user_id = uid and f ->> 'stat' = 'spGain');
+  for u in select x from jsonb_array_elements(
+             case when jsonb_typeof(new.data -> 'run' -> 'party') = 'array' then new.data -> 'run' -> 'party' else '[]'::jsonb end
+             || case when jsonb_typeof(new.data -> 'run' -> 'reserve') = 'array' then new.data -> 'run' -> 'reserve' else '[]'::jsonb end) x
+  loop
+    continue when jsonb_typeof(u) <> 'object' or coalesce(u ->> 'isDead', 'false') = 'true';
+    lvl := case when (u ->> 'level') ~ '^[0-9]{1,6}$' then (u ->> 'level')::int else 1 end;
+    if lvl > slg_cfg('save_max_level') then
+      perform slg_anomaly(uid, 'anom_save_level', jsonb_build_object('unit', u ->> 'id', 'name', u ->> 'name', 'level', lvl), now_ms);
+    end if;
+    cid := u ->> 'sourceCharacterId';
+    continue when cid is null;
+    select data into rec from slg_records where collection_name = 'characters' and record_id = cid;
+    continue when rec is null;
+    learned := array(select jsonb_array_elements_text(case when jsonb_typeof(u -> 'learnedSkills') = 'array' then u -> 'learnedSkills' else '[]'::jsonb end));
+    own_tree := case when jsonb_typeof(u -> 'skillTree') = 'array' then u -> 'skillTree' else '[]'::jsonb end;
+    tree := case when jsonb_typeof(rec -> 'skillTree') = 'array' then rec -> 'skillTree' else '[]'::jsonb end;
+    if jsonb_array_length(tree) > 0 then
+      ids := array(select n ->> 'id' from jsonb_array_elements(tree) n);
+      bad := array(select l from unnest(learned) l where not (l = any (ids)));
+      diff := array(select n ->> 'id' from jsonb_array_elements(own_tree) n
+                    where jsonb_typeof(n) = 'object' and not exists (select 1 from jsonb_array_elements(tree) m
+                                                                    where jsonb_typeof(m) = 'object' and m ->> 'id' = n ->> 'id' and (m - 'imageUrl') = (n - 'imageUrl')));
+      if cardinality(bad) > 0 or cardinality(diff) > 0 then
+        perform slg_anomaly(uid, 'anom_save_skill', jsonb_build_object('unit', u ->> 'id', 'name', u ->> 'name', 'character', cid,
+                                                                       'unknownLearned', to_jsonb(bad), 'changedNodes', to_jsonb(diff)), now_ms);
+      end if;
+    else
+      tree := own_tree;   -- 병과 기본 트리를 쓰는 캐릭터: 노드 id 가 유닛마다 달라 유닛 자신의 트리로 센다
+    end if;
+    continue when sp_relic;
+    ids := array(select n ->> 'id' from jsonb_array_elements(tree) n where jsonb_typeof(n) = 'object');
+    starts := array(select n ->> 'id' from jsonb_array_elements(tree) n where jsonb_typeof(n) = 'object' and coalesce(n ->> 'startsLearned', 'false') = 'true');
+    spent := (select count(*) from unnest(learned) l where l = any (ids) and not (l = any (starts)));
+    pts := case when (u ->> 'skillPoints') ~ '^[0-9]{1,6}$' then (u ->> 'skillPoints')::int else 0 end;
+    allowed := case when (rec ->> 'initialSkillPoints') ~ '^[0-9]{1,4}$' then (rec ->> 'initialSkillPoints')::int else 0 end
+               + greatest(0, lvl - 1) + slg_cfg('save_unlock_slack')::int;
+    if spent + pts > allowed then
+      perform slg_anomaly(uid, 'anom_save_unlocks', jsonb_build_object('unit', u ->> 'id', 'name', u ->> 'name', 'level', lvl,
+                                                                       'spent', spent, 'points', pts, 'allowed', allowed), now_ms);
+    end if;
+  end loop;
+  return new;
+exception when others then
+  return new;   -- 검사가 실패해도 저장은 막지 않는다
+end $$;
+
+do $$
+begin
+  if to_regclass('public.slg_records') is null then return; end if;
+  drop trigger if exists slg_check_save on public.slg_records;
+  create trigger slg_check_save after insert or update on public.slg_records
+    for each row when (new.collection_name = 'gameState') execute function public.slg_check_save();
+end $$;
+
+-- ============================================================================
 -- 권한: 내부 함수는 아무도 못 부르고, RPC 만 로그인한 사용자가 부른다
 -- ============================================================================
 do $$
@@ -2603,7 +2758,8 @@ end $$;
 --  * nationShares · fedState · charAuctions · fedLedger 는 예전(클라이언트 CAS) 방식의 컬렉션이다.
 --    이제 서버 테이블(slg_*)이 원본이므로 브라우저가 새로 쓰지 못하게 막는다 (읽기만 가능).
 --  * relics · rewardPools · items(유물 · 보상 풀 · 아이템 정의)는 누구나 읽지만 운영자(slg_is_admin)만 쓴다 — 서버가 이 정의로 보상을 굴리므로.
---  * 그 밖의 컬렉션(캐릭터 · 스킬 · 맵 · 설정 등 에디터 데이터)은 지금처럼 공개 읽기/쓰기다.
+--  * characters · skills(캐릭터 · 스킬 원본)도 운영자만 쓴다 — 모든 플레이어의 유닛이 이 원본으로 스킬을 맞추므로.
+--  * 그 밖의 컬렉션(맵 · 설정 등 에디터 데이터)은 지금처럼 공개 읽기/쓰기다.
 --    (운영자용 에디터를 위한 것이다. 에디터 쓰기까지 막으려면 별도의 관리자 정책이 필요하다.)
 -- ============================================================================
 do $$
@@ -2626,13 +2782,13 @@ begin
     using (collection_name <> 'gameState' or record_id = auth.uid()::text);
   create policy "SLG insert" on public.slg_records for insert to anon, authenticated
     with check (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
-                and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items') or public.slg_is_admin()));
+                and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items', 'characters', 'skills') or public.slg_is_admin()));
   create policy "SLG update" on public.slg_records for update to anon, authenticated
     using (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
-           and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items') or public.slg_is_admin()))
+           and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items', 'characters', 'skills') or public.slg_is_admin()))
     with check (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
-                and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items') or public.slg_is_admin()));
+                and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items', 'characters', 'skills') or public.slg_is_admin()));
   create policy "SLG delete" on public.slg_records for delete to anon, authenticated
     using (collection_name not in ('nationShares', 'fedState', 'charAuctions', 'fedLedger')
-           and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items') or public.slg_is_admin()));
+           and (collection_name <> 'gameState' or record_id = auth.uid()::text) and (collection_name not in ('relics', 'rewardPools', 'items', 'characters', 'skills') or public.slg_is_admin()));
 end $$;

@@ -7,6 +7,7 @@ const supabaseAnonKey = config.anonKey || window.SUPABASE_ANON_KEY || '';
 // 로그인 세션은 supabase-js 가 브라우저에 보관·갱신한다 (OAuth 로그인 후 돌아올 때 주소의 토큰도 여기서 읽는다)
 const client = (supabaseUrl && supabaseAnonKey) ? createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } }) : null;
 const TABLE = 'slg_records';
+const RPC_TIMEOUT_MS = 10000; // 서버 SQL 실행 제한(8초)보다 길게 — 서버가 끝내거나 오류를 낸 뒤에 끊는다
 const BUCKET = 'slg-assets';
 const clean = (v) => {
   if (v === undefined) return undefined;
@@ -121,10 +122,16 @@ const bridge = {
   async signOut() { this._signingOut = true; try { await requireClient().auth.signOut(); } finally { location.reload(); } },
   continueOffline() { this.currentUser = { uid: 'guest_main', isAnonymous: true, offline: true }; this._notify(); return this.currentUser; },
   // 서버 함수(RPC) 호출 — 서버 경제(supabase-economy.sql)의 유일한 입구. 오류는 던진다.
+  // 응답이 끝내 오지 않는 요청(탭 복귀 직후 등)이 서버 경제의 요청 줄을 영원히 막지 않도록 시간 제한을 둔다.
+  // 시간 초과는 연결 오류로 다뤄진다 — 수령 · 거래는 서버에서 멱등이라 다시 보내도 안전하다.
   async rpc(name, args = {}) {
-    const { data, error } = await requireClient().rpc(name, args);
-    if (error) throw error;
-    return data;
+    let timer;
+    const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(`서버 응답 시간 초과 (${name})`), { code: 'timeout' })), RPC_TIMEOUT_MS); });
+    try {
+      const { data, error } = await Promise.race([requireClient().rpc(name, args), timeout]);
+      if (error) throw error;
+      return data;
+    } finally { clearTimeout(timer); }
   },
   uploadRawImage(input, folder='character_avatars', filename='asset') { return uploadAsset(input, folder, filename); },
   uploadCharacterAvatar(input, name='hero') { return uploadAsset(input, 'character_avatars', name); },

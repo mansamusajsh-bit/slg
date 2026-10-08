@@ -111,10 +111,19 @@ const giveRelic = async (who, relicId, kind = 'rename') => {
   ok(r.balance === 600 && r.results.every((x) => x.dup), '같은 거래 id 를 다시 보내도 한 번만 반영된다');
   r = await wallet('a', [tx('spend', 5000)]);
   ok(r.results[0].ok === false && r.results[0].reason === 'insufficient' && r.balance === 600, '잔액보다 많이 쓰면 거절, 잔액은 그대로');
-  r = await wallet('a', [tx('earn_loot', 100000)]);
-  ok(r.results[0].reason === 'over_cap' && r.balance === 600, '전리품 한 건 상한을 넘는 청구는 거절 (골드를 만들어 낼 수 없다)');
+  await s.rpc('slg_encounter_start', ['loot-1', 'N-loot-1', 'A-1', 'battle', 2], 'a');
   r = await wallet('a', [tx('earn_loot', 100)]);
+  ok(r.results[0].reason === 'ref_required' && r.balance === 600, '전리품도 전투 ref 가 필요하다');
+  r = await wallet('a', [tx('earn_loot', 100, '0:loot-none')]);
+  ok(r.results[0].reason === 'no_encounter' && r.balance === 600, '서버가 시작을 기록하지 않은 전투의 전리품은 거절');
+  r = await wallet('a', [tx('earn_loot', 100000, '0:loot-1')]);
+  ok(r.results[0].reason === 'over_cap' && r.balance === 600, '전리품 한 건 상한을 넘는 청구는 거절 (골드를 만들어 낼 수 없다)');
+  r = await wallet('a', [tx('earn_loot', 100, '0:loot-1')]);
   ok(r.results[0].ok && r.balance === 700, '정상 범위의 전리품은 받는다');
+  // 전투 하나의 전리품 누적 상한: 800 × (적 2 + 여유 2) × 1.25 = 4000
+  r = await wallet('a', [tx('earn_loot', 800, '0:loot-1'), tx('earn_loot', 800, '0:loot-1'), tx('earn_loot', 800, '0:loot-1'), tx('earn_loot', 800, '0:loot-1'), tx('earn_loot', 800, '0:loot-1')]);
+  ok(r.results.filter((x) => x.ok).length === 4 && r.results[4].reason === 'over_cap' && r.balance === 3900, '한 전투에서 받는 전리품은 적 수에 비례한 상한까지만');
+  await setGold('a', 700);
   r = await wallet('a', [tx('mint', 100), tx('earn_cheat', 5)]);
   ok(r.results.every((x) => x.reason === 'unknown_kind') && r.balance === 700, '모르는 종류의 수입은 거절');
   r = await wallet('a', [{ id: 'neg', kind: 'earn_loot', amount: -50 }, { id: 'frac', kind: 'earn_loot', amount: '1e9' }, { kind: 'spend', amount: 1 }]);
@@ -124,23 +133,35 @@ const giveRelic = async (who, relicId, kind = 'rename') => {
   const cb = await claimBattle('a', 'enc-1', { enemies: 5 });
   ok(cb.ok && cb.gold === 500, '전투 수령: 골드 기준액은 서버가 정한다 (적 5 × 100)');
   r = await wallet('a', [tx('earn_reward', 5000, '0:enc-1')]);
-  ok(r.results[0].reason === 'no_encounter' && r.balance === 700, '서버가 정한 기준액(최대 유물 보너스 ×2)을 넘는 청구는 거절');
+  ok(r.results[0].reason === 'no_encounter' && r.balance === 700, '서버가 정한 기준액(× 장착 유물 골드 보너스)을 넘는 청구는 거절');
+  r = await wallet('a', [tx('earn_reward', 700, '0:enc-1')]);
+  ok(r.results[0].reason === 'no_encounter' && r.balance === 700, '골드 유물이 없으면 기준액 × 1.25(물가 오차)까지만 (예전처럼 ×2 를 공짜로 주지 않는다)');
   r = await wallet('a', [tx('earn_reward', 500, '0:enc-1'), tx('earn_reward', 500, '0:enc-1')]);
   ok(r.results[0].ok && r.results[1].reason === 'already_claimed' && r.balance === 1200, '전투 보상은 같은 ref(전투)로 한 번만');
   r = await wallet('a', [tx('earn_reward', 10)]);
   ok(r.results[0].reason === 'ref_required', '전투 보상은 ref 가 필요하다');
-  r = await wallet('a', [tx('earn_event', 150, 'node-3'), tx('earn_event', 150, 'node-3')]);
+  await s.q(`insert into slg_encounters (user_id, "loop", ref, node_id, sector_id, type, enemies, started_ms, status, claimed_ms, result)
+             values ($1, 0, 'ev:node-3', 'node-3', 'event', 'event', 1, $2, 'claimed', $2, '{"id":"supply_cache","gold":150}')`, [await s.user('a'), T0 + 3 * H]);
+  r = await wallet('a', [tx('earn_event', 150, '0:node-9')]);
+  ok(r.results[0].reason === 'no_encounter', '서버가 굴리지 않은 이벤트의 골드는 거절');
+  r = await wallet('a', [tx('earn_event', 400, '0:node-3')]);
+  ok(r.results[0].reason === 'no_encounter', '서버가 굴린 금액(150G)보다 많이 청구하면 거절');
+  r = await wallet('a', [tx('earn_event', 150, '0:node-3'), tx('earn_event', 150, '0:node-3')]);
   ok(r.results[0].ok && r.results[1].reason === 'already_claimed', '이벤트 보상도 같은 노드로 한 번만');
+  r = await wallet('a', [tx('earn_sell', 300), tx('earn_sell', 300, '0:sell:u9'), tx('earn_sell', 300, '0:sell:u9')]);
+  ok(r.results[0].reason === 'ref_required' && r.results[1].ok && r.results[2].reason === 'already_claimed', '매각은 유닛 ref 가 필요하고, 같은 유닛은 한 번만');
   // 시간당 상한: 15000G × 1.25
   await setGold('b', 0);
   let granted = 0, limited = 0;
+  for (let i = 0; i < 3; i++) await s.rpc('slg_encounter_start', ['cap-' + i, 'N-cap-' + i, 'A-1', 'battle', 12], 'b');
   for (let i = 0; i < 40; i++) {
-    const rr = await wallet('b', [tx('earn_loot', 900)]);
+    const rr = await wallet('b', [tx('earn_loot', 900, '0:cap-' + (i % 3))]);
     if (rr.results[0].ok) granted += 900; else if (rr.results[0].reason === 'rate_limited' || rr.results[0].reason === 'over_cap') limited++;
   }
   ok(granted <= 15000 * 1.25 && granted > 5000 && limited > 0, `시간당 수입 상한이 있다: ${granted}G 만 들어옴, ${limited}건 거절`);
   await s.at(T0 + 3 * H + 61 * 60 * 1000);
-  r = await wallet('b', [tx('earn_loot', 700)]);
+  await s.rpc('slg_encounter_start', ['cap-late', 'N-cap-late', 'A-1', 'battle', 3], 'b');
+  r = await wallet('b', [tx('earn_loot', 700, '0:cap-late')]);
   ok(r.results[0].ok, '1시간이 지나면 다시 받을 수 있다');
   await s.at(T0 + 3 * H);
   // 되돌리기 환급: 최근에 쓴 만큼까지
@@ -248,7 +269,7 @@ const buy = (w, r, bp) => s.rpc('slg_share_buy', [r, bp], w);
   await setGold('a', 5000);
   r = await buy('a', 'liona', 1000);
   const nation = (await sync('a')).nations.liona;
-  ok(r.ok && r.bp === 1000 && r.cost === 180 && r.balance === 4820, '무주 지분 10% = 180G (위협도1: 8시간 세수 300 × 0.0001 × 6 × 1000bp)');
+  ok(r.ok && r.bp === 1000 && r.cost === 144 && r.balance === 4856, '무주 지분 10% = 144G (위협도1: 8시간 세수 300 × 리오나 세율 0.8 × 0.0001 × 6 × 1000bp)');
   ok(nation.holders[await uid('a')].bp === 1000 && nation.holders[await uid('a')].loop === 0, '지분이 기록된다');
   const r2 = await buy('a', 'liona', 99999);
   ok(r2.ok && r2.bp <= 4000, '구매권은 최대 50%까지 (이미 10% 샀으니 최대 40%)');
@@ -446,7 +467,9 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   await s.q('update slg_players set loan_ban_until_ms = 0');
   r = await loanTake('a', 'loan_aaa8', unit({ level: 5 }), 100, 24);
   ok(r.ok === false && /빚/.test(r.error), '빚이 있으면 새 대출을 받을 수 없다');
-  const w1 = await wallet('a', [tx('earn_loot', 100, null)]);
+  const aLoop = Number((await q1('select "loop" from slg_players where user_id = $1', [await s.user('a')])).loop);
+  await s.rpc('slg_encounter_start', ['garnish-1', 'N-garnish-1', 'A-1', 'battle', 3], 'a');
+  const w1 = await wallet('a', [tx('earn_loot', 100, `${aLoop}:garnish-1`)]);
   pa = await q1('select gold, debt from slg_players where user_id = $1', [await s.user('a')]);
   ok(Number(pa.gold) === 50 && Number(pa.debt) === claim3 - 50, '수입의 50% 는 빚 상환에 먼저 쓰인다');
   await s.q('update slg_players set debt = 0 where user_id = $1', [await s.user('a')]);
@@ -622,7 +645,9 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   await rejects(() => asUser('a', () => s.q("insert into slg_records (collection_name, record_id, data) values ('charAuctions', 'x', '{}')")), 'charAuctions 에도 쓸 수 없다', /row-level security/);
   ok((await asUser('a', () => s.q("select 1 from slg_records where collection_name = 'nationShares'"))).length === 1, '그래도 읽기는 가능하다');
   const edUpd = await asUser('a', () => s.db.query("update slg_records set data = '{\"x\":1}' where collection_name = 'characters'"));
-  ok(edUpd.affectedRows === 1, '에디터 컬렉션 쓰기는 기존과 같다');
+  ok(edUpd.affectedRows === 0, '일반 계정은 캐릭터 원본을 고칠 수 없다 (스킬 수치 조작 방지)');
+  const edDel = await asUser('a', () => s.db.query("delete from slg_records where collection_name = 'characters'"));
+  ok(edDel.affectedRows === 0, '일반 계정은 캐릭터 원본을 지울 수 없다');
 }
 
 
@@ -695,6 +720,59 @@ const loanTake = (w, id, u, p, t) => s.rpc('slg_loan_take', [id, JSON.stringify(
   let dup = false;
   try { await s.q("update slg_players set name_key = (select name_key from slg_players where user_id = $1) where user_id = $2", [await s.user('n3'), await s.user('n2')]); } catch (e) { dup = /unique|duplicate/i.test(String(e.message)); }
   ok(dup, 'DB 유니크 인덱스가 중복 이름을 마지막으로 막는다');
+}
+
+// ------------------------------------------------------------ 이상 징후 (막지 않고 slg_audit 에 anom_* 로 기록)
+{
+  const anoms = async (who, kind) => (await s.q('select detail from slg_audit where user_id = $1 and kind = $2 order by id', [await s.user(who), kind])).map((r) => r.detail);
+  await boot('x1', 0);
+  // 1) 거절된 지갑 청구
+  await wallet('x1', [tx('earn_loot', 100, '0:nope'), tx('earn_loot', 100, '0:nope')]);
+  const w = await anoms('x1', 'anom_wallet');
+  ok(w.length === 1 && w[0].reason === 'no_encounter' && w[0].kind === 'earn_loot', '거절된 수입 청구가 기록된다 (같은 내용은 한 번만)');
+  await wallet('x1', [tx('spend', 999999)]);
+  eq((await anoms('x1', 'anom_wallet')).length, 1, '잔액 부족은 이상 징후가 아니다');
+  // 2) 적 수에 비해 너무 빠른 클리어 (적 6명 × 3초 = 18초보다 빠르다)
+  nowMs += 1000; await s.at(nowMs);
+  await s.rpc('slg_encounter_start', ['fast-1', 'N-fast-1', 'A-1', 'battle', 6], 'x1');
+  nowMs += 12000; await s.at(nowMs);
+  ok((await s.rpc('slg_encounter_claim', ['fast-1'], 'x1')).ok, '빠른 클리어도 보상은 받는다 (막지 않는다)');
+  const f = await anoms('x1', 'anom_fast_clear');
+  ok(f.length === 1 && f[0].enemies === 6 && f[0].ms === 12000, '적 수에 비해 빠른 클리어가 기록된다');
+  await s.rpc('slg_encounter_start', ['slow-1', 'N-slow-1', 'A-1', 'battle', 2], 'x1');
+  nowMs += 30000; await s.at(nowMs);
+  await s.rpc('slg_encounter_claim', ['slow-1'], 'x1');
+  eq((await anoms('x1', 'anom_fast_clear')).length, 1, '정상 속도의 클리어는 기록되지 않는다');
+  // 3) 전투 시작 남발
+  await boot('x2', 0);
+  let last;
+  for (let i = 0; i < 62; i++) last = await s.rpc('slg_encounter_start', ['spam-' + i, 'N-spam-' + i, 'A-1', 'battle', 1], 'x2');
+  ok(last.ok === false && last.error === 'rate_limited' && (await anoms('x2', 'anom_enc_starts')).length === 1, '시간당 전투 시작 상한을 넘으면 거절되고 기록된다');
+  // 4) 세이브 검사: 원본에 없는 스킬 · 바뀐 스킬 수치 · 레벨 대비 과다 해금 · 레벨 상한
+  const tree = [{ id: 'n1', startsLearned: true, power: 10 }, { id: 'n2', power: 20 }, { id: 'n3', power: 30 }, { id: 'n4', power: 40 }];
+  await putRec('characters', 'chk1', { id: 'chk1', name: '검사', initialSkillPoints: 1, skillTree: tree });
+  await boot('x3', 0);
+  const X3 = String(await s.user('x3'));
+  const save = (party) => s.q(`insert into slg_records (collection_name, record_id, data) values ('gameState', $1, $2::jsonb)
+    on conflict (collection_name, record_id) do update set data = excluded.data`, [X3, JSON.stringify({ run: { party, reserve: [] } })]);
+  await save([{ id: 'u1', name: '정상', sourceCharacterId: 'chk1', level: 2, skillPoints: 0, learnedSkills: ['n1', 'n2', 'n3'], skillTree: tree.map((n) => ({ ...n, imageUrl: 'x.png' })) }]);
+  ok((await anoms('x3', 'anom_save_skill')).length === 0 && (await anoms('x3', 'anom_save_unlocks')).length === 0, '원본과 같은 세이브(그림만 다름)는 기록되지 않는다');
+  await save([{ id: 'u1', name: '조작', sourceCharacterId: 'chk1', level: 1, skillPoints: 5, learnedSkills: ['n1', 'n2', 'n3', 'n4', 'hack'],
+    skillTree: [{ id: 'n1', startsLearned: true, power: 10 }, { id: 'n2', power: 9999 }, { id: 'n3', power: 30 }, { id: 'n4', power: 40 }, { id: 'hack', power: 1 }] }]);
+  const sk = await anoms('x3', 'anom_save_skill');
+  ok(sk.length === 1 && JSON.stringify(sk[0].unknownLearned) === '["hack"]' && JSON.stringify(sk[0].changedNodes) === '["n2","hack"]', '원본에 없는 스킬 · 원본과 다른 스킬 수치가 기록된다');
+  const un = await anoms('x3', 'anom_save_unlocks');
+  ok(un.length === 1 && un[0].spent === 3 && un[0].points === 5 && un[0].allowed === 3, '레벨에 비해 많은 해금(해금 3 + 해금권 5 > 초기 1 + 레벨 0 + 여유 2)이 기록된다');
+  await save([{ id: 'u2', name: '만렙', sourceCharacterId: 'nobody', level: 999 }]);
+  ok((await anoms('x3', 'anom_save_level')).length === 1, '레벨 상한을 넘는 유닛이 기록된다');
+  await s.q(`update slg_records set data = '"broken"'::jsonb where collection_name = 'gameState' and record_id = $1`, [X3]);
+  ok(true, '형식이 이상한 세이브도 저장은 막지 않는다');
+  // 5) 관리자 목록
+  await boot('x4', 0);
+  await s.q('insert into slg_admins (user_id) values ($1) on conflict do nothing', [await s.user('x4')]);
+  const list = await s.rpc('slg_audit_list', [500], 'x4');
+  const sus = list.suspects.find((x) => x.userId === X3);
+  ok(sus && sus.anomalies === 3, '관리자 감사 목록의 의심 계정에 이상 징후 건수가 나온다');
 }
 
 console.log(fail ? `\n${fail}건 실패` : '\n전부 통과');

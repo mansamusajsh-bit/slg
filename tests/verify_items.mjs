@@ -88,8 +88,10 @@ await put('rewardPools', 'loop-b', { id: 'loop-b', rolls: 1, entries: [{ type: '
   ok(upd.rows.length === 0, '일반 계정의 유물 정의 수정은 아무 행도 바꾸지 못한다 (RLS)');
   const del = await s.db.query("delete from slg_records where collection_name = 'items' or collection_name = 'rewardPools' returning 1");
   ok(del.rows.length === 0, '일반 계정은 아이템 · 보상 풀 정의를 지울 수 없다 (RLS)');
-  await s.db.query("insert into slg_records (collection_name, record_id, data) values ('characters', 'free', '{}') on conflict do nothing");
-  ok(true, '다른 컬렉션(캐릭터 등)은 예전처럼 쓸 수 있다');
+  await rejects(() => s.q("insert into slg_records (collection_name, record_id, data) values ('characters', 'evil', '{}')"), '일반 계정은 캐릭터 원본을 만들 수 없다', /row-level security|policy/);
+  await rejects(() => s.q("insert into slg_records (collection_name, record_id, data) values ('skills', 'evil', '{}')"), '일반 계정은 스킬 원본을 만들 수 없다', /row-level security|policy/);
+  await s.db.query("insert into slg_records (collection_name, record_id, data) values ('maps', 'free', '{}') on conflict do nothing");
+  ok(true, '다른 컬렉션(맵 등)은 예전처럼 쓸 수 있다');
   await s.db.query('reset role');
   eq((await q1("select data ->> 'kind' k from slg_records where collection_name = 'relics' and record_id = 'g1'")).k, 'gift', '정의는 그대로다');
   // 운영자는 쓸 수 있다
