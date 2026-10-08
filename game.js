@@ -1611,9 +1611,16 @@
       }
       // 서버 권위: 리와인더 보유는 서버가 원본이다. 서버가 하나를 차감해 줘야 되돌린다.
       if (itemsServerMode()) {
-        if (rewindServerBusy) return;
+        // 서버 응답이 멈추면 버튼이 영원히 먹통이 되므로, 10초가 지나면 잠금을 풀고 다시 누를 수 있게 한다.
+        if (rewindServerBusy && Date.now() - rewindServerBusyAt < 10000) { addLog('⏳ [리와인더] 서버 응답을 기다리는 중입니다...', 'warning'); return; }
         rewindServerBusy = true;
+        rewindServerBusyAt = Date.now();
+        const myTry = rewindServerBusyAt;
         window.ServerEconomy.call('slg_rewinder_use', {}).then((res) => {
+          if (rewindServerBusyAt !== myTry) {   // 잠금이 풀린 뒤 늦게 온 응답: 서버는 이미 하나 차감했으니 보유 수만 맞춘다
+            if (res && res.ok === true && Number.isFinite(Number(res.rewinders))) { state.rewinders = Number(res.rewinders); renderAll(); }
+            return;
+          }
           rewindServerBusy = false;
           if (!res || res.ok !== true) {
             if (res && Number.isFinite(Number(res.rewinders))) { state.rewinders = Number(res.rewinders); renderAll(); }   // 서버가 알려 준 실제 보유로 맞춘다
@@ -1628,6 +1635,7 @@
       performRewind(state.rewinders - 1);
     }
     let rewindServerBusy = false;
+    let rewindServerBusyAt = 0;
 
     function performRewind(currentRewinders) {
       // 이번 턴에 행동했다면 이번 턴 시작으로, 아직 아무것도 안 했다면 직전 턴 시작으로 돌아간다.
