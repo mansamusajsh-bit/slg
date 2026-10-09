@@ -209,6 +209,14 @@
     // MapSchema.getSector()가 Sector 데이터를 읽을 수 있도록 명시적으로 전역에 노출한다.
     window.WORLD_SECTORS = WORLD_SECTORS;
 
+    // 화면에 보일 섹터 정보. 모든 구역이 같은 섹터 4종을 돌려 쓰므로 이름만 구역(국가)별로 바꾼다
+    // (campaignRegions.js REGION_SECTOR_NAMES). 구역이 없거나 표에 없으면 WORLD_SECTORS 기본 이름.
+    function getSectorInfo(sectorId, regionId, fallback) {
+      const base = WORLD_SECTORS[sectorId] || fallback || { id: sectorId, name: sectorId };
+      const names = regionId && typeof REGION_SECTOR_NAMES !== 'undefined' ? REGION_SECTOR_NAMES[regionId] : null;
+      return names && names[sectorId] ? { ...base, name: names[sectorId] } : base;
+    }
+
     // 게스트 ID 생성기
     function generateGuestId() {
       const randNum = Math.floor(1000 + Math.random() * 9000);
@@ -4296,7 +4304,7 @@
     function selectNode(nodeId) {
       const node = getCurrentNode(nodeId);
       if (!node) return false;
-      const sec = WORLD_SECTORS[node.sectorId] || { id: node.sectorId, name: node.sectorId, difficulty: '' };
+      const sec = getSectorInfo(node.sectorId, node.regionId, { id: node.sectorId, name: node.sectorId, difficulty: '' });
       state.selectedNodeId = node.id;
       state.selectedSectorId = node.sectorId;
       state.currentSector = node.sectorId;
@@ -4978,7 +4986,7 @@
       state.currentBattle.nodeId = node.id;
       state.currentBattle.startTurn = Number(state.turn) || 1;
       // 전술 화면이 섹터 표시명을 위해 WORLD_SECTORS를 직접 보지 않도록 진입 시점에 복사해 둔다.
-      state.currentBattle.sectorName = sector.name || targetSectorId;
+      state.currentBattle.sectorName = getSectorInfo(targetSectorId, node.regionId || getCurrentRegionId()).name || targetSectorId;
       state.currentBattle.seed = seed;
       // 작전지도 구역. 구역 진입 흐름이 붙기 전까지는 시작 구역으로 고정한다.
       state.currentBattle.regionId = (state.run.campaign && state.run.campaign.currentRegionId) || CAMPAIGN_MAP.startRegionId;
@@ -5503,7 +5511,7 @@
         if (!p) return;
         const status = RunEngine.getNodeStatus(run, node.id);
         const meta = RunEngine.NODE_META[node.type] || { icon: '❔', label: node.type };
-        const sec = WORLD_SECTORS[node.sectorId] || { name: node.sectorId };
+        const sec = getSectorInfo(node.sectorId, node.regionId, { name: node.sectorId });
         const remembered = isRememberedNode(run, node.id);
         const deathHere = !!getDeathMemory(run, node.id);
         const label = `${node.id} ${sec.name} · ${meta.label} (${statusText[status]})${remembered ? ' · 💭 기억나는 장소' : ''}${deathHere ? ' · ☠️ 지난 생에 쓰러진 곳' : ''}`;
@@ -5614,7 +5622,8 @@
 
       // Selected Node -> Sector Details (11단계: 섹터가 아니라 "선택한 노드"가 기준)
       const selNode = ensureNodeSelection();
-      const curSec = (selNode && WORLD_SECTORS[selNode.sectorId]) || WORLD_SECTORS[strat.selectedSectorId] || WORLD_SECTORS['A-1'];
+      const curSecId = (selNode && WORLD_SECTORS[selNode.sectorId]) ? selNode.sectorId : (WORLD_SECTORS[strat.selectedSectorId] ? strat.selectedSectorId : 'A-1');
+      const curSec = getSectorInfo(curSecId, (selNode && selNode.regionId) || getCurrentRegionId());
       if (selNode) {
         strat.selectedSectorId = selNode.sectorId;
         state.selectedSectorId = selNode.sectorId;
@@ -5937,7 +5946,7 @@
       if (state.run.status !== 'active') { warnNode('🏆 이번 런은 이미 종료되었습니다.'); return; }
       if (!RunEngine.isNodeAvailable(state.run, selNode.id)) { warnNode('🔒 아직 열리지 않았거나 이미 완료한 노드입니다.'); return; }
       if (!RunEngine.isBattleType(selNode.type)) { openRunNodeModal(selNode); return; }
-      const curSec = WORLD_SECTORS[selNode.sectorId] || { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '' };
+      const curSec = getSectorInfo(selNode.sectorId, selNode.regionId, { id: selNode.sectorId, name: selNode.sectorId, difficulty: 'NORMAL', stars: '', terrainDesc: '', enemyForce: '' });
 
       // 총 부대 수 및 전투력 계산 (1편성부대 = 1캐릭터)
       const activeUnits = getSelectedDeployUnits();
@@ -6024,7 +6033,7 @@
 
       closeSectorDeployModal();
 
-      const curSec = WORLD_SECTORS[activeSectorId] || { id: activeSectorId, name: activeSectorId };
+      const curSec = getSectorInfo(activeSectorId, launchNode.regionId);
       addLog(`🚀 [작전 개시] ${launchNode.id} · [${curSec.id} ${curSec.name}] 전장으로 아군 선봉 ${activeUnits.length}개 부대가 출격했습니다!`, 'gold');
 
       // 전술 전장 상태 초기화 및 전투 활성화 플래그 설정
