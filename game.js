@@ -12629,6 +12629,165 @@
     window.showDefeatReport = showDefeatReport;
 
     // ========================================================================
+    // 장례식: 전투에서 아군이 전사하면 전투가 끝난 뒤(승패 무관) 부관이 전사자를 기린다.
+    // 부관이 이번 전투에서 전사했거나 부관이 없으면 지휘관의 독백으로 대신한다. (포로는 전사가 아니라 제외)
+    // ========================================================================
+    const FUNERAL_SCENE_IMAGE = 'assets/scenes/funeral.webp';
+    const FUNERAL_MOURN_MAX = 5; // 한 명씩 기리는 줄은 이 인원까지만 (나머지는 시작 대사의 이름 목록으로)
+
+    // "발터을(를)" → "발터를": 앞 글자 받침에 맞춰 이(가) · 을(를) · 은(는) · 과(와) 를 하나로 고른다
+    const JOSA_PAIRS = { '이(가)': ['이', '가'], '을(를)': ['을', '를'], '은(는)': ['은', '는'], '과(와)': ['과', '와'] };
+    function resolveJosa(text) {
+      return String(text).replace(/([가-힣])(이\(가\)|을\(를\)|은\(는\)|과\(와\))/g, (m, ch, pair) => withJosa(ch, ...JOSA_PAIRS[pair]));
+    }
+
+    function buildFuneralLines(fallen, adjutant, adjutantFallen) {
+      const names = fallen.map(u => u.name);
+      const joinNames = list => list.join(', ');
+      const vars = { targets: joinNames(names), count: names.length };
+      if (adjutant) {
+        const say = (key, v, fallback) => ({ speaker: adjutant, text: pickUnitLine(adjutant, key, { ...vars, ...v }) || fallback });
+        return [
+          say('funeral_open', {}, `지휘관님, 이번 전투에서 ${vars.targets}이(가) 전사했습니다.`),
+          ...fallen.slice(0, FUNERAL_MOURN_MAX).map(u => say('funeral_mourn', { target: u.name }, `${u.name}, 편히 쉬십시오.`)),
+          say('funeral_close', {}, '그들의 몫까지 앞으로 나아가야 합니다.')
+        ];
+      }
+      const mono = text => ({ speaker: null, text });
+      if (adjutantFallen) {
+        const others = names.filter(n => n !== adjutantFallen.name);
+        return [
+          mono(`……${adjutantFallen.name}.`),
+          mono('언제나 내 곁에서 전황을 읽어 주던 목소리가, 이제는 들리지 않는다.'),
+          mono(`"지휘관님"하고 부르던 그 목소리를… 나는 한 번도 제대로 대답해 준 적이 없었지.`),
+          ...(others.length ? [mono(`${joinNames(others)}도… 모두 내 명령을 따르다 쓰러졌다.`)] : []),
+          mono('비가 그치지 않는다. …아니, 그칠 때까지 기다릴 시간은 없다.'),
+          mono('너희의 몫까지 — 반드시 끝을 보겠다.')
+        ];
+      }
+      return [
+        mono(`${vars.targets}… 이번 전투에서 돌아오지 못했다.`),
+        ...names.slice(0, FUNERAL_MOURN_MAX).map(n => mono(`${n}. …미안하다.`)),
+        mono('내 판단이 조금만 더 빨랐더라면.'),
+        mono('…가자. 멈춰 서 있을 수는 없다.')
+      ];
+    }
+
+    /**
+     * @param {Array} fallen 이번 전투 전사자 유닛
+     * @param {{adjutantFallen?:object|null}} opts
+     * @param {Function} [onClose]
+     */
+    function showFuneralScene(fallen, opts = {}, onClose) {
+      document.getElementById('modal-funeral')?.remove();
+      const adjutant = getAdjutantUnit();
+      const adjutantFallen = opts.adjutantFallen || null;
+      const lines = buildFuneralLines(fallen, adjutant, adjutantFallen).map(l => ({ ...l, text: resolveJosa(l.text) }));
+      const commanderName = (state.commander && state.commander.name) || '지휘관';
+
+      const overlay = document.createElement('div');
+      overlay.id = 'modal-funeral';
+      overlay.className = 'funeral-overlay';
+      overlay.innerHTML = `
+        <div class="funeral-scene" style="background-image:url('${FUNERAL_SCENE_IMAGE}')"></div>
+        <div class="funeral-rain"></div>
+        <div class="funeral-top">
+          <div class="funeral-title">🕯️ 전사자 추모</div>
+          <div class="funeral-fallen"></div>
+        </div>
+        <button type="button" class="funeral-skip">건너뛰기 ⏭</button>
+        <div class="funeral-dialog">
+          <div class="funeral-speaker">
+            <div class="funeral-speaker-face"></div>
+            <div class="funeral-speaker-name"></div>
+          </div>
+          <div class="funeral-text"></div>
+          <div class="funeral-next">▼</div>
+        </div>`;
+
+      const fallenEl = overlay.querySelector('.funeral-fallen');
+      fallen.forEach(u => {
+        const chip = document.createElement('div');
+        chip.className = 'funeral-fallen-chip';
+        chip.innerHTML = renderPortrait(u, { className: 'funeral-fallen-face', emojiSize: '20px' });
+        const name = document.createElement('span');
+        name.textContent = u.name;
+        chip.appendChild(name);
+        fallenEl.appendChild(chip);
+      });
+
+      const dialog = overlay.querySelector('.funeral-dialog');
+      const faceEl = overlay.querySelector('.funeral-speaker-face');
+      const nameEl = overlay.querySelector('.funeral-speaker-name');
+      const textEl = overlay.querySelector('.funeral-text');
+      let idx = -1;
+      let typing = null; // { timer, full }
+      let closed = false;
+
+      const finishTyping = () => {
+        if (!typing) return false;
+        clearInterval(typing.timer);
+        textEl.textContent = typing.full;
+        typing = null;
+        dialog.classList.add('is-done');
+        return true;
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        finishTyping();
+        document.removeEventListener('keydown', onKey, true);
+        overlay.classList.add('is-leaving');
+        setTimeout(() => {
+          overlay.remove();
+          if (typeof onClose === 'function') onClose();
+        }, 450);
+      };
+      const showLine = (i) => {
+        idx = i;
+        const line = lines[i];
+        const mono = !line.speaker;
+        dialog.classList.toggle('is-monologue', mono);
+        dialog.classList.remove('is-done');
+        faceEl.innerHTML = mono ? '' : renderPortrait(line.speaker, { className: 'funeral-face', emojiSize: '28px' });
+        faceEl.style.display = mono ? 'none' : '';
+        nameEl.textContent = mono ? `${commanderName} (독백)` : `${line.speaker.name} · 부관`;
+        const full = mono ? `(${line.text})` : line.text;
+        textEl.textContent = '';
+        let n = 0;
+        typing = {
+          full,
+          timer: setInterval(() => {
+            n += 1;
+            textEl.textContent = full.slice(0, n);
+            if (n >= full.length) finishTyping();
+          }, 38)
+        };
+        addLog(mono ? `🕯️ (${commanderName}의 독백) ${line.text}` : `🕯️ "${line.speaker.name}: ${line.text}"`, 'system');
+      };
+      const advance = () => {
+        if (closed) return;
+        if (finishTyping()) return;
+        if (idx + 1 < lines.length) showLine(idx + 1);
+        else close();
+      };
+      function onKey(e) {
+        if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); advance(); }
+        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(); }
+      }
+
+      overlay.querySelector('.funeral-skip').onclick = (e) => { e.stopPropagation(); close(); };
+      overlay.onclick = advance;
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(overlay);
+      addLog(`🕯️ [장례] 전사자 ${fallen.length}명: ${fallen.map(u => u.name).join(', ')}`, 'warning');
+      // 장면이 서서히 밝아진 뒤 첫 대사를 시작한다
+      setTimeout(() => { if (!closed && idx < 0) showLine(0); }, 700);
+      return overlay;
+    }
+    window.showFuneralScene = showFuneralScene;
+
+    // ========================================================================
     // 회귀 보상 (설정과 맞물리는 보상 + 회귀 카드)
     // ========================================================================
     //   자동 (회귀 1회 이상이면 항상):
@@ -13748,6 +13907,11 @@
       RunEngine.recordEncounter(run, battle, victory, { reason, casualties: casualties.map(c => c.id), rewards });
       // 패배 분석 (전투 데이터를 지우기 전에 이번 전투 로그와 남은 적을 읽는다). 자진 후퇴는 제외.
       const defeatReport = (!victory && reason !== 'retreat') ? buildDefeatReport(battle, reason, casualties) : null;
+      // 장례식 대상: 포로가 아닌 전사자. 부관이 이번 전투에서 전사했는지도 여기서 본다 (전사한 부관은 getAdjutantUnit()이 null).
+      const fallenUnits = casualties.filter(c => !c.captive)
+        .map(c => (state.playerUnits || []).find(u => u.id === c.id)).filter(Boolean);
+      const adj = run && run.adjutant;
+      const adjutantFallen = adj ? fallenUnits.find(u => (adj.unitId ? String(u.id) === String(adj.unitId) : getCharacterId(u) === String(adj.characterId))) || null : null;
 
       // 5) 전투 인스턴스 정리: 결과는 run.encounters에 요약으로 남고, 맵/적 데이터는 버린다.
       battle.status = victory ? 'won' : 'lost';
@@ -13804,17 +13968,19 @@
       // 7-1) 유물 보상 (보상 데이터를 불러온 뒤 지급하므로 비동기 — 보스는 3택1 창이 뜬다)
       if (victory && node) awardBattleRelics(battle, node);
       // 8) 2차: 생존 유닛 0이면 골드에 따라 사망회귀 / 긴급 모집 (회귀 판정은 여기와 긴급 모집 화면에서만 한다)
-      if (defeatReport) {
-        finished.survival = 'pending';
+      //    순서: (전사자가 있으면) 장례식 → (패배면) 패배 분석 → 회귀/긴급 모집 판정
+      const afterFuneral = () => {
+        if (!defeatReport) return;
         showDefeatReport(defeatReport, () => {
           if (!run.survivalPending) return;
           run.survivalPending = false;
           resolveRunSurvival();
           saveGameState();
         });
-      } else {
-        finished.survival = resolveRunSurvival();
-      }
+      };
+      if (fallenUnits.length) showFuneralScene(fallenUnits, { adjutantFallen }, afterFuneral);
+      else afterFuneral();
+      finished.survival = defeatReport ? 'pending' : resolveRunSurvival();
       return finished;
     }
     window.finishEncounter = finishEncounter;

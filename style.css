@@ -5832,6 +5832,35 @@
 .defeat-report-btn{flex:1;padding:11px;border:0;border-radius:10px;font-weight:800;font-size:13px;cursor:pointer;background:linear-gradient(135deg,#dc2626,#f87171);color:#fff}
 .defeat-report-btn.is-secondary{background:#334155;color:#cbd5e1;border:1px solid #475569}
 @media (max-width:420px){.defeat-report-summary{grid-template-columns:repeat(2,1fr)}.defeat-report-buttons{flex-direction:column}}
+/* 장례식 장면 (game.js showFuneralScene) — 유물 선택 · 패배 분석 창보다 위 */
+.funeral-overlay{position:fixed;inset:0;z-index:100002;background:#05070c;overflow:hidden;cursor:pointer;user-select:none;animation:funeral-in .7s ease both}
+.funeral-overlay.is-leaving{animation:funeral-out .45s ease both}
+@keyframes funeral-in{from{opacity:0}to{opacity:1}}
+@keyframes funeral-out{from{opacity:1}to{opacity:0}}
+.funeral-scene{position:absolute;inset:0;background-size:cover;background-position:center 30%;filter:saturate(.75) brightness(.9);animation:funeral-zoom 18s ease-out both}
+@keyframes funeral-zoom{from{transform:scale(1.08)}to{transform:scale(1)}}
+.funeral-rain{position:absolute;inset:-20% 0 0;pointer-events:none;opacity:.35;background-image:repeating-linear-gradient(105deg,transparent 0 22px,rgba(255,255,255,.35) 22px 23px,transparent 23px 48px);animation:funeral-rain .6s linear infinite}
+@keyframes funeral-rain{from{transform:translate3d(0,-60px,0)}to{transform:translate3d(-16px,0,0)}}
+.funeral-overlay::after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(to bottom,rgba(5,7,12,.55) 0%,transparent 22%,transparent 50%,rgba(5,7,12,.85) 82%,rgba(5,7,12,.95) 100%)}
+.funeral-top{position:absolute;top:16px;left:16px;right:120px;z-index:2;color:#e2e8f0}
+.funeral-title{font-size:15px;font-weight:800;letter-spacing:1px;text-shadow:0 2px 6px rgba(0,0,0,.7);margin-bottom:8px}
+.funeral-fallen{display:flex;flex-wrap:wrap;gap:6px}
+.funeral-fallen-chip{display:flex;align-items:center;gap:6px;padding:3px 10px 3px 3px;border-radius:999px;background:rgba(15,23,42,.7);border:1px solid rgba(226,232,240,.25);font-size:12px;font-weight:700}
+.funeral-fallen-chip .funeral-fallen-face,.funeral-fallen-chip .portrait-emoji{width:26px;height:26px;border-radius:50%;flex:0 0 26px;filter:grayscale(1);display:flex;align-items:center;justify-content:center;background-color:#1e293b}
+.funeral-skip{position:absolute;top:14px;right:16px;z-index:3;border:1px solid rgba(226,232,240,.35);background:rgba(15,23,42,.6);color:#e2e8f0;border-radius:999px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer}
+.funeral-dialog{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);z-index:2;width:min(760px,calc(100% - 32px));min-height:118px;box-sizing:border-box;padding:16px 20px 18px;border-radius:14px;background:rgba(10,13,22,.82);border:1px solid rgba(226,232,240,.22);box-shadow:0 12px 32px rgba(0,0,0,.5);color:#f1f5f9;backdrop-filter:blur(4px)}
+.funeral-speaker{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.funeral-speaker-face .funeral-face,.funeral-speaker-face .portrait-emoji{width:44px;height:44px;border-radius:50%;border:2px solid rgba(226,232,240,.5);display:flex;align-items:center;justify-content:center;background-color:#1e293b}
+.funeral-speaker-name{font-size:14px;font-weight:800;color:#cbd5e1}
+.funeral-text{font-size:16px;line-height:1.65;min-height:52px;white-space:pre-wrap;word-break:keep-all}
+.funeral-dialog.is-monologue{background:rgba(5,7,12,.55);border-color:rgba(226,232,240,.12)}
+.funeral-dialog.is-monologue .funeral-speaker-name{color:#94a3b8;font-style:italic;font-weight:700}
+.funeral-dialog.is-monologue .funeral-text{font-style:italic;color:#cbd5e1}
+.funeral-next{position:absolute;right:16px;bottom:10px;font-size:12px;color:#94a3b8;opacity:0}
+.funeral-dialog.is-done .funeral-next{opacity:1;animation:funeral-blink 1s ease-in-out infinite}
+@keyframes funeral-blink{50%{opacity:.25}}
+@media (max-width:480px){.funeral-text{font-size:14px}.funeral-dialog{bottom:16px;padding:12px 14px 16px}.funeral-top{right:96px}}
+@media (prefers-reduced-motion: reduce){.funeral-scene,.funeral-rain,.funeral-overlay{animation:none}.funeral-rain{display:none}}
 .strat-node-pin.is-remembered .strat-node-circle{box-shadow:0 0 0 3px rgba(139,92,246,.35),0 3px 10px rgba(139,92,246,.35)}
 .strat-node-memory{position:absolute;top:-9px;right:-10px;font-size:11px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,.25))}
 /* 회귀 연출 화면 (audio/returnByDeath.js) */
