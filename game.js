@@ -3431,6 +3431,7 @@
       addLog(`🎁 [선물 증정] ${unit.name}에게 보급품을 전달하여 호감도가 +${affAdd} 상승했습니다! (현재: ${unit.affection})`, 'success');
       closeAllModals();
       renderAll();
+      reactToGift(unit, type === 'FEAST' ? '특제 만찬' : '과일 바구니');
       saveGameState();
     }
 
@@ -7465,13 +7466,15 @@
       if (isSkillTreeSaturated(unit)) {
         state.run.resonance = getResonance() + 1;
         addLog(`🔔 [기억 계승] ${unit.name}은(는) 더 받아들일 기억이 없다 — 시간선의 경험이 잔향으로 남았다. 잔향 +1 (보유 ${state.run.resonance}개, 남은 잔영 ${materials.length - 1}장)`, 'gold');
+        reactToInherit(unit, true);
         saveGameState(true);
         return { ok: true, resonance: true, level: unit.level };
       }
 
       unit.level = (Number(unit.level) || 1) + 1;
       unit.skillPoints = (Number(unit.skillPoints) || 0) + 1;
-      adjustAffectionWithLog(unit, AFFECTION_RULES.inherit, '기억 계승의 혼란');
+      // 이어받은 기억 속에는 지휘관의 명령으로 죽는 자기 자신도 들어 있다 → 호감도가 떨어진다
+      adjustAffectionWithLog(unit, AFFECTION_RULES.inherit, '기억 계승 — 지휘관의 명령으로 죽는 자신을 보았다');
       // 레벨업이므로 아카데미 진급과 같은 만큼 공격·방어가 오른다 (최대 HP는 100 정규화 체계라 올리지 않는다).
       unit.atk = (Number(unit.atk ?? (unit.stats && unit.stats.atk)) || 40) + LEVEL_UP_GROWTH.atk;
       unit.def = (Number(unit.def ?? (unit.stats && unit.stats.def)) || 30) + LEVEL_UP_GROWTH.def;
@@ -7481,6 +7484,7 @@
       }
 
       addLog(`🧬 [기억 계승] ${unit.name} Lv.${unit.level} — 다른 시간선의 기억을 이어받았다. 공격 +${LEVEL_UP_GROWTH.atk} · 방어 +${LEVEL_UP_GROWTH.def} · 스킬 해금권 +1 (남은 잔영 ${materials.length - 1}장)`, 'gold');
+      reactToInherit(unit, false);
       saveGameState(true);
       return { ok: true, level: unit.level };
     }
@@ -12067,8 +12071,8 @@
       return next;
     }
 
-    // 호감도 변동 규칙 (소폭): 전투 승리 +, 승률 50% 이하 전투 −, 퇴각 −, 기억 계승 −, 담보 −
-    const AFFECTION_RULES = { lowOddsWin: -2, retreat: -2, inherit: -2, pledge: -5, lowOddsThreshold: 0.5, trustThreshold: 50 };
+    // 호감도 변동 규칙 (소폭): 전투 승리 +, 승률 50% 이하 전투 −, 퇴각 −, 기억 계승 −(다른 시간선에서 지휘관 명령으로 죽는 자신을 본다), 담보 −
+    const AFFECTION_RULES = { lowOddsWin: -2, retreat: -2, inherit: -5, pledge: -5, lowOddsThreshold: 0.5, trustThreshold: 50 };
 
     function adjustAffectionWithLog(unit, delta, label) {
       if (!unit || !delta) return;
@@ -12094,6 +12098,23 @@
       adjustAffectionWithLog(unit, AFFECTION_RULES.pledge, '담보로 잡힘');
     }
     window.reactToPledge = reactToPledge;
+
+    // 선물을 받은 캐릭터의 반응: 선물로 오른 뒤의 호감도 구간에 따라 서먹 / 기쁨 / 감동 대사.
+    function reactToGift(unit, giftName, opts = {}) {
+      if (!unit) return;
+      const affection = getUnitAffection(unit);
+      const [situation, mood] = affection >= 80 ? ['gift_love', 'brave']
+        : affection >= AFFECTION_RULES.trustThreshold ? ['gift_warm', 'victory'] : ['gift_cold', 'reluctant'];
+      speakUnitLine(unit, situation, mood, { gift: giftName || '선물' }, opts);
+    }
+
+    // 기억 계승 반응: 레벨이 오르면 계승 직후 호감도로 혼란 / 수용, 잔향으로 넘치면 잔향 대사.
+    function reactToInherit(unit, overflow) {
+      if (!unit) return;
+      if (overflow) { speakUnitLine(unit, 'inherit_overflow', 'victory'); return; }
+      const trusting = getUnitAffection(unit) >= AFFECTION_RULES.trustThreshold;
+      speakUnitLine(unit, trusting ? 'inherit_accept' : 'inherit_confused', trusting ? 'brave' : 'reluctant', { level: unit.level });
+    }
 
     // 전투 중에는 부관을 바꿀 수 없다 (지휘력 보정이 전투 도중 옮겨 가지 않도록).
     function isAdjutantChangeLocked() {
@@ -13397,6 +13418,10 @@
       renderCommanderRelics();
       renderAll();
       if (currentOverlayTargetUnit === unit) updateFullShotOverlay(unit);
+      // 캐릭터 창에서 선물했으면 일러스트가 이미 보이므로 말풍선만 띄운다
+      const overlayShowsUnit = !!document.getElementById('unit-fullshot-overlay')?.classList.contains('active')
+        && currentOverlayTargetUnit?.id === unit.id;
+      reactToGift(unit, relic.name, { hideIllust: overlayShowsUnit });
       return true;
     }
     window.giftRelicToUnit = giftRelicToUnit;

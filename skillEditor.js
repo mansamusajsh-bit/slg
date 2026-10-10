@@ -405,7 +405,7 @@
     container.innerHTML = `
       <div class="skl-head">
         <div>Lv.${Number(unit.level) || 1} · 스킬 해금권 <b class="skl-sp">${unit.skillPoints}장</b>${hasResonance ? ` · 🔔 잔향 <b class="skl-sp">${resonance}개</b>` : ''}</div>
-        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · ${saturated ? '남은 스킬을 다 열 해금권이 있어 기억 계승은 잔향으로 남습니다' : '기억 계승 1회 = 레벨 +1 (공격 +8 · 방어 +6) · 스킬 1개 해금'}</div>
+        <div class="skl-head-sub">습득 ${learnedCount} / ${list.length} · ${saturated ? '남은 스킬을 다 열 해금권이 있어 기억 계승은 잔향으로 남습니다' : '기억 계승 1회 = 레벨 +1 (공격 +8 · 방어 +6) · 스킬 1개 해금 · 호감도 하락 (명령으로 죽는 자신을 본다)'}</div>
         ${isPlayer && typeof global.absorbDuplicateCharacter === 'function' ? `
           <button type="button" class="skl-learn" data-absorb ${absorbCount ? '' : 'disabled'}>🧬 기억 계승${saturated ? ' → 잔향' : ''} (잔영 ${absorbCount}장)</button>` : ''}
         ${hasResonance && surplus > 0 ? `
