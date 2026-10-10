@@ -62,8 +62,13 @@
 (function (global) {
   'use strict';
 
-  const DEFAULT_TEMPLATE_WIDTH = 8;
-  const DEFAULT_TEMPLATE_HEIGHT = 14;
+  // 새 템플릿 기본 크기. 폰 세로 화면에서 가로폭을 꽉 채우고 세로로 스크롤하는 10x16.
+  // (예전 8x14 템플릿은 저장된 width/height 그대로 읽힌다 — 이 값은 '새로 만들 때'만 쓴다.)
+  const DEFAULT_TEMPLATE_WIDTH = 10;
+  const DEFAULT_TEMPLATE_HEIGHT = 16;
+  // 에디터 크기 변경 허용 범위
+  const MIN_TEMPLATE_WIDTH = 6, MAX_TEMPLATE_WIDTH = 16;
+  const MIN_TEMPLATE_HEIGHT = 8, MAX_TEMPLATE_HEIGHT = 24;
 
   // ==========================================================================
   // 1. Sector — 전략맵 지역 정보
@@ -125,14 +130,26 @@
     return src.map((item) => ({ ...item }));
   }
 
+  function inferSizeFromTiles(tiles) {
+    let w = 0, h = 0;
+    (tiles || []).forEach((t) => {
+      if (!t) return;
+      if (Number.isFinite(t.x)) w = Math.max(w, t.x + 1);
+      if (Number.isFinite(t.y)) h = Math.max(h, t.y + 1);
+    });
+    return { width: w, height: h };
+  }
+
   function normalizeTacticalMapTemplate(raw, fallbackId) {
     if (!raw || typeof raw !== 'object') return null;
 
     const id = String(raw.id || raw.sectorId || raw.templateId || fallbackId || '');
-    const width = Number(raw.width || raw.cols) || DEFAULT_TEMPLATE_WIDTH;
-    const height = Number(raw.height || raw.rows) || DEFAULT_TEMPLATE_HEIGHT;
-
     const tiles = Array.isArray(raw.tiles) ? raw.tiles.map((t) => ({ ...t })) : [];
+    // 크기 필드가 없는 문서는 기본값(10x16)이 아니라 타일 좌표에서 크기를 읽는다.
+    // (기본값이 8x14에서 바뀌었으므로, 크기 없이 저장된 옛 8x14 문서가 10x16으로 오인되지 않게)
+    const inferred = inferSizeFromTiles(tiles);
+    const width = Number(raw.width || raw.cols) || inferred.width || DEFAULT_TEMPLATE_WIDTH;
+    const height = Number(raw.height || raw.rows) || inferred.height || DEFAULT_TEMPLATE_HEIGHT;
 
     const rawSpawn = raw.spawnPoints && typeof raw.spawnPoints === 'object' ? raw.spawnPoints : null;
     const spawnPoints = {
@@ -207,6 +224,31 @@
       }
     }
     return normalizeTacticalMapTemplate({ id, width: w, height: h, tiles }, id);
+  }
+
+  /**
+   * 타일 배열을 새 크기로 바꾼다 (에디터의 '크기 변경').
+   * 기존 칸은 가운데 정렬로 옮기고(8→10이면 좌우 1칸씩, 14→16이면 위아래 1칸씩 추가),
+   * 새로 생긴 칸은 평지, 범위를 벗어난 칸은 잘라낸다. 칸 안의 유닛/스폰/도로/거점은 칸과 함께 이동한다.
+   * @returns {Array} width*height 길이의 새 타일 배열 (원본은 건드리지 않는다)
+   */
+  function resizeTemplateTiles(tiles, oldW, oldH, newW, newH) {
+    const w = Math.max(MIN_TEMPLATE_WIDTH, Math.min(MAX_TEMPLATE_WIDTH, Math.round(Number(newW) || 0)));
+    const h = Math.max(MIN_TEMPLATE_HEIGHT, Math.min(MAX_TEMPLATE_HEIGHT, Math.round(Number(newH) || 0)));
+    const offX = Math.floor((w - oldW) / 2);
+    const offY = Math.floor((h - oldH) / 2);
+    const byPos = new Map();
+    (tiles || []).forEach((t) => { if (t) byPos.set(`${t.x},${t.y}`, t); });
+    const out = [];
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const src = byPos.get(`${x - offX},${y - offY}`);
+        out.push(src
+          ? { ...src, units: Array.isArray(src.units) ? src.units.map((u) => ({ ...u })) : [], x, y }
+          : { x, y, terrain: 'plain', hasRoad: false, structure: null, units: [], isSpawnPlayer: false, isSpawnEnemy: false });
+      }
+    }
+    return { tiles: out, width: w, height: h };
   }
 
   /**
@@ -712,6 +754,10 @@
   const MapSchema = {
     DEFAULT_TEMPLATE_WIDTH,
     DEFAULT_TEMPLATE_HEIGHT,
+    MIN_TEMPLATE_WIDTH,
+    MAX_TEMPLATE_WIDTH,
+    MIN_TEMPLATE_HEIGHT,
+    MAX_TEMPLATE_HEIGHT,
 
     // Sector
     validateSector,
@@ -722,6 +768,7 @@
     normalizeTacticalMapTemplate,
     validateTacticalMapTemplate,
     createBlankTacticalMapTemplate,
+    resizeTemplateTiles,
     deriveSpawnPointsFromTiles,
     applySpawnPointsToTiles,
     computeTerrainComposition,

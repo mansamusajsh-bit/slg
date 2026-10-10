@@ -3099,6 +3099,8 @@
         if (enemy.isDead) continue;
         if (isDeployedForceWiped()) break;
 
+        // 화면 밖에 있는 적이 움직이면 놓치지 않게, 행동 전에 그 적 쪽으로 스크롤한다.
+        scrollTileIntoView(enemy.x, enemy.y);
         while (enemy.ap > 0 && !enemy.isDead) {
           const acted = await executeEnemyDecision(enemy);
           if (!acted) break; // 더 이상 가능한 행동이 없으면 다음 유닛으로
@@ -3435,6 +3437,7 @@
     /* --------------------------------------------------------------------------
        UI Rendering & Event Listeners
        -------------------------------------------------------------------------- */
+    let lastAutoScrolledBattleId = null; // renderGrid가 새 전투마다 한 번 아군 쪽으로 자동 스크롤할 때 쓴다
     function renderGrid() {
       const mapEl = document.getElementById('grid-map');
       if (!mapEl) return;
@@ -3449,8 +3452,8 @@
         try { getActiveBattleMap(); } catch (err) { console.error(err.message); }
       }
       const currentTiles = Array.isArray(battleMap?.tiles) ? battleMap.tiles : [];
-      const colCount = Number(battleMap?.cols) || 8;
-      const rowCount = Number(battleMap?.rows) || 14;
+      const colCount = Number(battleMap?.width || battleMap?.cols) || 10;
+      const rowCount = Number(battleMap?.height || battleMap?.rows) || 16;
 
       mapEl.style.display = 'grid';
       mapEl.style.gridTemplateColumns = `repeat(${colCount}, 1fr)`;
@@ -3586,7 +3589,31 @@
       decorateDeployPhase(mapEl);
       renderDeployBanner();
       // 아군은 선택 시 캐릭터 창이 열리므로 맵 위 얼굴 말풍선은 띄우지 않는다 (적군 정찰 시에만 표시).
+
+      // 새 전투에 들어온 직후 한 번: 아군 배치 위치(보통 맵 아래쪽)가 보이도록 세로 스크롤을 맞춘다.
+      const battleKey = state?.currentBattle?.id || null;
+      if (battleKey && battleKey !== lastAutoScrolledBattleId) {
+        lastAutoScrolledBattleId = battleKey;
+        const firstAlly = (state.playerUnits || []).find(u => !u.isDead && u.x >= 0 && u.y >= 0);
+        const spawn = firstAlly || (battleMap?.spawnPoints?.player || [])[0];
+        if (spawn) requestAnimationFrame(() => scrollTileIntoView(spawn.x, spawn.y, false));
+      }
     }
+
+    // 전술 맵 세로 스크롤 — 해당 칸이 화면 밖이면 가운데로 오도록 #grid-scroll을 스크롤한다.
+    function scrollTileIntoView(x, y, smooth = true) {
+      const scroller = document.getElementById('grid-scroll');
+      const tileEl = document.querySelector(`#grid-map .tile[data-x="${x}"][data-y="${y}"]`);
+      if (!scroller || !tileEl) return;
+      if (scroller.scrollHeight <= scroller.clientHeight + 1) return; // 스크롤할 필요 없는 맵
+      const sr = scroller.getBoundingClientRect();
+      const tr = tileEl.getBoundingClientRect();
+      const margin = tr.height * 0.5;
+      if (tr.top >= sr.top + margin && tr.bottom <= sr.bottom - margin) return; // 이미 보임
+      const target = scroller.scrollTop + (tr.top - sr.top) - (sr.height - tr.height) / 2;
+      scroller.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' });
+    }
+    window.scrollTileIntoView = scrollTileIntoView;
 
     /* --------------------------------------------------------------------------
        맵 유닛 토큰 — 원형 얼굴 + 팀색 HP 링, 병과·중첩·상태는 원 밖 칩
@@ -5012,16 +5039,11 @@
         // 에디터에서 찍은 아군 스폰(map.spawnPoints.player)을 우선 쓰고, 없을 때만 예전 하단 고정 슬롯으로 대체한다.
         const templatePlayerSpawns = (battle.map.spawnPoints && Array.isArray(battle.map.spawnPoints.player))
           ? battle.map.spawnPoints.player : [];
-        const fallbackSlots = [
-          { x: 3, y: Math.max(0, rows - 2) },
-          { x: 4, y: Math.max(0, rows - 2) },
-          { x: 2, y: Math.max(0, rows - 2) },
-          { x: 5, y: Math.max(0, rows - 2) },
-          { x: 3, y: Math.max(0, rows - 1) },
-          { x: 4, y: Math.max(0, rows - 1) },
-          { x: 2, y: Math.max(0, rows - 1) },
-          { x: 5, y: Math.max(0, rows - 1) }
-        ];
+        // 맵 가로 크기와 상관없이 하단 가운데에 모이도록 중앙 기준으로 잡는다 (8열이면 예전과 같은 2~5열).
+        const cx = Math.floor(cols / 2) - 1;
+        const fallbackSlots = [rows - 2, rows - 1].flatMap(yy => [0, 1, -1, 2].map(dx => ({
+          x: Math.min(cols - 1, Math.max(0, cx + dx)), y: Math.max(0, yy)
+        })));
         const deploySlots = templatePlayerSpawns.length > 0 ? templatePlayerSpawns : fallbackSlots;
         const alive = state.playerUnits.filter(u => !u.isDead);
         // 선택 정보가 없으면(구버전 세이브 등) 기존처럼 전원 출전

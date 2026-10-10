@@ -113,7 +113,7 @@ const EditorAuth = {
         state.isEditMode = true;
       }
       if (typeof addLog === 'function') {
-        addLog('🛠️ [에디터 활성화] 월드 섹터 및 8x14 시나리오 맵 에디터에 진입했습니다.', 'gold');
+        addLog('🛠️ [에디터 활성화] 월드 섹터 및 시나리오 전술 맵 에디터에 진입했습니다.', 'gold');
       }
       MapEditorController.open();
     } else {
@@ -137,8 +137,10 @@ const EditorAuth = {
  * 2. MapEditorController: 8x14 전술 시나리오 맵 에디터 엔진
  */
 const MapEditorController = {
-  COLS: 8,
-  ROWS: 14,
+  // 지금 편집 중인 템플릿의 크기. 불러온 템플릿의 width/height를 그대로 따라가고,
+  // 새 템플릿은 MapSchema 기본값(10x16)으로 시작한다. '크기 변경'으로 바꿀 수 있다.
+  COLS: (window.MapSchema && MapSchema.DEFAULT_TEMPLATE_WIDTH) || 10,
+  ROWS: (window.MapSchema && MapSchema.DEFAULT_TEMPLATE_HEIGHT) || 16,
   currentSectorId: 'A-1',
   // 3단계: "섹터"와 "이 섹터에서 불러오는 전술맵 설계도"는 서로 다른 축이다.
   // 기본은 sectorId와 1:1(MapSchema.resolveDefaultTemplateId와 동일한 관례)이지만,
@@ -278,6 +280,8 @@ const MapEditorController = {
         // 에디터 전용: 템플릿이 아직 없으면 기본 타일(평지)이 깔린 새 템플릿으로 편집을 시작한다.
         // (실제 전투 진입에서는 여전히 "템플릿 없음 = 실패"이며, 몰래 기본맵을 끼워 넣지 않는다.)
         // 저장 버튼을 눌러야 Supabase에 기록된다.
+        MapEditorController.COLS = MapSchema.DEFAULT_TEMPLATE_WIDTH;
+        MapEditorController.ROWS = MapSchema.DEFAULT_TEMPLATE_HEIGHT;
         const blank = MapSchema.normalizeTacticalMapTemplate({
           id,
           sectorId: MapEditorController.currentSectorId,
@@ -300,6 +304,9 @@ const MapEditorController = {
       const validation = MapSchema.validateTacticalMapTemplate(template);
       if (!validation.valid) throw new Error(validation.errors.join(', '));
       MapSchema.applySpawnPointsToTiles(template.tiles, template.spawnPoints);
+      // 에디터 크기를 불러온 템플릿 크기에 맞춘다 (8x14 옛 맵은 8x14 그대로 편집된다).
+      MapEditorController.COLS = template.width;
+      MapEditorController.ROWS = template.height;
       MapEditorController.currentMapData = template.tiles;
       MapEditorController.currentTemplateMeta = template;
       MapEditorController.currentBackground = template.metadata.background || null;
@@ -315,6 +322,7 @@ const MapEditorController = {
       MapEditorController.renderGrid();
       MapEditorController.syncTemplateIdInputUI();
       MapEditorController.syncBackgroundInputUI();
+      MapEditorController.syncSizeInputUI();
     }
   },
 
@@ -555,7 +563,7 @@ const MapEditorController = {
           그대로 미리 보여주는 화면입니다. 실제 게임 진행 상태는 변하지 않습니다.
         </div>
         <div class="civ4-grid-viewport" style="max-height: 50vh;">
-          <div class="civ4-editor-grid" style="pointer-events:none;">${tilesHtml}</div>
+          <div class="civ4-editor-grid" style="pointer-events:none; --ed-cols:${testBattle.map.width}; --ed-rows:${testBattle.map.height};">${tilesHtml}</div>
         </div>
         <div class="civ4-auth-actions">
           <button id="btn-civ4-test-play-close" class="civ4-auth-btn cancel">닫기</button>
@@ -705,6 +713,7 @@ const MapEditorController = {
     const gridEl = document.getElementById('civ4-editor-grid-dom') || document.getElementById('civ4-editor-grid-canvas');
     if (!gridEl) return;
     gridEl.innerHTML = '';
+    MapEditorController.applyGridSizeStyle(gridEl);
     const bg = MapEditorController.currentBackground;
     gridEl.classList.toggle('has-bg', !!bg);
     gridEl.style.backgroundImage = bg ? `url("${encodeURI(bg)}")` : '';
@@ -759,6 +768,52 @@ const MapEditorController = {
       tileDiv.onclick = () => MapEditorController.applyBrushToTile(index);
       gridEl.appendChild(tileDiv);
     });
+  },
+
+  // 그리드 열/행 수를 CSS 변수로 넘긴다. 칸 크기는 CSS가 가로폭에 맞춰 계산한다 (전술 화면과 같은 방식).
+  applyGridSizeStyle(gridEl) {
+    if (!gridEl) return;
+    gridEl.style.setProperty('--ed-cols', MapEditorController.COLS);
+    gridEl.style.setProperty('--ed-rows', MapEditorController.ROWS);
+  },
+
+  syncSizeInputUI() {
+    const w = document.getElementById('civ4-editor-width-input');
+    const h = document.getElementById('civ4-editor-height-input');
+    if (w) w.value = MapEditorController.COLS;
+    if (h) h.value = MapEditorController.ROWS;
+    const title = document.getElementById('civ4-editor-title');
+    if (title) title.textContent = `🗺️ ${MapEditorController.COLS}×${MapEditorController.ROWS} 시나리오 전술 맵 에디터`;
+  },
+
+  /**
+   * 편집 중인 맵의 크기를 바꾼다. 기존 칸은 가운데 정렬로 유지되고, 늘어난 칸은 평지로 채워진다.
+   * 저장 버튼을 눌러야 Supabase에 반영된다.
+   */
+  resizeCurrentMap(newW, newH) {
+    const toast = (msg, type) => { if (typeof window.UI?.showToast === 'function') window.UI.showToast(msg, type); };
+    const tiles = Array.isArray(MapEditorController.currentMapData) ? MapEditorController.currentMapData : null;
+    if (!tiles) return toast('⚠️ 템플릿을 먼저 불러오세요.', 'warning');
+    const oldW = MapEditorController.COLS, oldH = MapEditorController.ROWS;
+    const res = MapSchema.resizeTemplateTiles(tiles, oldW, oldH, newW, newH);
+    if (res.width === oldW && res.height === oldH) {
+      MapEditorController.syncSizeInputUI();
+      return toast(`이미 ${oldW}×${oldH} 크기입니다.`, 'info');
+    }
+    const shrinking = res.width < oldW || res.height < oldH;
+    const warnBg = MapEditorController.currentBackground
+      ? '\n\n배경 그림은 예전 크기에 맞춰 그려져 있어서 늘어나 보입니다. 새 크기에 맞는 그림으로 바꿔주세요.' : '';
+    const warnCut = shrinking ? '\n\n줄어드는 쪽 가장자리 칸(유닛·스폰 포함)은 잘려나갑니다.' : '';
+    if (!window.confirm(`맵 크기를 ${oldW}×${oldH} → ${res.width}×${res.height}로 바꿀까요?\n기존 칸은 가운데로 옮겨집니다.${warnCut}${warnBg}`)) {
+      MapEditorController.syncSizeInputUI();
+      return;
+    }
+    MapEditorController.COLS = res.width;
+    MapEditorController.ROWS = res.height;
+    MapEditorController.currentMapData = res.tiles;
+    MapEditorController.renderGrid();
+    MapEditorController.syncSizeInputUI();
+    toast(`📐 ${res.width}×${res.height}로 바꿨습니다. "저장"을 눌러야 반영됩니다.`, 'success');
   },
 
   syncBackgroundInputUI() {
@@ -949,6 +1004,16 @@ const MapEditorController = {
       };
     }
 
+    const btnResize = document.getElementById('btn-civ4-resize-map');
+    if (btnResize) {
+      btnResize.onclick = () => {
+        const w = Number(document.getElementById('civ4-editor-width-input')?.value);
+        const h = Number(document.getElementById('civ4-editor-height-input')?.value);
+        MapEditorController.resizeCurrentMap(w, h);
+      };
+    }
+    MapEditorController.syncSizeInputUI();
+
     const btnLoadTpl = document.getElementById('btn-civ4-load-template');
     if (btnLoadTpl) {
       btnLoadTpl.onclick = () => {
@@ -1074,7 +1139,7 @@ const MapEditorController = {
     return `
       <div class="civ4-editor-window">
         <div class="civ4-editor-header">
-          <h3>🗺️ 8×14 시나리오 전술 맵 에디터</h3>
+          <h3 id="civ4-editor-title">🗺️ 10×16 시나리오 전술 맵 에디터</h3>
           <button id="btn-civ4-editor-close" class="btn-close">✕</button>
         </div>
 
@@ -1094,6 +1159,14 @@ const MapEditorController = {
           <span>배경 이미지:</span>
           <input type="text" id="civ4-editor-bg-input" class="civ4-auth-input" style="flex:1; padding:4px 6px;" placeholder="예: assets/tactical/meadow-road.jpg (비우면 배경 없음)" autocomplete="off" />
           <button id="btn-civ4-auto-terrain" class="civ4-btn-primary" title="배경 그림 색으로 칸별 지형 초안을 만듭니다">🎨 지형 추정</button>
+        </div>
+
+        <div class="civ4-sector-bar">
+          <span>맵 크기:</span>
+          <input type="number" id="civ4-editor-width-input" class="civ4-auth-input" style="width:52px; padding:4px 6px;" min="6" max="16" inputmode="numeric" />
+          <span>×</span>
+          <input type="number" id="civ4-editor-height-input" class="civ4-auth-input" style="width:52px; padding:4px 6px;" min="8" max="24" inputmode="numeric" />
+          <button id="btn-civ4-resize-map" class="civ4-btn-primary" title="가로×세로 칸 수를 바꿉니다 (기존 칸은 가운데 유지)">📐 크기 변경</button>
         </div>
 
         <div class="civ4-grid-viewport">

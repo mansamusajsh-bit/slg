@@ -4,9 +4,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Remix Web-SLG</title>
-  <meta name="description" content="세로형 8x14 그리드 타일맵, 이동력(AP) 및 신속한 진격, 마을/도시 안전지대 및 Civ4 확률 전투 엔진을 탑재한 모바일 턴제 전략 게임" />
+  <meta name="description" content="세로형 10x16 그리드 타일맵, 이동력(AP) 및 신속한 진격, 마을/도시 안전지대 및 Civ4 확률 전투 엔진을 탑재한 모바일 턴제 전략 게임" />
   <meta property="og:title" content="Remix Web-SLG" />
-  <meta property="og:description" content="세로형 8x14 그리드 타일맵, 이동력(AP) 및 신속한 진격, 마을/도시 안전지대 및 Civ4 확률 전투 엔진을 탑재한 모바일 턴제 전략 게임" />
+  <meta property="og:description" content="세로형 10x16 그리드 타일맵, 이동력(AP) 및 신속한 진격, 마을/도시 안전지대 및 Civ4 확률 전투 엔진을 탑재한 모바일 턴제 전략 게임" />
   <!-- 1. External Stylesheet -->
   <link rel="stylesheet" href="style.css" />
   <link rel="stylesheet" href="civ4-editor.css" />
@@ -410,8 +410,11 @@
       <!-- 2. Central Game Viewport (전술 그리드 — 크기는 state.currentBattle.map 기준) -->
       <section id="viewport">
         <div id="ai-turn-banner" class="ai-turn-banner" style="display: none;">👾 적 AI 군단 작전 수행 중...</div>
-        <div class="grid-container" id="grid-map">
-          <!-- 타일은 state.currentBattle.map.tiles 기준으로 JavaScript가 동적 렌더링 -->
+        <!-- 세로 스크롤 영역: 맵은 가로폭에 맞춰 그리고, 세로가 화면보다 길면 여기서 스크롤한다 -->
+        <div id="grid-scroll">
+          <div class="grid-container" id="grid-map">
+            <!-- 타일은 state.currentBattle.map.tiles 기준으로 JavaScript가 동적 렌더링 -->
+          </div>
         </div>
       </section>
 

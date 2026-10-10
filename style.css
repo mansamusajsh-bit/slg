@@ -6454,3 +6454,36 @@
 .skill-ally-picker-stats{font-size:10px;font-weight:700;color:#64748b}
 .skill-ally-picker-hp{display:block;height:5px;border-radius:3px;background:#e2e8f0;overflow:hidden}
 .skill-ally-picker-hp i{display:block;height:100%;background:linear-gradient(90deg,#34d399,#10b981)}
+
+
+/* ==========================================================================
+   전술 맵: 가로폭 맞춤 + 세로 스크롤 (10x16 기본)
+   - 맵은 화면 가로폭을 꽉 채우고 칸은 정사각형을 유지한다 (PC에서는 칸당 최대 60px).
+   - 세로가 화면보다 길면 #grid-scroll 안에서 스크롤한다.
+   - #viewport 자체는 스크롤하지 않는다 (유닛 말풍선이 #viewport 기준 좌표를 쓰기 때문).
+   ========================================================================== */
+#grid-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+#grid-scroll::-webkit-scrollbar { display: none; }
+#viewport #grid-map {
+  flex: 0 0 auto;
+  align-self: center;
+  margin: auto 0; /* 맵이 화면보다 짧으면 세로 가운데, 길면 위부터 스크롤 */
+  box-sizing: border-box;
+  width: min(100%, calc(var(--grid-cols, 10) * 60px));
+  height: auto;
+  max-height: none;
+  min-height: 0;
+  aspect-ratio: var(--grid-cols, 10) / var(--grid-rows, 16);
+}
